@@ -5,20 +5,12 @@
 // 5-tier Call Rate picker (60/120/300/600/1200), big pink Go Live,
 // Imran's 1-to-1 call request, 7-day earnings chart, Withdraw.
 //
-// ── WIRING NOTE (read before testing) ─────────────────────────────
-// The Online/Offline switch and the Call Rate picker keep their
-// state IN THIS SCREEN ONLY (useState). They do NOT yet change the
-// Home card, because HomeScreen reads the STATIC host list in
-// src/data.js and the shared store (src/store.js) has no host
-// online/rate state. The follow-up that makes the switch + rate
-// picker live on Home is small but touches files this rewrite was
-// told not to change:
-//   1. store.js: move HOSTS into AppProvider state and add
-//      setHostOnline(hostId, online) + setHostRate(hostId, tierId).
-//   2. HomeScreen.js: read hosts from useApp() instead of data.js.
-// Until then, flipping the switch here only changes this screen
-// (title, subtitle, toast) — exactly like the preview's switch
-// changes only the preview until its renderGrid() runs.
+// ── WIRING (2026-11-18) ─────────────────────────────────────────
+// The Online/Offline switch and the Call Rate picker are now LIVE:
+// they call setHostOnline / setHostRate in the shared store, so the
+// Home card updates at once (Offline removes Nusrat's LIVE card,
+// a new rate shows inside the live room). The follow-up the first
+// version flagged is done.
 // ─────────────────────────────────────────────────────────────────
 // Withdraw: ProfileScreen's Earn beans → Withdraw view is internal
 // state with no route-param support, so this button opens the Me
@@ -37,12 +29,7 @@
 import React, { useState } from 'react';
 import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { CALL_RATES, COLORS, getCallRate } from '../config';
-import { HOSTS } from '../data';
 import { useApp } from '../store';
-
-// Nusrat is host id '2' in src/data.js (rateTier tier3 = 300/min,
-// matching the preview where 300 is the selected rate).
-const NUSRAT = HOSTS.find((h) => h.id === '2') || HOSTS[0];
 
 // Imran's 1-to-1 request. He is not in HOSTS; the object carries
 // the fields VideoCallScreen reads (name, flag, country, rateTier).
@@ -73,9 +60,13 @@ const WEEK = [
 const CHART_H = 120;
 
 export default function HostDashboardScreen({ navigation }) {
-  const { showToast } = useApp();
-  const [online, setOnline] = useState(true);
-  const [myTier, setMyTier] = useState('tier3');
+  const { showToast, hosts, setHostOnline, setHostRate } = useApp();
+  // Nusrat is host id '2' (rateTier tier3 = 300/min, matching the
+  // preview where 300 is the selected rate). Her online state and
+  // rate come from the shared store, so Home updates at once.
+  const nusrat = hosts.find((h) => h.id === '2') || hosts[0];
+  const online = nusrat.online;
+  const myTier = nusrat.rateTier;
   // 'pending' | 'accepted' | 'declined'
   const [reqState, setReqState] = useState('pending');
 
@@ -83,7 +74,7 @@ export default function HostDashboardScreen({ navigation }) {
 
   const toggleOnline = () => {
     const next = !online;
-    setOnline(next);
+    setHostOnline('2', next);
     showToast(
       next
         ? 'Online হয়েছো — Home-এ তোমার লাইভ দেখা যাচ্ছে'
@@ -92,14 +83,14 @@ export default function HostDashboardScreen({ navigation }) {
   };
 
   const pickRate = (tierId) => {
-    setMyTier(tierId);
+    setHostRate('2', tierId);
     const r = getCallRate(tierId);
     showToast(`তোমার কল রেট এখন ${r.coinsPerMinute.toLocaleString('en-US')} coins/min`);
   };
 
   const goLive = () => {
     showToast('তুমি লাইভে আছো — এখান থেকে মাইক, ক্যামেরা আর বিউটি কন্ট্রোল করো');
-    navigation.navigate('VideoCall', { host: NUSRAT });
+    navigation.navigate('VideoCall', { host: nusrat });
   };
 
   const acceptRequest = () => {
