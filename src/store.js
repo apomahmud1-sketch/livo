@@ -55,12 +55,21 @@ export function AppProvider({ children }) {
     showToast(`Recharged ${pack.coins + (pack.bonus || 0)} coins (demo — no real payment yet)`);
   };
 
+  // NEW (2026-11-18): buy a Diamond pack from My Diamonds (Wallet).
+  // Adds the pack's diamonds to the live balance and shows a toast.
+  // Real Google Play payment replaces this demo step before launch.
+  const buyDiamonds = (pack) => {
+    setDiamonds((d) => d + pack.diamonds);
+    showToast(`+${pack.diamonds.toLocaleString()} Diamonds (demo — no real payment yet)`);
+    return true;
+  };
+
   const toggleFollow = (hostId) => {
     setFollowing((f) => (f.includes(hostId) ? f.filter((x) => x !== hostId) : [...f, hostId]));
   };
 
   const value = useMemo(
-    () => ({ coins, diamonds, earnings, following, toggleFollow, sendGift, recharge, chargeCall, callHistory, toast, showToast }),
+    () => ({ coins, diamonds, earnings, following, toggleFollow, sendGift, recharge, buyDiamonds, chargeCall, callHistory, toast, showToast }),
     [coins, diamonds, earnings, following, callHistory, toast]
   );
 
