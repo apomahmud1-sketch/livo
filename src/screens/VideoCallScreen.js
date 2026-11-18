@@ -11,21 +11,22 @@ import LiveVideo, {
 } from '../agora/LiveVideo';
 
 // ─────────────────────────────────────────────────────────────────
-// 1-to-1 video call. States: 'incoming' → 'calling' → 'summary'.
+// 1-to-1 video call. States: 'incoming' → 'calling'.
 // Billing: per-minute rate from the host's call-rate tier
 // (admin can change all 5 tiers in the admin panel). Cost is
 // charged when the call ends, billed per started minute.
 // INCOMING screen shows ONLY the caller's photo, name and the
 // red Decline / green Accept buttons — no rate line, no
 // "Incoming video call…" text (user's correction 2026-11-18).
-// CALL SUMMARY is HOST-ONLY: VideoCallScreen reads
-// route.params.asHost (default false). Only the host sees the
-// summary (Duration / Rate / Total cost / Balance / Done). When
-// the viewer ends the call, it goes straight back with a toast.
+// CALL SUMMARY: there is none. When a call ends, everyone goes
+// straight back (toast only) — the host sees the call earnings in
+// the Host Dashboard (user's correction 2026-11-18: no summary
+// screen at all, the host already sees it in the dashboard).
+// VideoCallScreen reads route.params.asHost (default false) only
+// to skip the incoming stage for the host entry: the host starts
+// live at once and never accepts their own call.
 // The host opens the call with asHost: true (Host Dashboard
 // Go Live + Imran Accept); Home cards open it as the viewer.
-// The host skips the incoming stage and starts live at once
-// (a host never accepts their own call).
 // Real video: <LiveVideo> joins the Agora channel
 // `livo-call-<hostId>` when the call is accepted. The mic,
 // camera-switch and beauty buttons below call the real Agora
@@ -42,7 +43,6 @@ export default function VideoCallScreen({ route, navigation }) {
   const [muted, setMuted] = useState(false);
   const [beauty, setBeauty] = useState(false);
   const [frontCamera, setFrontCamera] = useState(true);
-  const [summary, setSummary] = useState(null);
   const timerRef = useRef(null);
 
   useEffect(() => {
@@ -79,16 +79,11 @@ export default function VideoCallScreen({ route, navigation }) {
     clearInterval(timerRef.current);
     leaveAgoraChannel();
     const minutes = Math.max(1, Math.ceil(seconds / 60));
-    const cost = chargeCall(host, minutes, rate.coinsPerMinute);
-    // Call summary is host-only: the viewer goes straight back
-    // (toast only), the host sees the summary screen.
-    if (asHost) {
-      setSummary({ minutes, seconds, cost: cost === false ? 0 : cost, paid: cost !== false });
-      setStage('summary');
-    } else {
-      showToast('কল শেষ হয়েছে');
-      navigation.goBack();
-    }
+    chargeCall(host, minutes, rate.coinsPerMinute);
+    // No call summary for anyone (user 2026-11-18): the host sees
+    // the earnings in the Host Dashboard. Just go back.
+    showToast('কল শেষ হয়েছে');
+    navigation.goBack();
   };
 
   const toggleMute = () => {
@@ -120,24 +115,6 @@ export default function VideoCallScreen({ route, navigation }) {
           </TouchableOpacity>
         </View>
       </LinearGradient>
-    );
-  }
-
-  if (stage === 'summary') {
-    return (
-      <View style={styles.center}>
-        <Text style={styles.title}>Call summary</Text>
-        <Text style={styles.sub}>With {host.name}</Text>
-        <Text style={styles.summaryLine}>Duration: {mm}:{ss} ({summary.minutes} min billed)</Text>
-        <Text style={styles.summaryLine}>Rate: {rate.coinsPerMinute} coins / min ({rate.name})</Text>
-        <Text style={styles.summaryLine}>
-          {summary.paid ? `Total cost: ${summary.cost} coins` : 'Not charged — not enough coins'}
-        </Text>
-        <Text style={styles.summaryLine}>Balance: {coins.toLocaleString()} coins</Text>
-        <TouchableOpacity style={styles.btn} onPress={() => navigation.goBack()}>
-          <Text style={styles.btnText}>Done</Text>
-        </TouchableOpacity>
-      </View>
     );
   }
 
@@ -197,8 +174,6 @@ const styles = StyleSheet.create({
   giftRow: { flexDirection: 'row', justifyContent: 'center', marginTop: 16 },
   hint: { color: '#9ca3af', fontSize: 12, marginTop: 16, textAlign: 'center' },
   row: { flexDirection: 'row', marginTop: 8 },
-  sub: { color: '#e5e7eb', fontSize: 15, marginTop: 6, textAlign: 'center' },
-  summaryLine: { color: COLORS.dark, fontSize: 16, marginTop: 8 },
   timer: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginTop: 12, textAlign: 'center' },
   title: { color: COLORS.dark, fontSize: 26, fontWeight: 'bold', marginTop: 16, textAlign: 'center' },
   video: { height: 300 },
