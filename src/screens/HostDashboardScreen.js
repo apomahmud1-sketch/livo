@@ -21,6 +21,8 @@
 // Nusrat host object, the same screen Home cards open. The host
 // control view is that screen; a dedicated host-entry (skipping
 // the incoming stage) is a small VideoCallScreen follow-up.
+// Both host entries pass asHost: true, so ONLY the host sees the
+// call summary when the call ends (viewer flow shows no summary).
 // Imran's request says 100/min in the preview, but 100 is not one
 // of the 5 admin tiers, so the accepted call bills at Tier 2
 // (120 coins/min) — flagged in the handoff, not silently changed.
@@ -90,13 +92,13 @@ export default function HostDashboardScreen({ navigation }) {
 
   const goLive = () => {
     showToast('তুমি লাইভে আছো — এখান থেকে মাইক, ক্যামেরা আর বিউটি কন্ট্রোল করো');
-    navigation.navigate('VideoCall', { host: nusrat });
+    navigation.navigate('VideoCall', { host: nusrat, asHost: true });
   };
 
   const acceptRequest = () => {
     setReqState('accepted');
     showToast("Imran-এর কল রিকোয়েস্ট গ্রহণ করা হয়েছে");
-    navigation.navigate('VideoCall', { host: IMRAN });
+    navigation.navigate('VideoCall', { host: IMRAN, asHost: true });
   };
 
   const declineRequest = () => {
