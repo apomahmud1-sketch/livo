@@ -15,6 +15,17 @@ import LiveVideo, {
 // Billing: per-minute rate from the host's call-rate tier
 // (admin can change all 5 tiers in the admin panel). Cost is
 // charged when the call ends, billed per started minute.
+// INCOMING screen shows ONLY the caller's photo, name and the
+// red Decline / green Accept buttons — no rate line, no
+// "Incoming video call…" text (user's correction 2026-11-18).
+// CALL SUMMARY is HOST-ONLY: VideoCallScreen reads
+// route.params.asHost (default false). Only the host sees the
+// summary (Duration / Rate / Total cost / Balance / Done). When
+// the viewer ends the call, it goes straight back with a toast.
+// The host opens the call with asHost: true (Host Dashboard
+// Go Live + Imran Accept); Home cards open it as the viewer.
+// The host skips the incoming stage and starts live at once
+// (a host never accepts their own call).
 // Real video: <LiveVideo> joins the Agora channel
 // `livo-call-<hostId>` when the call is accepted. The mic,
 // camera-switch and beauty buttons below call the real Agora
@@ -23,10 +34,10 @@ import LiveVideo, {
 // token prop — see src/agora/LiveVideo.js.
 // ─────────────────────────────────────────────────────────────────
 export default function VideoCallScreen({ route, navigation }) {
-  const { host } = route.params || {};
+  const { host, asHost } = route.params || {};
   const { coins, chargeCall, sendGift, showToast } = useApp();
   const rate = getCallRate(host ? host.rateTier : 'tier2');
-  const [stage, setStage] = useState('incoming');
+  const [stage, setStage] = useState(asHost ? 'calling' : 'incoming');
   const [seconds, setSeconds] = useState(0);
   const [muted, setMuted] = useState(false);
   const [beauty, setBeauty] = useState(false);
@@ -69,8 +80,15 @@ export default function VideoCallScreen({ route, navigation }) {
     leaveAgoraChannel();
     const minutes = Math.max(1, Math.ceil(seconds / 60));
     const cost = chargeCall(host, minutes, rate.coinsPerMinute);
-    setSummary({ minutes, seconds, cost: cost === false ? 0 : cost, paid: cost !== false });
-    setStage('summary');
+    // Call summary is host-only: the viewer goes straight back
+    // (toast only), the host sees the summary screen.
+    if (asHost) {
+      setSummary({ minutes, seconds, cost: cost === false ? 0 : cost, paid: cost !== false });
+      setStage('summary');
+    } else {
+      showToast('কল শেষ হয়েছে');
+      navigation.goBack();
+    }
   };
 
   const toggleMute = () => {
@@ -93,8 +111,6 @@ export default function VideoCallScreen({ route, navigation }) {
       <LinearGradient colors={[COLORS.purpleDark, COLORS.purple, COLORS.pink]} style={styles.center}>
         <Text style={styles.avatarBig}>{host.name[0]}</Text>
         <Text style={styles.title}>{host.name}</Text>
-        <Text style={styles.sub}>{host.flag} {host.country} · {rate.label} · {rate.name}</Text>
-        <Text style={styles.sub}>Incoming video call…</Text>
         <View style={styles.row}>
           <TouchableOpacity style={[styles.btn, styles.btnDecline]} onPress={() => navigation.goBack()}>
             <Text style={styles.btnText}>✕ Decline</Text>
