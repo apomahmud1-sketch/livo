@@ -19,10 +19,12 @@
 // { initialView: 'withdraw' } and open that view on mount.
 // Go Live: opens the app's live room (VideoCallScreen) with the
 // Nusrat host object, the same screen Home cards open. The host
-// control view is that screen; a dedicated host-entry (skipping
-// the incoming stage) is a small VideoCallScreen follow-up.
-// Both host entries pass asHost: true, so ONLY the host sees the
-// call summary when the call ends (viewer flow shows no summary).
+// control view is that screen.
+// Both host entries pass asHost: true, so the host skips the
+// incoming stage and starts live at once. There is NO call
+// summary screen at all (user 2026-11-18): after a call ends,
+// everyone goes straight back — the host sees the earnings here
+// in the dashboard.
 // Imran's request says 100/min in the preview, but 100 is not one
 // of the 5 admin tiers, so the accepted call bills at Tier 2
 // (120 coins/min) — flagged in the handoff, not silently changed.
