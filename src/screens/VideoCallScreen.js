@@ -3,15 +3,24 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, GIFTS, getCallRate } from '../config';
 import { useApp } from '../store';
-import LiveVideo from '../agora/LiveVideo';
+import LiveVideo, {
+  leaveAgoraChannel,
+  setAgoraBeauty,
+  setAgoraMuted,
+  switchAgoraCamera,
+} from '../agora/LiveVideo';
 
 // ─────────────────────────────────────────────────────────────────
 // 1-to-1 video call. States: 'incoming' → 'calling' → 'summary'.
 // Billing: per-minute rate from the host's call-rate tier
 // (admin can change all 5 tiers in the admin panel). Cost is
 // charged when the call ends, billed per started minute.
-// Real video: LiveVideo shows the Agora placeholder until a real
-// Agora App ID + joinChannel logic are added (see LiveVideo.js).
+// Real video: <LiveVideo> joins the Agora channel
+// `livo-call-<hostId>` when the call is accepted. The mic,
+// camera-switch and beauty buttons below call the real Agora
+// engine (mute / switchCamera / beauty filter). The token comes
+// from EXPO_PUBLIC_AGORA_TOKEN (Temp Token for testing) or the
+// token prop — see src/agora/LiveVideo.js.
 // ─────────────────────────────────────────────────────────────────
 export default function VideoCallScreen({ route, navigation }) {
   const { host } = route.params || {};
@@ -57,10 +66,26 @@ export default function VideoCallScreen({ route, navigation }) {
 
   const endCall = () => {
     clearInterval(timerRef.current);
+    leaveAgoraChannel();
     const minutes = Math.max(1, Math.ceil(seconds / 60));
     const cost = chargeCall(host, minutes, rate.coinsPerMinute);
     setSummary({ minutes, seconds, cost: cost === false ? 0 : cost, paid: cost !== false });
     setStage('summary');
+  };
+
+  const toggleMute = () => {
+    setMuted(!muted);
+    setAgoraMuted(!muted);
+  };
+
+  const toggleCamera = () => {
+    setFrontCamera(!frontCamera);
+    switchAgoraCamera();
+  };
+
+  const toggleBeauty = () => {
+    setBeauty(!beauty);
+    setAgoraBeauty(!beauty);
   };
 
   if (stage === 'incoming') {
@@ -104,9 +129,6 @@ export default function VideoCallScreen({ route, navigation }) {
   return (
     <View style={styles.callBg}>
       <LiveVideo channel={`livo-call-${host.id}`} role="host" style={styles.video} />
-      <View style={styles.selfPreview}>
-        <Text style={styles.selfText}>You · {frontCamera ? 'Front' : 'Back'} camera</Text>
-      </View>
       <Text style={styles.timer}>{mm}:{ss} · 🪙 {liveCost} coins</Text>
       <Text style={styles.callName}>{host.name} · {rate.label}</Text>
 
@@ -120,20 +142,20 @@ export default function VideoCallScreen({ route, navigation }) {
       </View>
 
       <View style={styles.controls}>
-        <TouchableOpacity style={[styles.ctrl, muted && styles.ctrlOff]} onPress={() => setMuted(!muted)}>
+        <TouchableOpacity style={[styles.ctrl, muted && styles.ctrlOff]} onPress={toggleMute}>
           <Text style={styles.ctrlText}>{muted ? '🔇' : '🎙️'}</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.ctrl} onPress={() => setFrontCamera(!frontCamera)}>
+        <TouchableOpacity style={styles.ctrl} onPress={toggleCamera}>
           <Text style={styles.ctrlText}>🔄</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.ctrl, beauty && styles.ctrlOn]} onPress={() => setBeauty(!beauty)}>
+        <TouchableOpacity style={[styles.ctrl, beauty && styles.ctrlOn]} onPress={toggleBeauty}>
           <Text style={styles.ctrlText}>✨</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.ctrl, styles.endBtn]} onPress={endCall}>
           <Text style={styles.ctrlText}>📞</Text>
         </TouchableOpacity>
       </View>
-      <Text style={styles.hint}>Beauty {beauty ? 'on' : 'off'} · Mic {muted ? 'muted' : 'on'} · Demo video — real Agora video comes later</Text>
+      <Text style={styles.hint}>Beauty {beauty ? 'on' : 'off'} · Mic {muted ? 'muted' : 'on'} · Live video via Agora</Text>
     </View>
   );
 }
@@ -159,8 +181,6 @@ const styles = StyleSheet.create({
   giftRow: { flexDirection: 'row', justifyContent: 'center', marginTop: 16 },
   hint: { color: '#9ca3af', fontSize: 12, marginTop: 16, textAlign: 'center' },
   row: { flexDirection: 'row', marginTop: 8 },
-  selfPreview: { backgroundColor: '#374151', borderRadius: 10, padding: 10, position: 'absolute', right: 16, top: 60 },
-  selfText: { color: '#fff', fontSize: 12 },
   sub: { color: '#e5e7eb', fontSize: 15, marginTop: 6, textAlign: 'center' },
   summaryLine: { color: COLORS.dark, fontSize: 16, marginTop: 8 },
   timer: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginTop: 12, textAlign: 'center' },
