@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useMemo, useState } from 'react';
 import { COIN_TO_DIAMOND_RATE, PLATFORM_COMMISSION_PERCENT } from './config';
+import { HOSTS } from './data';
 
 // Simple in-app state (demo). Supabase + the admin panel replace this
 // later; every screen uses this context, so the swap is in one place.
@@ -12,6 +13,18 @@ export function AppProvider({ children }) {
   const [following, setFollowing] = useState(['2']);
   const [toast, setToast] = useState('');
   const [callHistory, setCallHistory] = useState([]);
+  // Live host list (starts from the demo HOSTS in data.js). The Host
+  // Dashboard changes a host's online state and call-rate tier here,
+  // so Home re-renders with the change. Supabase replaces this later.
+  const [hosts, setHosts] = useState(HOSTS);
+
+  const setHostOnline = (hostId, online) => {
+    setHosts((hs) => hs.map((h) => (h.id === hostId ? { ...h, online } : h)));
+  };
+
+  const setHostRate = (hostId, tierId) => {
+    setHosts((hs) => hs.map((h) => (h.id === hostId ? { ...h, rateTier: tierId } : h)));
+  };
 
   const showToast = (msg) => {
     setToast(msg);
@@ -69,8 +82,8 @@ export function AppProvider({ children }) {
   };
 
   const value = useMemo(
-    () => ({ coins, diamonds, earnings, following, toggleFollow, sendGift, recharge, buyDiamonds, chargeCall, callHistory, toast, showToast }),
-    [coins, diamonds, earnings, following, callHistory, toast]
+    () => ({ coins, diamonds, earnings, following, toggleFollow, sendGift, recharge, buyDiamonds, chargeCall, callHistory, toast, showToast, hosts, setHostOnline, setHostRate }),
+    [coins, diamonds, earnings, following, callHistory, toast, hosts]
   );
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>;
