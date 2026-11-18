@@ -33,7 +33,6 @@ import React, { useState } from 'react';
 import { FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS } from '../config';
-import { HOSTS } from '../data';
 import { useApp } from '../store';
 
 // Demo live-viewer counts, by host id (see header note).
@@ -45,14 +44,14 @@ const TABS = ['Popular', 'Online', 'New'];
 
 export default function HomeScreen({ navigation }) {
   const [tab, setTab] = useState('Popular');
-  const { coins } = useApp();
+  const { coins, hosts: allHosts } = useApp();
 
   const hosts =
     tab === 'Online'
-      ? HOSTS.filter((h) => h.online)
+      ? allHosts.filter((h) => h.online)
       : tab === 'New'
-        ? [...HOSTS].reverse()
-        : HOSTS;
+        ? [...allHosts].reverse()
+        : allHosts;
 
   const renderHost = ({ item }) => {
     const viewers = VIEWERS[item.id] || 0;
