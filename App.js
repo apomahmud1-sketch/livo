@@ -10,6 +10,7 @@ import LoginScreen from './src/screens/LoginScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import VideoCallScreen from './src/screens/VideoCallScreen';
 import MessagesScreen from './src/screens/MessagesScreen';
+import ChatDetailScreen from './src/screens/ChatDetailScreen';
 import WalletScreen from './src/screens/WalletScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import HostDashboardScreen from './src/screens/HostDashboardScreen';
@@ -53,6 +54,7 @@ function Root() {
         <Stack.Screen name="Login" component={LoginScreen} />
         <Stack.Screen name="Main" component={MainTabs} />
         <Stack.Screen name="VideoCall" component={VideoCallScreen} />
+        <Stack.Screen name="ChatDetail" component={ChatDetailScreen} />
         <Stack.Screen name="WalletTab" component={WalletScreen} />
         <Stack.Screen name="HostDashboard" component={HostDashboardScreen} />
         <Stack.Screen name="VIP" component={VIPScreen} />
