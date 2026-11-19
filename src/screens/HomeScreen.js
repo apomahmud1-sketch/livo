@@ -29,32 +29,177 @@
 //    (same idea as the demo hosts in src/data.js). Replace them
 //    with real live-viewer counts from Supabase later; the
 //    layout does not depend on the exact numbers.
-import React, { useState } from 'react';
-import { FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+// [F3] F3 — Nearby + filters (2026-11-19):
+//  • New "Nearby" tab next to Popular / Online / New, plus a filter
+//    bar (Country / Gender / Language). Filter options are derived
+//    from the real host list; tapping an active chip clears that
+//    filter; "✕ Clear filters" clears them all. Filters apply on
+//    top of the tab on the SAME real allHosts list from the store —
+//    there is no second list.
+//  • Location permission is requested ONCE, the first time Nearby
+//    is opened. Country-based proximity is the LIVE path today
+//    (same-country hosts first, then the rest). Real-distance mode
+//    is wired for when expo-location is ever installed later — it
+//    must not activate or crash without the package (see
+//    src/utils/nearby.js loadLocationModule). No location is ever
+//    read without permission.
+//  • A 📍 distance chip shows on cards only when location is
+//    granted. The Nearby status line is honest about what happened:
+//    permission off / not available on this build / no SGP hosts yet.
+//  • Host coordinates are DEMO city coordinates, not live host GPS;
+//    userCountry 'SGP' is a context value (store.js) that should
+//    come from the real profile/backend later. [/F3]
+import React, { useEffect, useRef, useState } from 'react';
+import { FlatList, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS } from '../config';
 import { useApp } from '../store';
+// [F3] Nearby helpers: guarded expo-location loader, haversine
+// distance, formatting, and the nearest / same-country sort. [/F3]
+import { distanceToHostKm, formatDistance, loadLocationModule, sortNearbyHosts } from '../utils/nearby';
+// [F6] AI Smart Match — card modal + host picker (real store hosts only).
+import SmartMatchCard from '../components/SmartMatchCard';
+import { getUserPreferences, pickSmartMatch } from '../utils/smartMatch';
+// [/F6]
 
 // Demo live-viewer counts, by host id (see header note).
 const VIEWERS = { 1: 1284, 2: 862, 3: 540, 4: 2310, 5: 0, 6: 1975 };
 
 const formatViewers = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 
-const TABS = ['Popular', 'Online', 'New'];
+const TABS = ['Popular', 'Online', 'New', 'Nearby']; // [F3] 'Nearby' added [/F3]
+
+// [F3] Gender chip labels (host.gender is 'female' / 'male'). [/F3]
+const GENDER_LABELS = { female: 'Female', male: 'Male' }; // [F3]
 
 export default function HomeScreen({ navigation }) {
   const [tab, setTab] = useState('Popular');
-  const { coins, hosts: allHosts } = useApp();
+  const { coins, hosts: allHosts, userCountry } = useApp(); // [F3] userCountry from the store [/F3]
 
-  const hosts =
+  // [F3] Filters — one value per group, null = no filter. Options are
+  // derived from the real host list below, so they always match the
+  // hosts that actually exist. Filters apply on top of the tab, on
+  // the SAME allHosts list — no second list. [/F3]
+  const [filters, setFilters] = useState({ country: null, gender: null, lang: null }); // [F3]
+  const hasActiveFilters = Boolean(filters.country || filters.gender || filters.lang); // [F3]
+  // [F3] Tap an active chip to clear just that filter; tap another
+  // option to switch to it. [/F3]
+  const toggleFilter = (key, value) => { // [F3]
+    setFilters((f) => ({ ...f, [key]: f[key] === value ? null : value })); // [F3]
+  }; // [F3]
+  const clearFilters = () => setFilters({ country: null, gender: null, lang: null }); // [F3]
+  // [F3] Filter options, derived from the real host list. [/F3]
+  const countryOptions = [...new Set(allHosts.map((h) => h.country))]; // [F3]
+  const genderOptions = [...new Set(allHosts.map((h) => h.gender).filter(Boolean))]; // [F3]
+  const langOptions = [...new Set(allHosts.map((h) => h.lang))]; // [F3]
+
+  // [F3] Location state for the Nearby tab. 'idle' = never asked yet;
+  // 'requesting' = permission prompt in flight; 'granted' = permission
+  // given and coordinates read; 'denied' = permission refused;
+  // 'unavailable' = expo-location is not installed in this build
+  // (the normal case today) or the position read failed. No location
+  // is ever read without permission. [/F3]
+  const [userCoords, setUserCoords] = useState(null); // [F3]
+  const [locStatus, setLocStatus] = useState('idle'); // [F3]
+  const locationRequestedRef = useRef(false); // [F3] permission is requested only once [/F3]
+
+  // [F6] AI Smart Match — picks from the live store host list
+  // (allHosts), so Host Dashboard online/rate changes apply.
+  const [matchVisible, setMatchVisible] = useState(false);
+  const [matchedHost, setMatchedHost] = useState(null);
+  const runSmartMatch = () => {
+    setMatchedHost(pickSmartMatch(allHosts, getUserPreferences()));
+    setMatchVisible(true);
+  };
+  const callMatchedHost = () => {
+    if (!matchedHost) return;
+    setMatchVisible(false);
+    // Same as tapping a Home card: normal incoming screen + billing.
+    navigation.navigate('VideoCall', { host: matchedHost });
+  };
+  const findAnotherMatch = () => {
+    const next = pickSmartMatch(allHosts, getUserPreferences(), matchedHost ? [matchedHost.id] : []);
+    // Null when no other host is online — keep showing the current match.
+    if (next) setMatchedHost(next);
+  };
+  // [/F6]
+
+  // [F3] Ask for location ONCE, the first time the Nearby tab opens.
+  // If expo-location is not installed, loadLocationModule() returns
+  // null and we fall back to country-based proximity — no crash, no
+  // permission prompt, no location read. [/F3]
+  useEffect(() => { // [F3]
+    if (tab !== 'Nearby' || locationRequestedRef.current) return; // [F3]
+    locationRequestedRef.current = true; // [F3]
+    (async () => { // [F3]
+      const Location = loadLocationModule(); // [F3]
+      if (!Location) { // [F3]
+        setLocStatus('unavailable'); // [F3] expo-location not installed in this build [/F3]
+        return; // [F3]
+      } // [F3]
+      try { // [F3]
+        setLocStatus('requesting'); // [F3]
+        const { status } = await Location.requestForegroundPermissionsAsync(); // [F3]
+        if (status !== 'granted') { // [F3]
+          setLocStatus('denied'); // [F3]
+          return; // [F3]
+        } // [F3]
+        const pos = await Location.getCurrentPositionAsync({}); // [F3] only after permission is granted [/F3]
+        setUserCoords({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }); // [F3]
+        setLocStatus('granted'); // [F3]
+      } catch (e) { // [F3]
+        setLocStatus('unavailable'); // [F3]
+      } // [F3]
+    })(); // [F3]
+  }, [tab]); // [F3]
+
+  // [F3] Tab ordering first, then the filters on top of it — all on
+  // the same allHosts list from the store. Nearby sorts with
+  // sortNearbyHosts: nearest-first when coordinates exist, otherwise
+  // same-country-first (stable order). [/F3]
+  const tabHosts =
     tab === 'Online'
       ? allHosts.filter((h) => h.online)
       : tab === 'New'
         ? [...allHosts].reverse()
-        : allHosts;
+        : tab === 'Nearby'
+          ? sortNearbyHosts(allHosts, { userCoords, userCountry })
+          : allHosts;
+
+  const hosts = tabHosts.filter((h) => // [F3] filters apply on top of the tab [/F3]
+    (!filters.country || h.country === filters.country) && // [F3]
+    (!filters.gender || h.gender === filters.gender) && // [F3]
+    (!filters.lang || h.lang === filters.lang) // [F3]
+  ); // [F3]
+
+  // [F3] Honest Nearby status line. Demo data has no SGP host, so
+  // when there is no same-country host the fallback leaves the order
+  // unchanged and the line says so instead of pretending otherwise. [/F3]
+  const hasSameCountryHost = allHosts.some((h) => h.country === userCountry); // [F3]
+  let nearbyStatus = ''; // [F3]
+  if (tab === 'Nearby') { // [F3]
+    if (userCoords) { // [F3]
+      nearbyStatus = '📍 Sorted by distance from you.'; // [F3]
+    } else if (!hasSameCountryHost) { // [F3]
+      const prefix = // [F3]
+        locStatus === 'denied' ? 'Location permission off — ' : // [F3]
+        locStatus === 'unavailable' ? 'Location not available on this build — ' : ''; // [F3]
+      nearbyStatus = `${prefix}No hosts from ${userCountry} yet — showing all hosts`; // [F3]
+    } else if (locStatus === 'denied') { // [F3]
+      nearbyStatus = 'Location permission off — showing hosts from your country first.'; // [F3]
+    } else if (locStatus === 'unavailable') { // [F3]
+      nearbyStatus = 'Location not available on this build — showing hosts from your country first.'; // [F3]
+    } else { // [F3]
+      nearbyStatus = 'Showing hosts from your country first.'; // [F3]
+    } // [F3]
+  } // [F3]
 
   const renderHost = ({ item }) => {
     const viewers = VIEWERS[item.id] || 0;
+    // [F3] Distance chip — only when location was granted and this
+    // host has coordinates. Host coords are demo city coords. [/F3]
+    const distanceKm = userCoords ? distanceToHostKm(userCoords, item) : null; // [F3]
+    const distanceLabel = distanceKm !== null ? formatDistance(distanceKm) : ''; // [F3]
     return (
       <TouchableOpacity
         style={styles.card}
@@ -77,6 +222,20 @@ export default function HomeScreen({ navigation }) {
               <Text style={styles.viewersText}>👁 {formatViewers(viewers)}</Text>
             </View>
           )}
+          {/* [F2] Voice-call button (online hosts only): opens the
+              audio-only call — same 'VideoCall' route with
+              audioOnly: true. Nested touchable: tapping it does not
+              fire the card's video-call onPress. */}
+          {item.online && (
+            <TouchableOpacity
+              style={styles.voiceBtn}
+              activeOpacity={0.8}
+              onPress={() => navigation.navigate('VideoCall', { host: item, audioOnly: true })}
+            >
+              <Text style={styles.voiceBtnText}>📞</Text>
+            </TouchableOpacity>
+          )}
+          {/* [/F2] */}
           <LinearGradient
             colors={['transparent', 'rgba(0,0,0,0.65)']}
             style={styles.bottomShade}
@@ -86,12 +245,38 @@ export default function HomeScreen({ navigation }) {
               <Text style={[styles.chip, styles.lv]}>Lv{item.level}</Text>
               <Text style={styles.chip}>{item.flag} {item.country}</Text>
               <Text style={styles.chip}>{item.lang}</Text>
+              {/* [F3] 📍 distance chip, only when location is granted. [/F3] */}
+              {distanceLabel ? <Text style={styles.chip}>📍 {distanceLabel}</Text> : null}
             </View>
           </LinearGradient>
         </LinearGradient>
       </TouchableOpacity>
     );
   };
+
+  // [F3] One filter row: label + option chips. Tapping the active
+  // chip clears that filter. [/F3]
+  const renderFilterRow = (label, options, filterKey, formatOption) => ( // [F3]
+    <View style={styles.filterRow} key={label}> // [F3]
+      <Text style={styles.filterLabel}>{label}</Text> // [F3]
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterChips}> // [F3]
+        {options.map((opt) => { // [F3]
+          const active = filters[filterKey] === opt; // [F3]
+          return ( // [F3]
+            <TouchableOpacity // [F3]
+              key={opt} // [F3]
+              style={[styles.filterChip, active && styles.filterChipActive]} // [F3]
+              onPress={() => toggleFilter(filterKey, opt)} // [F3]
+            > // [F3]
+              <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}> // [F3]
+                {formatOption ? formatOption(opt) : opt} // [F3]
+              </Text> // [F3]
+            </TouchableOpacity> // [F3]
+          ); // [F3]
+        })} // [F3]
+      </ScrollView> // [F3]
+    </View> // [F3]
+  ); // [F3]
 
   return (
     <LinearGradient colors={['#fffbeb', '#fef3c7', '#fff7ed']} style={styles.bg}>
@@ -110,6 +295,40 @@ export default function HomeScreen({ navigation }) {
         ))}
       </View>
 
+      {/* [F3] Filter bar: Country / Gender / Language chips, options
+          derived from the real host list. "✕ Clear filters" shows
+          only while a filter is active. [/F3] */}
+      <View style={styles.filterBar}>
+        {renderFilterRow('Country', countryOptions, 'country')}
+        {renderFilterRow('Gender', genderOptions, 'gender', (g) => GENDER_LABELS[g] || g)}
+        {renderFilterRow('Language', langOptions, 'lang')}
+        {hasActiveFilters && (
+          <TouchableOpacity style={styles.clearFilters} onPress={clearFilters}>
+            <Text style={styles.clearFiltersText}>✕ Clear filters</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* [F3] Honest Nearby status line — only on the Nearby tab. [/F3] */}
+      {tab === 'Nearby' && nearbyStatus ? (
+        <Text style={styles.nearbyStatus}>{nearbyStatus}</Text>
+      ) : null}
+      {/* [F1] Lucky Spin + Daily Reward entry — opens the Rewards screen. */}
+      <TouchableOpacity
+        style={styles.rewardsBanner}
+        onPress={() => navigation.navigate('Rewards')}
+        activeOpacity={0.85}
+      >
+        <Text style={styles.rewardsBannerText}>🎡 Lucky Spin • Daily Reward</Text>
+        <Text style={styles.rewardsBannerSub}>1 free spin today — win coins!</Text>
+      </TouchableOpacity>
+      {/* [/F1] */}
+      {/* [F6] AI Smart Match button — under the tabs. */}
+      <TouchableOpacity style={styles.smartMatchBtn} onPress={runSmartMatch} activeOpacity={0.85}>
+        <Text style={styles.smartMatchText}>✨ Smart Match — find someone to talk to</Text>
+      </TouchableOpacity>
+      {/* [/F6] */}
+
       <FlatList
         data={hosts}
         keyExtractor={(h) => h.id}
@@ -117,8 +336,32 @@ export default function HomeScreen({ navigation }) {
         columnWrapperStyle={styles.row}
         renderItem={renderHost}
         contentContainerStyle={styles.list}
-        ListEmptyComponent={<Text style={styles.empty}>No hosts live right now.</Text>}
+        ListEmptyComponent={
+          // [F3] Filter-aware empty state: when filters are active, say
+          // so and offer to clear them. [/F3]
+          hasActiveFilters ? ( // [F3]
+            <View style={styles.emptyWrap}> // [F3]
+              <Text style={styles.empty}>No hosts match these filters.</Text> // [F3]
+              <TouchableOpacity onPress={clearFilters}> // [F3]
+                <Text style={styles.emptyClear}>Clear filters</Text> // [F3]
+              </TouchableOpacity> // [F3]
+            </View> // [F3]
+          ) : (
+            <Text style={styles.empty}>No hosts live right now.</Text>
+          )
+        }
       />
+
+      {/* [F6] AI Smart Match result modal. */}
+      <SmartMatchCard
+        visible={matchVisible}
+        host={matchedHost}
+        onCall={callMatchedHost}
+        onFindAnother={findAnotherMatch}
+        onClose={() => setMatchVisible(false)}
+        onTryAgain={runSmartMatch}
+      />
+      {/* [/F6] */}
     </LinearGradient>
   );
 }
@@ -133,6 +376,9 @@ const styles = StyleSheet.create({
   coinPill: { backgroundColor: '#fff', borderRadius: 20, elevation: 2, paddingHorizontal: 14, paddingVertical: 8 },
   coinText: { fontWeight: 'bold' },
   empty: { color: COLORS.grey, marginTop: 40, textAlign: 'center' },
+  // [F3] Filter-aware empty state: "Clear filters" link under the message. [/F3]
+  emptyWrap: { alignItems: 'center' }, // [F3]
+  emptyClear: { color: COLORS.pink, fontWeight: 'bold', marginTop: 8, textAlign: 'center' }, // [F3]
   header: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16 },
   list: { padding: 12 },
   liveBadge: { backgroundColor: '#ef4444', borderRadius: 10, left: 8, paddingHorizontal: 8, paddingVertical: 3, position: 'absolute', top: 8 },
@@ -143,9 +389,36 @@ const styles = StyleSheet.create({
   offlineBadge: { backgroundColor: 'rgba(0,0,0,0.55)' },
   photo: { alignItems: 'center', height: 190, justifyContent: 'center', overflow: 'hidden' },
   row: { justifyContent: 'space-between' },
+  // [F1] Rewards banner styles.
+  rewardsBanner: { backgroundColor: COLORS.purple, borderRadius: 12, marginHorizontal: 16, marginTop: 12, paddingHorizontal: 14, paddingVertical: 10 },
+  rewardsBannerSub: { color: '#e9d5ff', fontSize: 12, marginTop: 2 },
+  rewardsBannerText: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
+  // [/F1]
   tab: { color: COLORS.grey, fontSize: 15, marginRight: 16, paddingBottom: 6 },
   tabActive: { borderBottomColor: COLORS.pink, borderBottomWidth: 2, color: COLORS.dark, fontWeight: 'bold' },
   tabs: { flexDirection: 'row', marginTop: 14, paddingHorizontal: 16 },
   viewers: { backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, position: 'absolute', right: 8, top: 8 },
   viewersText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
+  // [F3] Filter bar styles. [/F3]
+  filterBar: { marginTop: 10, paddingHorizontal: 16 }, // [F3]
+  filterRow: { alignItems: 'center', flexDirection: 'row', marginBottom: 6 }, // [F3]
+  filterLabel: { color: COLORS.grey, fontSize: 12, fontWeight: 'bold', width: 64 }, // [F3]
+  filterChips: { flex: 1 }, // [F3]
+  filterChip: { backgroundColor: '#fff', borderColor: COLORS.grey, borderRadius: 14, borderWidth: 1, marginRight: 6, paddingHorizontal: 10, paddingVertical: 4 }, // [F3]
+  filterChipActive: { backgroundColor: COLORS.pink, borderColor: COLORS.pink }, // [F3]
+  filterChipText: { color: COLORS.dark, fontSize: 12 }, // [F3]
+  filterChipTextActive: { color: '#fff', fontWeight: 'bold' }, // [F3]
+  clearFilters: { alignSelf: 'flex-start', marginTop: 2 }, // [F3]
+  clearFiltersText: { color: COLORS.pink, fontSize: 12, fontWeight: 'bold' }, // [F3]
+  // [F3] Nearby status line under the filter bar. [/F3]
+  nearbyStatus: { color: COLORS.grey, fontSize: 12, marginTop: 2, paddingHorizontal: 16 }, // [F3]
+  // [F2] Voice-call button on host cards (top-right, under the
+  // viewers pill; online hosts only).
+  voiceBtn: { alignItems: 'center', backgroundColor: 'rgba(236,72,153,0.95)', borderRadius: 20, height: 40, justifyContent: 'center', position: 'absolute', right: 8, top: 40, width: 40 },
+  voiceBtnText: { fontSize: 18 },
+  // [/F2]
+  // [F6] AI Smart Match button (purple, under the tabs).
+  smartMatchBtn: { alignItems: 'center', backgroundColor: COLORS.purple, borderRadius: 24, marginHorizontal: 16, marginTop: 12, paddingVertical: 12 },
+  smartMatchText: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
+  // [/F6]
 });
