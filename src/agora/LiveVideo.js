@@ -17,6 +17,8 @@
 //   engine.enableLocalVideo(enabled)
 //   engine.setBeautyEffectOptions(enabled, BeautyOptions)
 //   engine.switchCamera()
+//   [F2] engine.disableVideo() — voice calls: video module off
+//   [F2] engine.setEnableSpeakerphone(enabled) — voice-call speaker
 //   engine.registerEventHandler({ onJoinChannelSuccess,
 //     onUserJoined, onUserOffline, onLeaveChannel, onError,
 //     onTokenPrivilegeWillExpire })
@@ -143,11 +145,15 @@ function registerEngineEvents(lib) {
  *   uid         — your numeric uid in the channel (0 = let Agora assign).
  *   role        — 'host' (broadcaster: publishes camera + mic) or
  *                 'audience' (watches only, publishes nothing).
+ *   audioOnly   — [F2] true = voice call: joins with audio only —
+ *                 no camera track published, no video subscribed,
+ *                 video module disabled on the shared engine. The
+ *                 same channel/token/role rules apply as video.
  * Returns the engine. Throws a plain Error with a readable message
  * when the App ID, the token or the native module is missing, or
  * when initialize / joinChannel returns a non-zero code.
  */
-export function joinAgoraChannel({ token, channelName, uid = 0, role = 'audience' }) {
+export function joinAgoraChannel({ token, channelName, uid = 0, role = 'audience', audioOnly = false }) {
   const lib = loadAgora();
   if (!lib) {
     throw new Error(
@@ -187,17 +193,28 @@ export function joinAgoraChannel({ token, channelName, uid = 0, role = 'audience
     ? lib.ClientRoleType.ClientRoleBroadcaster
     : lib.ClientRoleType.ClientRoleAudience;
   engine.setClientRole(clientRole);
-  engine.enableVideo();
-  if (isHost) {
+  // [F2] Audio-only: disable the video module on the shared engine
+  // (a previous video session may have enabled it) and publish /
+  // subscribe audio only. Video mode re-enables video below, so a
+  // later video call still works after a voice call.
+  if (audioOnly) {
+    engine.disableVideo();
+  } else {
+    engine.enableVideo();
+  }
+  if (isHost && !audioOnly) {
     engine.startPreview();
   }
+  // [/F2]
 
   const joinCode = engine.joinChannel(token, channelName, uid, {
     clientRoleType: clientRole,
-    publishCameraTrack: isHost,
+    // [F2] Voice call: no camera track, no video subscription.
+    publishCameraTrack: isHost && !audioOnly,
     publishMicrophoneTrack: isHost,
     autoSubscribeAudio: true,
-    autoSubscribeVideo: true,
+    autoSubscribeVideo: !audioOnly,
+    // [/F2]
   });
   if (joinCode !== 0) {
     throw new Error(
@@ -264,6 +281,17 @@ export function switchAgoraCamera() {
   }
 }
 
+// [F2] Route call audio to the loudspeaker (voice calls) or back to
+// the earpiece. react-native-agora v4.4.0:
+// engine.setEnableSpeakerphone(enabled). Voice calls default to
+// the speaker; VoiceCallScreen restores the earpiece on unmount.
+export function setAgoraSpeakerphone(enabled) {
+  if (engine) {
+    engine.setEnableSpeakerphone(enabled);
+  }
+}
+// [/F2]
+
 /** Turn the beauty filter on / off. */
 export function setAgoraBeauty(enabled) {
   if (!engine) {
@@ -283,6 +311,10 @@ export function setAgoraBeauty(enabled) {
 //   token    — RTC token (defaults to AGORA_TOKEN / EXPO_PUBLIC_AGORA_TOKEN)
 //   role     — 'host' (goes live, publishes camera+mic) or
 //              'audience' (watches, publishes nothing). Default 'audience'.
+//   audioOnly — [F2] true = voice call: joins the channel with audio
+//              only (see joinAgoraChannel) and renders a compact
+//              audio status view instead of any video surface — no
+//              local preview, no remote video view.
 //   uid      — numeric uid (0 = Agora assigns one). Default 0.
 //   style    — container style
 //   onRemoteJoin(uid) / onRemoteLeave(uid) — optional callbacks
@@ -295,6 +327,7 @@ export default function LiveVideo({
   channel,
   token,
   role = 'audience',
+  audioOnly = false, // [F2]
   uid = 0,
   style,
   onRemoteJoin,
@@ -354,7 +387,10 @@ export default function LiveVideo({
 
     let cancelled = false;
     try {
-      joinAgoraChannel({ token: effectiveToken, channelName: channel, uid, role });
+      // [F2] audioOnly is passed through: voice calls join the same
+      // channel with audio only, no video tracks.
+      joinAgoraChannel({ token: effectiveToken, channelName: channel, uid, role, audioOnly });
+      // [/F2]
       joinedChannelRef.current = channel;
       // If this uid was assigned by Agora (uid 0), the local canvas
       // still uses uid 0, which the SDK treats as "local user".
@@ -375,9 +411,9 @@ export default function LiveVideo({
       leaveAgoraChannel();
       joinedChannelRef.current = null;
     };
-    // Re-join only when the channel or role changes.
+    // Re-join only when the channel, role or audio mode changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channel, role]);
+  }, [channel, role, audioOnly]); // [F2] audioOnly added to deps
 
   if (AGORA_APP_ID_IS_PLACEHOLDER) {
     return (
@@ -405,6 +441,29 @@ export default function LiveVideo({
       </View>
     );
   }
+
+  // [F2] Audio-only mode: no video surfaces at all — just a compact
+  // status view. The channel is still joined (audio), and remote
+  // join/leave events still fire, so the caller knows when the
+  // host's audio is connected.
+  if (audioOnly) {
+    return (
+      <View style={[styles.audioBox, style]}>
+        <Text style={styles.audioEmoji}>🎙️</Text>
+        <Text style={styles.audioText}>
+          {status === 'joining'
+            ? 'Joining voice call…'
+            : remoteUid
+              ? 'Voice connected'
+              : 'Waiting for the host to join…'}
+        </Text>
+        <View style={styles.voiceChip}>
+          <Text style={styles.liveChipText}>● VOICE</Text>
+        </View>
+      </View>
+    );
+  }
+  // [/F2]
 
   const RtcSurfaceView = RtcSurfaceViewRef.current;
   if (!RtcSurfaceView) {
@@ -456,6 +515,12 @@ export default function LiveVideo({
 }
 
 const styles = StyleSheet.create({
+  // [F2] Audio-only status view styles.
+  audioBox: { alignItems: 'center', backgroundColor: '#1f2937', borderRadius: 12, justifyContent: 'center', padding: 16 },
+  audioEmoji: { fontSize: 32, marginBottom: 6 },
+  audioText: { color: '#d1d5db', fontSize: 13, textAlign: 'center' },
+  voiceChip: { backgroundColor: 'rgba(124,58,237,0.9)', borderRadius: 10, left: 10, paddingHorizontal: 8, paddingVertical: 3, position: 'absolute', top: 10 },
+  // [/F2]
   box: { backgroundColor: '#1f2937', alignItems: 'center', justifyContent: 'center', padding: 20, borderRadius: 12 },
   btnText: { color: '#fff', fontWeight: 'bold' },
   emoji: { fontSize: 40, marginBottom: 8 },
