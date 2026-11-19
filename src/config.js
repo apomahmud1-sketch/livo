@@ -32,6 +32,27 @@ export const CALL_RATES = [
 export const getCallRate = (tierId) =>
   CALL_RATES.find((r) => r.id === tierId) || CALL_RATES[1];
 
+// [F2] Voice-call rates — audio-only calls cost HALF the video tier.
+// Derived from CALL_RATES above (admin-set in the panel), never a
+// fixed number: if the admin changes a video tier price, the voice
+// rate follows automatically. With the demo tiers this gives
+// 30/60/150/300/600 coins/min for video 60/120/300/600/1200.
+// Math.floor: if the admin ever sets an odd video rate, the voice
+// rate rounds down to a whole coin amount instead of a fraction.
+export const VOICE_RATE_DIVISOR = 2;
+
+export const getVoiceCallRate = (tierId) => {
+  const video = getCallRate(tierId);
+  const coinsPerMinute = Math.floor(video.coinsPerMinute / VOICE_RATE_DIVISOR);
+  return {
+    id: video.id,
+    name: `${video.name} (Voice)`,
+    coinsPerMinute,
+    label: `${coinsPerMinute} coins/min (voice)`,
+  };
+};
+// [/F2]
+
 // 1 gift coin = 1 diamond for the host (admin can change this rate).
 export const COIN_TO_DIAMOND_RATE = 1;
 
