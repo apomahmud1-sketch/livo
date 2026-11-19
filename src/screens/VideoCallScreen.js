@@ -3,12 +3,21 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, GIFTS, getCallRate } from '../config';
 import { useApp } from '../store';
+// [F5] Full-screen gift animation for expensive gifts (price >= 1000 coins)
+import FullScreenGift from '../components/FullScreenGift';
+import { PROFILE } from './profile/levelData';
+// [/F5]
 import LiveVideo, {
+  getAgoraEngine,
   leaveAgoraChannel,
   setAgoraBeauty,
   setAgoraMuted,
   switchAgoraCamera,
 } from '../agora/LiveVideo';
+import VoiceCallScreen from './VoiceCallScreen'; // [F2] audio-only variant
+// [F7] Voice changer — Agora voice presets, see src/utils/voiceChanger.js
+import { VOICE_PRESETS, applyVoicePreset, getVoicePresetLabel, resetVoicePreset } from '../utils/voiceChanger';
+// [/F7]
 
 // ─────────────────────────────────────────────────────────────────
 // 1-to-1 video call. States: 'incoming' → 'calling'.
@@ -35,7 +44,7 @@ import LiveVideo, {
 // token prop — see src/agora/LiveVideo.js.
 // ─────────────────────────────────────────────────────────────────
 export default function VideoCallScreen({ route, navigation }) {
-  const { host, asHost } = route.params || {};
+  const { host, asHost, audioOnly } = route.params || {}; // [F2] audioOnly added
   const { coins, chargeCall, sendGift, showToast } = useApp();
   const rate = getCallRate(host ? host.rateTier : 'tier2');
   const [stage, setStage] = useState(asHost ? 'calling' : 'incoming');
@@ -43,6 +52,15 @@ export default function VideoCallScreen({ route, navigation }) {
   const [muted, setMuted] = useState(false);
   const [beauty, setBeauty] = useState(false);
   const [frontCamera, setFrontCamera] = useState(true);
+  // [F5] Gift currently playing the full-screen animation (null = none).
+  // Only expensive gifts (price >= EXPENSIVE_GIFT_MIN_COINS) ever set this.
+  const [bigGift, setBigGift] = useState(null);
+  // [/F5]
+  // [F7] Voice changer state. 'normal' = your real voice. The panel
+  // is closed by default so the call controls stay uncluttered.
+  const [voicePreset, setVoicePreset] = useState('normal');
+  const [voicePanelOpen, setVoicePanelOpen] = useState(false);
+  // [/F7]
   const timerRef = useRef(null);
 
   useEffect(() => {
@@ -63,6 +81,14 @@ export default function VideoCallScreen({ route, navigation }) {
     );
   }
 
+  // [F2] Voice-call mode: navigation param audioOnly: true (from a
+  // Home host card or ChatDetailScreen) renders the audio-only
+  // screen instead. The video path below is untouched.
+  if (audioOnly) {
+    return <VoiceCallScreen route={route} navigation={navigation} />;
+  }
+  // [/F2]
+
   const mm = String(Math.floor(seconds / 60)).padStart(2, '0');
   const ss = String(seconds % 60).padStart(2, '0');
   const liveCost = Math.ceil(seconds / 60) * rate.coinsPerMinute;
@@ -77,6 +103,10 @@ export default function VideoCallScreen({ route, navigation }) {
 
   const endCall = () => {
     clearInterval(timerRef.current);
+    // [F7] The Agora engine is a shared singleton — reset the voice
+    // so the effect does not leak into the next call.
+    resetVoicePreset(getAgoraEngine());
+    // [/F7]
     leaveAgoraChannel();
     const minutes = Math.max(1, Math.ceil(seconds / 60));
     chargeCall(host, minutes, rate.coinsPerMinute);
@@ -100,6 +130,38 @@ export default function VideoCallScreen({ route, navigation }) {
     setBeauty(!beauty);
     setAgoraBeauty(!beauty);
   };
+
+  // [F5] Send a gift: charge coins via the store first, then show the
+  // full-screen animation ONLY for expensive gifts. Cheap gifts keep
+  // the old toast-only behaviour (sendGift already toasted).
+  // Threshold from the real gift data (GIFTS in src/config.js):
+  // the expensive gifts are Sports Car 2999, Rocket 4999 and
+  // Castle 9999 — everything at or below Diamond Ring (999) is cheap.
+  const EXPENSIVE_GIFT_MIN_COINS = 1000;
+  const handleSendGift = (gift) => {
+    if (!sendGift(gift)) return; // not enough coins — toast already shown
+    if (gift.price >= EXPENSIVE_GIFT_MIN_COINS) {
+      setBigGift(gift);
+    }
+  };
+  // [/F5]
+  // [F7] Apply a voice preset to the live Agora engine. If the engine
+  // is not ready (no native module / not joined yet) the helper
+  // returns false and the voice simply stays as it was.
+  const selectVoice = (presetId) => {
+    const ok = applyVoicePreset(getAgoraEngine(), presetId);
+    if (ok) {
+      setVoicePreset(presetId);
+      showToast(
+        presetId === 'normal'
+          ? 'Voice: Normal — your real voice'
+          : `Voice: ${getVoicePresetLabel(presetId)}`,
+      );
+    } else {
+      showToast('Voice changer is not available in this call yet.');
+    }
+  };
+  // [/F7]
 
   if (stage === 'incoming') {
     return (
@@ -127,12 +189,42 @@ export default function VideoCallScreen({ route, navigation }) {
 
       <View style={styles.giftRow}>
         {GIFTS.slice(0, 4).map((g) => (
-          <TouchableOpacity key={g.id} style={styles.gift} onPress={() => sendGift(g)}>
+          <TouchableOpacity key={g.id} style={styles.gift} onPress={() => handleSendGift(g)}>
             <Text style={styles.giftEmoji}>{g.emoji}</Text>
             <Text style={styles.giftPrice}>{g.price}</Text>
           </TouchableOpacity>
         ))}
       </View>
+
+      {/* [F7] Voice changer: a pill button opens the preset panel.
+          The pill sits above the call controls so the existing
+          4-button controls row is untouched. Tapping a preset
+          applies it to the live Agora engine at once. */}
+      <TouchableOpacity
+        style={styles.voicePill}
+        onPress={() => setVoicePanelOpen(!voicePanelOpen)}
+      >
+        <Text style={styles.voicePillText}>
+          🎤 Voice: {getVoicePresetLabel(voicePreset)} {voicePanelOpen ? '▴' : '▾'}
+        </Text>
+      </TouchableOpacity>
+      {voicePanelOpen ? (
+        <View style={styles.voicePanel}>
+          {VOICE_PRESETS.map((p) => (
+            <TouchableOpacity
+              key={p.id}
+              style={[styles.voiceChip, voicePreset === p.id && styles.voiceChipOn]}
+              onPress={() => selectVoice(p.id)}
+            >
+              <Text style={styles.voiceChipEmoji}>{p.emoji}</Text>
+              <Text style={[styles.voiceChipText, voicePreset === p.id && styles.voiceChipTextOn]}>
+                {p.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
+      {/* [/F7] */}
 
       <View style={styles.controls}>
         <TouchableOpacity style={[styles.ctrl, muted && styles.ctrlOff]} onPress={toggleMute}>
@@ -148,7 +240,12 @@ export default function VideoCallScreen({ route, navigation }) {
           <Text style={styles.ctrlText}>📞</Text>
         </TouchableOpacity>
       </View>
-      <Text style={styles.hint}>Beauty {beauty ? 'on' : 'off'} · Mic {muted ? 'muted' : 'on'} · Live video via Agora</Text>
+      {/* [F5] Full-screen animation overlay for an expensive gift (pointerEvents="none" inside — never blocks the call controls) */}
+      <FullScreenGift gift={bigGift} senderName={PROFILE.name} visible={!!bigGift} onDone={() => setBigGift(null)} />
+      {/* [/F5] */}
+      {/* [F7] Voice label added to the existing hint line. */}
+      <Text style={styles.hint}>Beauty {beauty ? 'on' : 'off'} · Mic {muted ? 'muted' : 'on'} · Voice {getVoicePresetLabel(voicePreset)} · Live video via Agora</Text>
+      {/* [/F7] */}
     </View>
   );
 }
@@ -177,4 +274,14 @@ const styles = StyleSheet.create({
   timer: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginTop: 12, textAlign: 'center' },
   title: { color: COLORS.dark, fontSize: 26, fontWeight: 'bold', marginTop: 16, textAlign: 'center' },
   video: { height: 300 },
+  // [F7] Voice changer panel styles.
+  voiceChip: { alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 12, margin: 4, paddingVertical: 8, width: 96 },
+  voiceChipEmoji: { fontSize: 22 },
+  voiceChipOn: { backgroundColor: COLORS.pink },
+  voiceChipText: { color: '#fff', fontSize: 12, fontWeight: 'bold', marginTop: 2 },
+  voiceChipTextOn: { color: '#fff' },
+  voicePanel: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', marginTop: 12 },
+  voicePill: { alignSelf: 'center', backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 16, marginTop: 12, paddingHorizontal: 16, paddingVertical: 8 },
+  voicePillText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+  // [/F7]
 });
