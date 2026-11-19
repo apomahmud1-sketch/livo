@@ -16,6 +16,7 @@ import ProfileScreen from './src/screens/ProfileScreen';
 import HostDashboardScreen from './src/screens/HostDashboardScreen';
 import RankingScreen from './src/screens/RankingScreen';
 import VIPScreen from './src/screens/VIPScreen';
+import RewardsScreen from './src/screens/RewardsScreen'; // [F1] Lucky Spin + Daily Reward
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -58,6 +59,7 @@ function Root() {
         <Stack.Screen name="WalletTab" component={WalletScreen} />
         <Stack.Screen name="HostDashboard" component={HostDashboardScreen} />
         <Stack.Screen name="VIP" component={VIPScreen} />
+        <Stack.Screen name="Rewards" component={RewardsScreen} /> {/* [F1] Lucky Spin + Daily Reward */}
       </Stack.Navigator>
       <Toast />
       <StatusBar style="auto" />
