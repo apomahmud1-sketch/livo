@@ -70,7 +70,7 @@ const formatViewers = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 const TABS = ['Popular', 'Online', 'New', 'Nearby']; // [F3] 'Nearby' added [/F3]
 
 // [F3] Gender chip labels (host.gender is 'female' / 'male'). [/F3]
-const GENDER_LABELS = { female: 'Female', male: 'Male' }; // [F3]
+const GENDER_LABELS = { female: 'Female', male: 'Male' };
 
 export default function HomeScreen({ navigation }) {
   const [tab, setTab] = useState('Popular');
@@ -80,18 +80,18 @@ export default function HomeScreen({ navigation }) {
   // derived from the real host list below, so they always match the
   // hosts that actually exist. Filters apply on top of the tab, on
   // the SAME allHosts list — no second list. [/F3]
-  const [filters, setFilters] = useState({ country: null, gender: null, lang: null }); // [F3]
-  const hasActiveFilters = Boolean(filters.country || filters.gender || filters.lang); // [F3]
+  const [filters, setFilters] = useState({ country: null, gender: null, lang: null });
+  const hasActiveFilters = Boolean(filters.country || filters.gender || filters.lang);
   // [F3] Tap an active chip to clear just that filter; tap another
   // option to switch to it. [/F3]
-  const toggleFilter = (key, value) => { // [F3]
-    setFilters((f) => ({ ...f, [key]: f[key] === value ? null : value })); // [F3]
-  }; // [F3]
-  const clearFilters = () => setFilters({ country: null, gender: null, lang: null }); // [F3]
+  const toggleFilter = (key, value) => {
+    setFilters((f) => ({ ...f, [key]: f[key] === value ? null : value }));
+  };
+  const clearFilters = () => setFilters({ country: null, gender: null, lang: null });
   // [F3] Filter options, derived from the real host list. [/F3]
-  const countryOptions = [...new Set(allHosts.map((h) => h.country))]; // [F3]
-  const genderOptions = [...new Set(allHosts.map((h) => h.gender).filter(Boolean))]; // [F3]
-  const langOptions = [...new Set(allHosts.map((h) => h.lang))]; // [F3]
+  const countryOptions = [...new Set(allHosts.map((h) => h.country))];
+  const genderOptions = [...new Set(allHosts.map((h) => h.gender).filter(Boolean))];
+  const langOptions = [...new Set(allHosts.map((h) => h.lang))];
 
   // [F3] Location state for the Nearby tab. 'idle' = never asked yet;
   // 'requesting' = permission prompt in flight; 'granted' = permission
@@ -99,8 +99,8 @@ export default function HomeScreen({ navigation }) {
   // 'unavailable' = expo-location is not installed in this build
   // (the normal case today) or the position read failed. No location
   // is ever read without permission. [/F3]
-  const [userCoords, setUserCoords] = useState(null); // [F3]
-  const [locStatus, setLocStatus] = useState('idle'); // [F3]
+  const [userCoords, setUserCoords] = useState(null);
+  const [locStatus, setLocStatus] = useState('idle');
   const locationRequestedRef = useRef(false); // [F3] permission is requested only once [/F3]
 
   // [F6] AI Smart Match — picks from the live store host list
@@ -128,30 +128,30 @@ export default function HomeScreen({ navigation }) {
   // If expo-location is not installed, loadLocationModule() returns
   // null and we fall back to country-based proximity — no crash, no
   // permission prompt, no location read. [/F3]
-  useEffect(() => { // [F3]
-    if (tab !== 'Nearby' || locationRequestedRef.current) return; // [F3]
-    locationRequestedRef.current = true; // [F3]
-    (async () => { // [F3]
-      const Location = loadLocationModule(); // [F3]
-      if (!Location) { // [F3]
+  useEffect(() => {
+    if (tab !== 'Nearby' || locationRequestedRef.current) return;
+    locationRequestedRef.current = true;
+    (async () => {
+      const Location = loadLocationModule();
+      if (!Location) {
         setLocStatus('unavailable'); // [F3] expo-location not installed in this build [/F3]
-        return; // [F3]
-      } // [F3]
-      try { // [F3]
-        setLocStatus('requesting'); // [F3]
-        const { status } = await Location.requestForegroundPermissionsAsync(); // [F3]
-        if (status !== 'granted') { // [F3]
-          setLocStatus('denied'); // [F3]
-          return; // [F3]
-        } // [F3]
+        return;
+      }
+      try {
+        setLocStatus('requesting');
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          setLocStatus('denied');
+          return;
+        }
         const pos = await Location.getCurrentPositionAsync({}); // [F3] only after permission is granted [/F3]
-        setUserCoords({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }); // [F3]
-        setLocStatus('granted'); // [F3]
-      } catch (e) { // [F3]
-        setLocStatus('unavailable'); // [F3]
-      } // [F3]
-    })(); // [F3]
-  }, [tab]); // [F3]
+        setUserCoords({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
+        setLocStatus('granted');
+      } catch (e) {
+        setLocStatus('unavailable');
+      }
+    })();
+  }, [tab]);
 
   // [F3] Tab ordering first, then the filters on top of it — all on
   // the same allHosts list from the store. Nearby sorts with
@@ -167,39 +167,39 @@ export default function HomeScreen({ navigation }) {
           : allHosts;
 
   const hosts = tabHosts.filter((h) => // [F3] filters apply on top of the tab [/F3]
-    (!filters.country || h.country === filters.country) && // [F3]
-    (!filters.gender || h.gender === filters.gender) && // [F3]
-    (!filters.lang || h.lang === filters.lang) // [F3]
-  ); // [F3]
+    (!filters.country || h.country === filters.country) &&
+    (!filters.gender || h.gender === filters.gender) &&
+    (!filters.lang || h.lang === filters.lang)
+  );
 
   // [F3] Honest Nearby status line. Demo data has no SGP host, so
   // when there is no same-country host the fallback leaves the order
   // unchanged and the line says so instead of pretending otherwise. [/F3]
-  const hasSameCountryHost = allHosts.some((h) => h.country === userCountry); // [F3]
-  let nearbyStatus = ''; // [F3]
-  if (tab === 'Nearby') { // [F3]
-    if (userCoords) { // [F3]
-      nearbyStatus = '📍 Sorted by distance from you.'; // [F3]
-    } else if (!hasSameCountryHost) { // [F3]
-      const prefix = // [F3]
-        locStatus === 'denied' ? 'Location permission off — ' : // [F3]
-        locStatus === 'unavailable' ? 'Location not available on this build — ' : ''; // [F3]
-      nearbyStatus = `${prefix}No hosts from ${userCountry} yet — showing all hosts`; // [F3]
-    } else if (locStatus === 'denied') { // [F3]
-      nearbyStatus = 'Location permission off — showing hosts from your country first.'; // [F3]
-    } else if (locStatus === 'unavailable') { // [F3]
-      nearbyStatus = 'Location not available on this build — showing hosts from your country first.'; // [F3]
-    } else { // [F3]
-      nearbyStatus = 'Showing hosts from your country first.'; // [F3]
-    } // [F3]
-  } // [F3]
+  const hasSameCountryHost = allHosts.some((h) => h.country === userCountry);
+  let nearbyStatus = '';
+  if (tab === 'Nearby') {
+    if (userCoords) {
+      nearbyStatus = '📍 Sorted by distance from you.';
+    } else if (!hasSameCountryHost) {
+      const prefix =
+        locStatus === 'denied' ? 'Location permission off — ' :
+        locStatus === 'unavailable' ? 'Location not available on this build — ' : '';
+      nearbyStatus = `${prefix}No hosts from ${userCountry} yet — showing all hosts`;
+    } else if (locStatus === 'denied') {
+      nearbyStatus = 'Location permission off — showing hosts from your country first.';
+    } else if (locStatus === 'unavailable') {
+      nearbyStatus = 'Location not available on this build — showing hosts from your country first.';
+    } else {
+      nearbyStatus = 'Showing hosts from your country first.';
+    }
+  }
 
   const renderHost = ({ item }) => {
     const viewers = VIEWERS[item.id] || 0;
     // [F3] Distance chip — only when location was granted and this
     // host has coordinates. Host coords are demo city coords. [/F3]
-    const distanceKm = userCoords ? distanceToHostKm(userCoords, item) : null; // [F3]
-    const distanceLabel = distanceKm !== null ? formatDistance(distanceKm) : ''; // [F3]
+    const distanceKm = userCoords ? distanceToHostKm(userCoords, item) : null;
+    const distanceLabel = distanceKm !== null ? formatDistance(distanceKm) : '';
     return (
       <TouchableOpacity
         style={styles.card}
@@ -256,27 +256,27 @@ export default function HomeScreen({ navigation }) {
 
   // [F3] One filter row: label + option chips. Tapping the active
   // chip clears that filter. [/F3]
-  const renderFilterRow = (label, options, filterKey, formatOption) => ( // [F3]
-    <View style={styles.filterRow} key={label}> // [F3]
-      <Text style={styles.filterLabel}>{label}</Text> // [F3]
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterChips}> // [F3]
-        {options.map((opt) => { // [F3]
-          const active = filters[filterKey] === opt; // [F3]
-          return ( // [F3]
-            <TouchableOpacity // [F3]
-              key={opt} // [F3]
-              style={[styles.filterChip, active && styles.filterChipActive]} // [F3]
-              onPress={() => toggleFilter(filterKey, opt)} // [F3]
-            > // [F3]
-              <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}> // [F3]
-                {formatOption ? formatOption(opt) : opt} // [F3]
-              </Text> // [F3]
-            </TouchableOpacity> // [F3]
-          ); // [F3]
-        })} // [F3]
-      </ScrollView> // [F3]
-    </View> // [F3]
-  ); // [F3]
+  const renderFilterRow = (label, options, filterKey, formatOption) => (
+    <View style={styles.filterRow} key={label}>
+      <Text style={styles.filterLabel}>{label}</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterChips}>
+        {options.map((opt) => {
+          const active = filters[filterKey] === opt;
+          return (
+            <TouchableOpacity
+              key={opt}
+              style={[styles.filterChip, active && styles.filterChipActive]}
+              onPress={() => toggleFilter(filterKey, opt)}
+            >
+              <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>
+                {formatOption ? formatOption(opt) : opt}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
 
   return (
     <LinearGradient colors={['#fffbeb', '#fef3c7', '#fff7ed']} style={styles.bg}>
@@ -339,13 +339,13 @@ export default function HomeScreen({ navigation }) {
         ListEmptyComponent={
           // [F3] Filter-aware empty state: when filters are active, say
           // so and offer to clear them. [/F3]
-          hasActiveFilters ? ( // [F3]
-            <View style={styles.emptyWrap}> // [F3]
-              <Text style={styles.empty}>No hosts match these filters.</Text> // [F3]
-              <TouchableOpacity onPress={clearFilters}> // [F3]
-                <Text style={styles.emptyClear}>Clear filters</Text> // [F3]
-              </TouchableOpacity> // [F3]
-            </View> // [F3]
+          hasActiveFilters ? (
+            <View style={styles.emptyWrap}>
+              <Text style={styles.empty}>No hosts match these filters.</Text>
+              <TouchableOpacity onPress={clearFilters}>
+                <Text style={styles.emptyClear}>Clear filters</Text>
+              </TouchableOpacity>
+            </View>
           ) : (
             <Text style={styles.empty}>No hosts live right now.</Text>
           )
@@ -377,8 +377,8 @@ const styles = StyleSheet.create({
   coinText: { fontWeight: 'bold' },
   empty: { color: COLORS.grey, marginTop: 40, textAlign: 'center' },
   // [F3] Filter-aware empty state: "Clear filters" link under the message. [/F3]
-  emptyWrap: { alignItems: 'center' }, // [F3]
-  emptyClear: { color: COLORS.pink, fontWeight: 'bold', marginTop: 8, textAlign: 'center' }, // [F3]
+  emptyWrap: { alignItems: 'center' },
+  emptyClear: { color: COLORS.pink, fontWeight: 'bold', marginTop: 8, textAlign: 'center' },
   header: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16 },
   list: { padding: 12 },
   liveBadge: { backgroundColor: '#ef4444', borderRadius: 10, left: 8, paddingHorizontal: 8, paddingVertical: 3, position: 'absolute', top: 8 },
@@ -400,18 +400,18 @@ const styles = StyleSheet.create({
   viewers: { backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, position: 'absolute', right: 8, top: 8 },
   viewersText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
   // [F3] Filter bar styles. [/F3]
-  filterBar: { marginTop: 10, paddingHorizontal: 16 }, // [F3]
-  filterRow: { alignItems: 'center', flexDirection: 'row', marginBottom: 6 }, // [F3]
-  filterLabel: { color: COLORS.grey, fontSize: 12, fontWeight: 'bold', width: 64 }, // [F3]
-  filterChips: { flex: 1 }, // [F3]
-  filterChip: { backgroundColor: '#fff', borderColor: COLORS.grey, borderRadius: 14, borderWidth: 1, marginRight: 6, paddingHorizontal: 10, paddingVertical: 4 }, // [F3]
-  filterChipActive: { backgroundColor: COLORS.pink, borderColor: COLORS.pink }, // [F3]
-  filterChipText: { color: COLORS.dark, fontSize: 12 }, // [F3]
-  filterChipTextActive: { color: '#fff', fontWeight: 'bold' }, // [F3]
-  clearFilters: { alignSelf: 'flex-start', marginTop: 2 }, // [F3]
-  clearFiltersText: { color: COLORS.pink, fontSize: 12, fontWeight: 'bold' }, // [F3]
+  filterBar: { marginTop: 10, paddingHorizontal: 16 },
+  filterRow: { alignItems: 'center', flexDirection: 'row', marginBottom: 6 },
+  filterLabel: { color: COLORS.grey, fontSize: 12, fontWeight: 'bold', width: 64 },
+  filterChips: { flex: 1 },
+  filterChip: { backgroundColor: '#fff', borderColor: COLORS.grey, borderRadius: 14, borderWidth: 1, marginRight: 6, paddingHorizontal: 10, paddingVertical: 4 },
+  filterChipActive: { backgroundColor: COLORS.pink, borderColor: COLORS.pink },
+  filterChipText: { color: COLORS.dark, fontSize: 12 },
+  filterChipTextActive: { color: '#fff', fontWeight: 'bold' },
+  clearFilters: { alignSelf: 'flex-start', marginTop: 2 },
+  clearFiltersText: { color: COLORS.pink, fontSize: 12, fontWeight: 'bold' },
   // [F3] Nearby status line under the filter bar. [/F3]
-  nearbyStatus: { color: COLORS.grey, fontSize: 12, marginTop: 2, paddingHorizontal: 16 }, // [F3]
+  nearbyStatus: { color: COLORS.grey, fontSize: 12, marginTop: 2, paddingHorizontal: 16 },
   // [F2] Voice-call button on host cards (top-right, under the
   // viewers pill; online hosts only).
   voiceBtn: { alignItems: 'center', backgroundColor: 'rgba(236,72,153,0.95)', borderRadius: 20, height: 40, justifyContent: 'center', position: 'absolute', right: 8, top: 40, width: 40 },
