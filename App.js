@@ -59,7 +59,7 @@ function Root() {
         <Stack.Screen name="WalletTab" component={WalletScreen} />
         <Stack.Screen name="HostDashboard" component={HostDashboardScreen} />
         <Stack.Screen name="VIP" component={VIPScreen} />
-        <Stack.Screen name="Rewards" component={RewardsScreen} /> {/* [F1] Lucky Spin + Daily Reward */}
+        <Stack.Screen name="Rewards" component={RewardsScreen} />
       </Stack.Navigator>
       <Toast />
       <StatusBar style="auto" />
