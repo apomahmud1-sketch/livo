@@ -22,7 +22,15 @@
 // is needed before this button can really start a free call. The
 // gift button likewise needs the Live Room gift panel wired in.
 
-import React, { useRef, useState } from 'react';
+// ── F4 (2026-11-19) ───────────────────────────────────────────────
+// Chat auto-translation: a toggle (🌐 button below, or "Translation
+// settings" under the first message) translates incoming messages via
+// the free MyMemory API — see src/utils/translate.js. Translated text
+// is the main line, the original stays underneath in small text, and
+// tapping the bubble swaps them. If translation fails, the original
+// is shown unchanged. All F4 code is wrapped in // [F4] markers.
+
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ScrollView,
   StyleSheet,
@@ -31,8 +39,13 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { COLORS } from '../config';
+import { COLORS, getVoiceCallRate } from '../config'; // [F2] getVoiceCallRate added
 import { useApp } from '../store';
+// [F4] Auto-translation helper + the user's profile language
+// (PROFILE.language, 'English' -> 'en'; falls back to 'en').
+import { resolveTargetLanguage, translateText } from '../utils/translate';
+import { PROFILE } from './profile/levelData';
+// [/F4]
 
 const HOST_REPLIES = [
   'Thank you!',
@@ -43,9 +56,57 @@ const HOST_REPLIES = [
   'Ok, live-এ দেখা হবে',
 ];
 
+// [F4] Incoming-message bubble with auto-translation.
+// When a translation exists, the translated text is the main line and
+// the original is shown underneath in small text; tapping the bubble
+// swaps them. While a translation is pending — or when it failed —
+// the original text is shown unchanged (never blank, never a crash).
+function TranslatedBubble({ msg, translated, showOriginal, translating, onToggleOriginal }) {
+  const hasTranslation =
+    typeof translated === 'string' &&
+    translated.trim() !== '' &&
+    translated.trim() !== msg.text.trim();
+  const mainText = hasTranslation && !showOriginal ? translated : msg.text;
+  const subText = hasTranslation ? (showOriginal ? translated : msg.text) : null;
+  return (
+    <View>
+      <TouchableOpacity
+        style={[styles.bubble, styles.bubbleThem]}
+        activeOpacity={0.85}
+        onPress={hasTranslation ? onToggleOriginal : undefined}
+      >
+        <Text style={styles.bubbleText}>{mainText}</Text>
+        {subText ? <Text style={styles.origText}>{subText}</Text> : null}
+      </TouchableOpacity>
+      {translating ? <Text style={styles.translatingNote}>Translating…</Text> : null}
+    </View>
+  );
+}
+// [/F4]
+
 export default function ChatDetailScreen({ navigation, route }) {
   const { profile } = route.params || {};
-  const { showToast, following, toggleFollow } = useApp();
+  const { showToast, following, toggleFollow, hosts } = useApp(); // [F2] hosts added
+  // [F2] Voice call needs the live store host (rate tier + online
+  // state). Chat-only profiles (no storeId) have none — the voice
+  // button then toasts instead of navigating.
+  const chatHost = profile && profile.storeId
+    ? hosts.find((h) => h.id === profile.storeId)
+    : null;
+  const voiceRate = chatHost ? getVoiceCallRate(chatHost.rateTier) : null;
+
+  const startVoiceCall = () => {
+    if (!chatHost) {
+      showToast('ভয়েস কল লাইভ হোস্টদের জন্য — Home থেকে হোস্টের কার্ডে 📞 চাপুন');
+      return;
+    }
+    if (!chatHost.online) {
+      showToast(`${chatHost.name} এখন অফলাইন`);
+      return;
+    }
+    navigation.navigate('VideoCall', { host: chatHost, audioOnly: true });
+  };
+  // [/F2]
   const [text, setText] = useState('');
   const [unlocked, setUnlocked] = useState(false);
   const [localFollowing, setLocalFollowing] = useState(
@@ -56,6 +117,60 @@ export default function ChatDetailScreen({ navigation, route }) {
   ]);
   const idRef = useRef(1);
   const scrollRef = useRef(null);
+
+  // [F4] Auto-translation state.
+  // Target language: the user's profile language when one is set
+  // (PROFILE.language, e.g. 'English' -> 'en'); English by default.
+  // Note: the store holds no language field, so PROFILE is the source.
+  const targetLangLabel = (PROFILE && PROFILE.language) || 'English';
+  const targetLang = resolveTargetLanguage(targetLangLabel);
+  const [translateOn, setTranslateOn] = useState(false);
+  const [translations, setTranslations] = useState({}); // msg id -> translated text
+  const [showOriginal, setShowOriginal] = useState({}); // msg id -> original shown as main line
+  const [translatingIds, setTranslatingIds] = useState({}); // msg id -> request pending
+  // "target::msg-id" already requested — scrolling / re-rendering
+  // never re-requests the same message (translate.js also caches).
+  const attemptedRef = useRef(new Set());
+
+  // Translate each incoming message once, while the toggle is ON.
+  // A failed request (null) simply leaves the original visible.
+  useEffect(() => {
+    if (!translateOn) return undefined;
+    let cancelled = false;
+    msgs.forEach((m) => {
+      if (m.me || !m.text) return;
+      const key = `${targetLang}::${m.id}`;
+      if (attemptedRef.current.has(key)) return;
+      attemptedRef.current.add(key);
+      setTranslatingIds((prev) => ({ ...prev, [m.id]: true }));
+      translateText(m.text, targetLang)
+        .then((out) => {
+          if (cancelled) return;
+          setTranslatingIds((prev) => {
+            const next = { ...prev };
+            delete next[m.id];
+            return next;
+          });
+          if (out && out.trim() !== '' && out.trim() !== m.text.trim()) {
+            setTranslations((prev) => ({ ...prev, [m.id]: out }));
+          }
+        })
+        .catch(() => {
+          // translateText never throws; this is belt-and-braces.
+          // The original stays visible — nothing else to do.
+          if (cancelled) return;
+          setTranslatingIds((prev) => {
+            const next = { ...prev };
+            delete next[m.id];
+            return next;
+          });
+        });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [translateOn, msgs, targetLang]);
+  // [/F4]
 
   if (!profile) {
     return (
@@ -99,6 +214,17 @@ export default function ChatDetailScreen({ navigation, route }) {
       if (scrollRef.current) scrollRef.current.scrollToEnd({ animated: true });
     }, 1100);
   };
+
+  // [F4] Auto-translate toggle. Turning it off keeps the cached
+  // translations, so turning it back on is instant (no re-request).
+  const toggleTranslate = () => {
+    const next = !translateOn;
+    setTranslateOn(next);
+    showToast(
+      next ? `অটো অনুবাদ চালু — ${targetLangLabel}` : 'অটো অনুবাদ বন্ধ',
+    );
+  };
+  // [/F4]
 
   return (
     <View style={styles.bg}>
@@ -172,14 +298,26 @@ export default function ChatDetailScreen({ navigation, route }) {
                 <Text style={styles.miniAvaText}>{profile.name[0]}</Text>
               </View>
               <View>
-                <View style={[styles.bubble, styles.bubbleThem]}>
-                  <Text style={styles.bubbleText}>{m.text}</Text>
-                </View>
+                {/* [F4] Incoming bubble: translated text on top, original
+                    underneath in small text; tap the bubble to swap them.
+                    Translation off / pending / failed -> original only. */}
+                <TranslatedBubble
+                  msg={m}
+                  translated={translations[m.id]}
+                  showOriginal={!!showOriginal[m.id]}
+                  translating={!!translatingIds[m.id]}
+                  onToggleOriginal={() =>
+                    setShowOriginal((prev) => ({ ...prev, [m.id]: !prev[m.id] }))
+                  }
+                />
+                {/* [/F4] */}
                 {m.translate ? (
                   <TouchableOpacity
-                    onPress={() => showToast('Translation settings — অটো অনুবাদ চালু আছে (প্রিভিউ)')}
+                    onPress={toggleTranslate}
                   >
-                    <Text style={styles.translateLink}>Translation settings</Text>
+                    <Text style={styles.translateLink}>
+                      {translateOn ? `Auto-translate: ON (${targetLangLabel})` : 'Translation settings'}
+                    </Text>
                   </TouchableOpacity>
                 ) : null}
               </View>
@@ -214,9 +352,15 @@ export default function ChatDetailScreen({ navigation, route }) {
 
       {/* Bottom actions */}
       <View style={styles.actions}>
-        <TouchableOpacity style={styles.act} onPress={() => showToast('অনুবাদ: অটো — বাংলা ↔ English (প্রিভিউ)')}>
+        {/* [F4] 🌐 toggles chat auto-translation (was a preview toast).
+            Highlighted while ON. */}
+        <TouchableOpacity
+          style={[styles.act, translateOn && styles.actOn]}
+          onPress={toggleTranslate}
+        >
           <Text style={styles.actIcon}>🌐</Text>
         </TouchableOpacity>
+        {/* [/F4] */}
         <TouchableOpacity
           style={styles.act}
           onPress={() => showToast(unlocked ? 'ছবি বাছাই খুলবে (প্রিভিউ)' : 'ছবি পাঠাতে আগে চ্যাট আনলক করো')}
@@ -230,6 +374,13 @@ export default function ChatDetailScreen({ navigation, route }) {
           <Text style={styles.freeBadge}>Free</Text>
           <Text style={styles.actIcon}>📹</Text>
         </TouchableOpacity>
+        {/* [F2] Voice call: audio-only, half the video rate (rate
+            shown above the icon when the host is known). */}
+        <TouchableOpacity style={styles.act} onPress={startVoiceCall}>
+          {voiceRate && <Text style={styles.voiceRate}>🪙 {voiceRate.coinsPerMinute}/min</Text>}
+          <Text style={styles.actIcon}>📞</Text>
+        </TouchableOpacity>
+        {/* [/F2] */}
         <TouchableOpacity style={styles.act} onPress={() => showToast('গিফট প্যানেল খুলবে (প্রিভিউ)')}>
           <Text style={styles.actIcon}>🎁</Text>
         </TouchableOpacity>
@@ -241,6 +392,12 @@ export default function ChatDetailScreen({ navigation, route }) {
 const styles = StyleSheet.create({
   actions: { borderTopColor: COLORS.lightGrey, borderTopWidth: 1, flexDirection: 'row', justifyContent: 'space-around', paddingVertical: 10 },
   act: { alignItems: 'center', minWidth: 56 },
+  // [F4] Highlight on the 🌐 button while auto-translate is ON.
+  actOn: { backgroundColor: '#ede9fe', borderRadius: 12 },
+  // [F4] Original text shown small under a translated message.
+  origText: { color: COLORS.grey, fontSize: 12, fontStyle: 'italic', marginTop: 4 },
+  translatingNote: { color: COLORS.grey, fontSize: 11, marginTop: 4 },
+  // [/F4]
   actIcon: { fontSize: 26 },
   backBtn: { color: COLORS.dark, fontSize: 32, fontWeight: 'bold', paddingHorizontal: 8 },
   bg: { backgroundColor: '#fff', flex: 1, paddingTop: 48 },
@@ -284,6 +441,9 @@ const styles = StyleSheet.create({
   translateLink: { color: COLORS.purple, fontSize: 12, marginTop: 4 },
   unlock: { fontSize: 14, fontWeight: '700', lineHeight: 21, paddingHorizontal: 16, paddingTop: 10 },
   unlockX1: { color: '#e021c8' },
+  // [F2] Voice-call rate label above the 📞 button.
+  voiceRate: { color: COLORS.purple, fontSize: 11, fontWeight: 'bold' },
+  // [/F2]
   unreadBadge: { backgroundColor: '#ef4444', borderRadius: 10, marginLeft: 4, minWidth: 20, paddingHorizontal: 6, paddingVertical: 2 },
   unreadText: { color: '#fff', fontSize: 12, fontWeight: 'bold', textAlign: 'center' },
 });
