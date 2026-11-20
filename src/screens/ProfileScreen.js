@@ -1,6 +1,7 @@
 // Livo — Profile (Me) screen, rebuilt from the web preview (livo-home-preview).
 // Me top (Mr.lee, ID 9065858, Singapore, male 30, English, check-in, dark mode,
-// 1 Friend / 1 Follow / 2 Fans, My Wallet + My Income cards) and every
+// 1 Friend / 1 Follow / 2 Fans, gold My Wallet banner, My Level + VIP dark cards,
+// My Income in the menu) and every
 // sub-view: Earn beans, Exchange, Withdraw, My chat Price, My Profile detail,
 // Badge, Gift received, Edit Profile, Second Language, My Invitation,
 // My Tasks, Settings, My Level and VIP Member Centre.
@@ -162,80 +163,86 @@ export default function ProfileScreen({ navigation }) {
     <ScrollView style={[styles.bg, { backgroundColor: t.bg }]} contentContainerStyle={styles.wrap}>
       {/* ── Me main ── */}
       {view === 'main' && (
-        <View>
-          <View style={styles.idHead}>
-            <TouchableOpacity onPress={() => setView('profile')} activeOpacity={0.8} accessibilityLabel="ছবিতে চাপ দিয়ে My Profile পেজ খোলো">
-              <Image source={AVATAR} style={styles.avatar} />
-            </TouchableOpacity>
-            <View style={styles.idMain}>
-              <View style={styles.nameRow}>
-                <Text style={[styles.name, { color: t.text }]}>{PROFILE.name}</Text>
-                {vipOwned >= 0 && (
-                  <TouchableOpacity style={styles.vipBadge} onPress={() => setView('vip')}>
-                    <Text style={styles.vipBadgeTxt}>👑 VIP{vipOwned + 1}</Text>
+        <View style={styles.mainPad}>
+          <View style={[styles.headerCard, { backgroundColor: t.surface }]}>
+            <View style={styles.idHead}>
+              <TouchableOpacity onPress={() => setView('profile')} activeOpacity={0.8} accessibilityLabel="ছবিতে চাপ দিয়ে My Profile পেজ খোলো">
+                <Image source={AVATAR} style={styles.avatar} />
+              </TouchableOpacity>
+              <View style={styles.idMain}>
+                <View style={styles.nameRow}>
+                  <Text style={[styles.name, { color: t.text }]}>{PROFILE.name}</Text>
+                  {vipOwned >= 0 && (
+                    <TouchableOpacity style={styles.vipBadge} onPress={() => setView('vip')}>
+                      <Text style={styles.vipBadgeTxt}>👑 VIP{vipOwned + 1}</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+                <View style={styles.idRow}>
+                  <Text style={[styles.idTxt, { color: t.muted }]}>ID:&nbsp;{PROFILE.id}</Text>
+                  <TouchableOpacity onPress={copyId} accessibilityLabel="ID কপি করো">
+                    <Text style={styles.copyIcon}>📋</Text>
                   </TouchableOpacity>
-                )}
+                </View>
+                <View style={styles.chips}>
+                  <Text style={styles.flagChip}>🇸🇬</Text>
+                  <Text style={styles.chipMale}>♂ {PROFILE.age}</Text>
+                  <Text style={styles.chipLang}>{PROFILE.language}</Text>
+                </View>
               </View>
-              <View style={styles.idRow}>
-                <Text style={[styles.idTxt, { color: t.muted }]}>ID:&nbsp;{PROFILE.id}</Text>
-                <TouchableOpacity onPress={copyId} accessibilityLabel="ID কপি করো">
-                  <Text style={styles.copyIcon}>📋</Text>
+              <View style={styles.topBtns}>
+                <TouchableOpacity onPress={checkIn} style={styles.checkinBtn} accessibilityLabel="প্রতিদিনের চেক-ইন">
+                  <Text style={styles.checkinEmoji}>📅</Text>
+                  {!checkedIn && <View style={styles.redDot} />}
+                </TouchableOpacity>
+                <TouchableOpacity onPress={toggleDark} style={styles.moonBtn} accessibilityLabel="ডার্ক মোড চালু বা বন্ধ করো">
+                  <Text style={styles.moonEmoji}>{dark ? '☀️' : '🌙'}</Text>
                 </TouchableOpacity>
               </View>
-              <View style={styles.chips}>
-                <Text style={styles.flagChip}>🇸🇬</Text>
-                <Text style={styles.chipMale}>♂ {PROFILE.age}</Text>
-                <Text style={styles.chipLang}>{PROFILE.language}</Text>
-              </View>
             </View>
-            <View style={styles.topBtns}>
-              <TouchableOpacity onPress={checkIn} style={styles.checkinBtn} accessibilityLabel="প্রতিদিনের চেক-ইন">
-                <Text style={styles.checkinEmoji}>📅</Text>
-                {!checkedIn && <View style={styles.redDot} />}
+            <View style={styles.stats}>
+              <TouchableOpacity style={styles.stat} onPress={() => showToast('Friend লিস্ট (প্রিভিউ)')}>
+                <Text style={[styles.statNum, { color: t.text }]}>{PROFILE.friends}</Text>
+                <Text style={[styles.statLbl, { color: t.muted }]}>Friend</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={toggleDark} style={styles.moonBtn} accessibilityLabel="ডার্ক মোড চালু বা বন্ধ করো">
-                <Text style={styles.moonEmoji}>{dark ? '☀️' : '🌙'}</Text>
+              <TouchableOpacity style={styles.stat} onPress={() => showToast('Follow লিস্ট (প্রিভিউ)')}>
+                <Text style={[styles.statNum, { color: t.text }]}>{PROFILE.following}</Text>
+                <Text style={[styles.statLbl, { color: t.muted }]}>Follow</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.stat} onPress={() => showToast('Fans লিস্ট (প্রিভিউ)')}>
+                <Text style={[styles.statNum, { color: t.text }]}>{PROFILE.fans}</Text>
+                <Text style={[styles.statLbl, { color: t.muted }]}>Fans</Text>
               </TouchableOpacity>
             </View>
           </View>
 
-          <View style={styles.stats}>
-            <TouchableOpacity style={styles.stat} onPress={() => showToast('Friend লিস্ট (প্রিভিউ)')}>
-              <Text style={[styles.statNum, { color: t.text }]}>{PROFILE.friends}</Text>
-              <Text style={[styles.statLbl, { color: t.muted }]}>Friend</Text>
+          <TouchableOpacity style={styles.goldBanner} onPress={goWallet} activeOpacity={0.85}>
+            <Text style={styles.goldBannerIcon}>🪙</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.goldBannerTitle}>My Wallet</Text>
+              <Text style={styles.goldBannerValue}>💎 {diamonds.toLocaleString()} Diamonds</Text>
+            </View>
+            <Text style={styles.goldBannerChev}>›</Text>
+          </TouchableOpacity>
+
+          <View style={styles.darkRow}>
+            <TouchableOpacity style={styles.darkCard} onPress={() => setView('level')} activeOpacity={0.85}>
+              <Text style={styles.darkCardTitle}>My Level</Text>
+              <Text style={styles.darkCardValue}>Lv{PROFILE.level}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.stat} onPress={() => showToast('Follow লিস্ট (প্রিভিউ)')}>
-              <Text style={[styles.statNum, { color: t.text }]}>{PROFILE.following}</Text>
-              <Text style={[styles.statLbl, { color: t.muted }]}>Follow</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.stat} onPress={() => showToast('Fans লিস্ট (প্রিভিউ)')}>
-              <Text style={[styles.statNum, { color: t.text }]}>{PROFILE.fans}</Text>
-              <Text style={[styles.statLbl, { color: t.muted }]}>Fans</Text>
+            <TouchableOpacity style={styles.darkCard} onPress={() => setView('vip')} activeOpacity={0.85}>
+              <Text style={styles.darkCardTitle}>VIP</Text>
+              <Text style={styles.darkCardValue}>{vipOwned >= 0 ? `VIP${vipOwned + 1}` : 'Member Centre'}</Text>
             </TouchableOpacity>
           </View>
 
-          <View style={styles.cards}>
-            <TouchableOpacity style={[styles.card, styles.cardWallet]} onPress={goWallet}>
-              <Text style={styles.discountBadge}>🎁 Discount</Text>
-              <Text style={styles.cardTitle}>My Wallet</Text>
-              <Text style={styles.cardIcon}>💎</Text>
-              <Text style={styles.cardValue}>{diamonds.toLocaleString()}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.card, styles.cardIncome]} onPress={() => setView('earn')}>
-              <Text style={styles.cardTitleDark}>My Income</Text>
-              <Text style={styles.cardIcon}>🪙</Text>
-              <Text style={styles.cardValueDark}>{beans.toLocaleString()}</Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.menu}>
+          <View style={[styles.menuCard, { backgroundColor: t.surface }]}>
             {menuRow('💬', '#fde7f1', 'Messages', <Text style={styles.unreadBadge}>6</Text>, () => navigation.navigate('MessagesTab'))}
-            {menuRow('📊', '#f1eafd', 'My Level', <Text style={styles.lvChip}>Lv{PROFILE.level}</Text>, () => setView('level'))}
+            {menuRow('🪙', '#fef3c7', 'My Income', <Text style={styles.incomeVal}>{beans.toLocaleString()} Beans</Text>, () => setView('earn'))}
             {menuRow('🎥', '#fde7f1', 'Host Dashboard', <Text style={styles.tagGreen}>Approved</Text>, () => navigation.navigate('HostDashboard'))}
             {menuRow('👥', '#fff0cd', 'My Invitation', <Text style={styles.tagGold}>Get Rewards</Text>, () => setView('invite'))}
             {menuRow('✅', '#e2f5ec', 'My Tasks', <Text style={styles.tagPink}>New Reward</Text>, () => setView('tasks'))}
             {menuRow('👤', '#e0f5fa', 'My Profile', null, () => setView('profile'))}
-            {menuRow('👑', '#fef3c7', 'VIP', vipOwned >= 0 ? <Text style={styles.tagGold}>VIP{vipOwned + 1}</Text> : <Text style={styles.tagGold}>Member Centre</Text>, () => setView('vip'))}
             {menuRow('⚙️', '#eef0f4', 'Settings', null, () => setView('settings'))}
           </View>
         </View>
@@ -669,7 +676,7 @@ export default function ProfileScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   albumEmpty: { fontSize: 13, marginTop: 10 },
-  avatar: { borderRadius: 36, height: 72, width: 72 },
+  avatar: { borderRadius: 32, height: 64, width: 64 },
   backBtn: { alignItems: 'center', borderRadius: 20, height: 36, justifyContent: 'center', width: 36 },
   backTxt: { fontSize: 28, fontWeight: 'bold' },
   badgeGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginHorizontal: 16, marginTop: 8 },
@@ -700,16 +707,16 @@ const styles = StyleSheet.create({
   cards: { flexDirection: 'row', gap: 12, marginHorizontal: 16, marginTop: 14 },
   chatPriceVal: { color: '#db2777', fontSize: 14, fontWeight: 'bold' },
   checkinBtn: { alignItems: 'center', justifyContent: 'center' },
-  checkinEmoji: { fontSize: 26 },
-  chipLang: { backgroundColor: '#f97316', borderRadius: 10, color: '#fff', fontSize: 12, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
-  chipMale: { backgroundColor: '#3b82f6', borderRadius: 10, color: '#fff', fontSize: 12, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
+  checkinEmoji: { fontSize: 22 },
+  chipLang: { backgroundColor: '#f97316', borderRadius: 10, color: '#fff', fontSize: 11, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
+  chipMale: { backgroundColor: '#3b82f6', borderRadius: 10, color: '#fff', fontSize: 11, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
   chips: { flexDirection: 'row', gap: 6, marginTop: 8 },
   claimBtn: { backgroundColor: '#f5b93f', borderRadius: 14, marginTop: 4, paddingHorizontal: 12, paddingVertical: 6 },
   claimBtnDone: { backgroundColor: '#d1d5db' },
   claimTxt: { color: '#1f2937', fontSize: 12, fontWeight: 'bold' },
   copyBtn: { backgroundColor: '#ede9fe', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 5 },
   copyBtnTxt: { color: '#7c3aed', fontSize: 12, fontWeight: 'bold' },
-  copyIcon: { fontSize: 18 },
+  copyIcon: { fontSize: 15 },
   discountBadge: { backgroundColor: '#ec4899', borderRadius: 10, color: '#fff', fontSize: 11, fontWeight: 'bold', overflow: 'hidden', paddingHorizontal: 8, paddingVertical: 3, position: 'absolute', right: 8, top: -8 },
   earnBeans: { color: '#fff', fontSize: 22, fontWeight: 'bold', marginTop: 4 },
   earnBtn: { backgroundColor: '#fff', borderRadius: 18, paddingHorizontal: 16, paddingVertical: 8 },
@@ -729,7 +736,7 @@ const styles = StyleSheet.create({
   editLabel: { flex: 1, fontSize: 15 },
   editRow: { alignItems: 'center', borderBottomWidth: 1, flexDirection: 'row', paddingHorizontal: 14, paddingVertical: 13 },
   editValue: { fontSize: 14, marginRight: 8 },
-  flagChip: { fontSize: 18 },
+  flagChip: { fontSize: 16 },
   flagChipTxt: { backgroundColor: '#eef2ff', borderRadius: 10, color: '#1e293b', fontSize: 12, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
   giftEmpty: { alignItems: 'center', paddingVertical: 18 },
   giftEmptyBig: { alignItems: 'center', padding: 32 },
@@ -749,10 +756,10 @@ const styles = StyleSheet.create({
   heroImg: { height: 230, width: '100%' },
   heroWrap: { position: 'relative' },
   hint: { fontSize: 13, lineHeight: 19, marginTop: 8 },
-  idHead: { flexDirection: 'row', marginHorizontal: 16, marginTop: 12 },
+  idHead: { flexDirection: 'row' },
   idMain: { flex: 1, marginLeft: 12 },
   idRow: { alignItems: 'center', flexDirection: 'row', marginTop: 4 },
-  idTxt: { fontSize: 14 },
+  idTxt: { fontSize: 12 },
   infoTab: { borderBottomColor: '#7c3aed', borderBottomWidth: 2, color: '#7c3aed', fontSize: 15, fontWeight: 'bold', marginTop: 16, paddingBottom: 6, width: 96 },
   inviteCode: { fontSize: 18, fontWeight: 'bold' },
   inviteCodeRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginTop: 14 },
@@ -768,14 +775,14 @@ const styles = StyleSheet.create({
   medalRow: { flexDirection: 'row', paddingVertical: 12 },
   menu: { marginHorizontal: 16, marginTop: 14 },
   menuChev: { color: '#9ca3af', fontSize: 20 },
-  menuEmoji: { fontSize: 18 },
-  menuIcon: { alignItems: 'center', borderRadius: 10, height: 36, justifyContent: 'center', width: 36 },
-  menuLabel: { flex: 1, fontSize: 15, marginLeft: 10 },
-  menuRow: { alignItems: 'center', borderBottomWidth: 1, flexDirection: 'row', paddingVertical: 11 },
+  menuEmoji: { fontSize: 16 },
+  menuIcon: { alignItems: 'center', borderRadius: 9, height: 32, justifyContent: 'center', width: 32 },
+  menuLabel: { flex: 1, fontSize: 14, marginLeft: 10 },
+  menuRow: { alignItems: 'center', borderBottomWidth: 1, flexDirection: 'row', paddingVertical: 10 },
   moonBtn: { alignItems: 'center', justifyContent: 'center' },
-  moonEmoji: { fontSize: 24 },
+  moonEmoji: { fontSize: 20 },
   myBeans: { fontSize: 15, fontWeight: 'bold', marginHorizontal: 16, marginTop: 16 },
-  name: { fontSize: 22, fontWeight: 'bold' },
+  name: { fontSize: 18, fontWeight: 'bold' },
   nameRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
   noData: { alignItems: 'center', marginTop: 30 },
   noDataEmoji: { fontSize: 48 },
@@ -814,9 +821,9 @@ const styles = StyleSheet.create({
   sendTile: { alignItems: 'center', justifyContent: 'center' },
   sendTxt: { fontSize: 15, fontWeight: 'bold' },
   stat: { alignItems: 'center', flex: 1 },
-  statLbl: { fontSize: 13, marginTop: 2 },
-  statNum: { fontSize: 17, fontWeight: 'bold' },
-  stats: { flexDirection: 'row', marginHorizontal: 16, marginTop: 16 },
+  statLbl: { fontSize: 12, marginTop: 2 },
+  statNum: { fontSize: 16, fontWeight: 'bold' },
+  stats: { flexDirection: 'row', marginTop: 12 },
   tableHead: { backgroundColor: '#eef2ff', borderRadius: 8, flexDirection: 'row', justifyContent: 'space-between', marginTop: 10, paddingHorizontal: 12, paddingVertical: 9 },
   tableRow: { borderBottomWidth: 1, flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 8 },
   tagGold: { backgroundColor: '#fef3c7', borderRadius: 10, color: '#b45309', fontSize: 11, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
@@ -850,4 +857,17 @@ const styles = StyleSheet.create({
   wdOptHead: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginHorizontal: 16, marginTop: 14 },
   wdOptTitle: { fontSize: 15, fontWeight: 'bold' },
   wrap: { paddingBottom: 32 },
+  darkCard: { backgroundColor: '#1f2937', borderRadius: 14, flex: 1, padding: 14 },
+  darkCardTitle: { color: '#fbbf24', fontSize: 13, fontWeight: 'bold' },
+  darkCardValue: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginTop: 4 },
+  darkRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  goldBanner: { alignItems: 'center', backgroundColor: '#f5b93f', borderRadius: 14, flexDirection: 'row', gap: 10, marginTop: 12, paddingHorizontal: 14, paddingVertical: 12 },
+  goldBannerChev: { color: '#78350f', fontSize: 22, fontWeight: 'bold' },
+  goldBannerIcon: { fontSize: 30 },
+  goldBannerTitle: { color: '#1f2937', fontSize: 16, fontWeight: 'bold' },
+  goldBannerValue: { color: '#78350f', fontSize: 13, fontWeight: 'bold', marginTop: 2 },
+  headerCard: { borderRadius: 16, padding: 14 },
+  incomeVal: { color: '#b45309', fontSize: 13, fontWeight: 'bold' },
+  mainPad: { paddingHorizontal: 14, paddingTop: 12 },
+  menuCard: { borderRadius: 16, marginTop: 12, overflow: 'hidden', paddingHorizontal: 4 },
 });
