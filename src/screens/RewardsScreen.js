@@ -16,6 +16,7 @@
 import React, { useRef, useState } from 'react';
 import {
   Animated,
+  Dimensions,
   Easing,
   ScrollView,
   StyleSheet,
@@ -39,7 +40,9 @@ import {
 // Wheel geometry: 8 segments of 45°. Each segment is a triangle
 // (border trick) with its apex at the wheel centre and its base
 // on the rim. base = 2 * R * tan(22.5°).
-const WHEEL_SIZE = 280;
+// Wheel fits every phone: 280px on big screens, smaller on narrow ones.
+const { width: SCREEN_W } = Dimensions.get('window');
+const WHEEL_SIZE = Math.min(280, SCREEN_W - 48);
 const RADIUS = WHEEL_SIZE / 2;
 const SEGMENT_BASE = Math.round(2 * RADIUS * Math.tan(Math.PI / 8)); // ≈116
 const SEGMENT_ANGLE = 360 / SPIN_PRIZES.length; // 45°
@@ -239,6 +242,16 @@ export default function RewardsScreen({ navigation }) {
           </Text>
         </TouchableOpacity>
 
+        {/* [Vero] Daily Tasks — finish tasks, earn coins. */}
+        <TouchableOpacity
+          style={styles.tasksButton}
+          onPress={() => navigation.navigate('Tasks')}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.tasksButtonText}>🎯 Daily Tasks — Earn Coins</Text>
+        </TouchableOpacity>
+        {/* [/Vero] */}
+
         <Text style={styles.note}>
           Rewards are added to your real coin balance. Spin and check-in
           history is saved on your device, so it stays even if you close
@@ -318,6 +331,10 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   spinButtonText: { color: '#fff', fontSize: 17, fontWeight: 'bold', textAlign: 'center' },
+  // [Vero] Daily Tasks button.
+  tasksButton: { backgroundColor: COLORS.green, borderRadius: 24, marginTop: 14, paddingVertical: 14 },
+  tasksButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
+  // [/Vero]
   title: { color: COLORS.purple, fontSize: 22, fontWeight: 'bold' },
   wedge: {
     borderLeftColor: 'transparent',
