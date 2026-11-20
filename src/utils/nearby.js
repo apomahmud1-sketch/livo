@@ -1,11 +1,10 @@
 // [F3] Nearby helpers — Livo F3 (Nearby + filters).
 // Plain JS (no JSX, no expo-location import at the top of this file).
 // expo-location is NOT installed in this project, so this module must
-// never statically import/require it: loadLocationModule() below builds
-// the module name at runtime ('expo' + '-location') so Metro cannot try
-// to resolve the uninstalled package at bundle time. A plain guarded
-// require('expo-location') would still fail bundling — do not "simplify"
-// it back to a string literal.
+// never import/require it — not statically, and not with a dynamic
+// require either: LIVO-3 proved a guarded dynamic require still crashes
+// the app when the Nearby tab opens. loadLocationModule() below simply
+// returns null until the package is really installed.
 // Country-based proximity is the LIVE path today (same-country hosts
 // first, then the rest). Real-distance mode (haversine, below) is wired
 // for when expo-location is ever installed later; it must not activate
@@ -16,20 +15,19 @@
 // [/F3]
 
 /**
- * [F3] Try to load expo-location at runtime. Returns the module, or
- * null when the package is not installed (the normal case today).
- * The module name is built from two string parts on purpose so the
- * bundler's static analysis never sees the literal 'expo-location'.
- * [/F3]
+ * [F3] expo-location is NOT installed in this project, so there is
+ * nothing to load: always return null and let callers use the
+ * country-based fallback (same-country hosts first).
+ * LIVO-3 (2026-11-19 23:09 SGT, Sentry): the previous version tried a
+ * dynamic require('expo' + '-location') guarded by try/catch, and it
+ * still crashed the app fatally ("Requiring unknown module
+ * 'undefined'") the first time the Nearby tab opened — Metro cannot
+ * resolve a variable require. Do NOT bring the dynamic require back.
+ * If expo-location is ever added to package.json, replace this with a
+ * static import instead. [/F3]
  */
 export function loadLocationModule() {
-  try {
-    const moduleName = 'expo' + '-location';
-    // eslint-disable-next-line global-require, import/no-dynamic-require
-    return require(moduleName);
-  } catch (e) {
-    return null;
-  }
+  return null;
 }
 
 /**
