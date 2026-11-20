@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { COLORS, GIFTS, getCallRate } from '../config';
+import { COLORS, GIFTS, getCallRate, getVoiceCallRate } from '../config';
 import { useApp } from '../store';
 // [F5] Full-screen gift animation for expensive gifts (price >= 1000 coins)
 import FullScreenGift from '../components/FullScreenGift';
@@ -81,20 +81,17 @@ export default function VideoCallScreen({ route, navigation }) {
     );
   }
 
-  // [F2] Voice-call mode: navigation param audioOnly: true (from a
-  // Home host card or ChatDetailScreen) renders the audio-only
-  // screen instead. The video path below is untouched.
-  if (audioOnly) {
-    return <VoiceCallScreen route={route} navigation={navigation} />;
-  }
-  // [/F2]
-
   const mm = String(Math.floor(seconds / 60)).padStart(2, '0');
   const ss = String(seconds % 60).padStart(2, '0');
   const liveCost = Math.ceil(seconds / 60) * rate.coinsPerMinute;
 
   const accept = () => {
-    if (coins < rate.coinsPerMinute) {
+    // Voice calls bill at the half-price voice rate, video at the
+    // full tier rate — the Accept gate uses the right one.
+    const perMinute = audioOnly
+      ? getVoiceCallRate(host ? host.rateTier : 'tier2').coinsPerMinute
+      : rate.coinsPerMinute;
+    if (coins < perMinute) {
       showToast('Not enough coins for 1 minute — please recharge first.');
       return;
     }
@@ -179,6 +176,15 @@ export default function VideoCallScreen({ route, navigation }) {
       </LinearGradient>
     );
   }
+
+  // [F2] Voice-call mode: after the incoming screen is accepted,
+  // an audio-only call renders the audio-only screen instead of
+  // video. The incoming screen itself is unchanged (photo, name,
+  // Accept / Decline only). The video path below is untouched.
+  if (audioOnly) {
+    return <VoiceCallScreen route={route} navigation={navigation} />;
+  }
+  // [/F2]
 
   // calling
   return (
