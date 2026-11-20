@@ -102,7 +102,7 @@ function profileForHost(host, firstMsg) {
   };
 }
 
-function Avatar({ name, color, size = 48 }) {
+function Avatar({ name, color, size = 44 }) {
   return (
     <View style={[styles.avatar, { backgroundColor: color, width: size, height: size, borderRadius: size / 2 }]}>
       <Text style={[styles.avatarText, { fontSize: size * 0.42 }]}>{name ? name[0] : '?'}</Text>
@@ -330,7 +330,7 @@ export default function MessagesScreen({ navigation }) {
                 onPress={() => navigation.navigate('VideoCall', { host: h })}
               >
                 <View>
-                  <Avatar name={h.name} color={h.color || '#7c3aed'} size={52} />
+                  <Avatar name={h.name} color={h.color || '#7c3aed'} size={44} />
                   <View style={styles.onlineDot} />
                 </View>
                 <Text style={styles.onlineName} numberOfLines={1}>{h.name}</Text>
@@ -437,10 +437,10 @@ export default function MessagesScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  avatar: { alignItems: 'center', borderRadius: 24, height: 48, justifyContent: 'center', width: 48 },
-  avatarText: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
-  backBtn: { color: COLORS.dark, fontSize: 32, fontWeight: 'bold', paddingHorizontal: 8 },
-  bg: { backgroundColor: '#fff', flex: 1, paddingTop: 48 },
+  avatar: { alignItems: 'center', borderRadius: 22, height: 44, justifyContent: 'center', width: 44 },
+  avatarText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+  backBtn: { color: COLORS.dark, fontSize: 28, fontWeight: 'bold', paddingHorizontal: 8 },
+  bg: { backgroundColor: '#fff', flex: 1, paddingTop: 36 },
   callIcon: { fontSize: 18, marginTop: 4 },
   chipsRow: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 12, paddingVertical: 6 },
   chip: { backgroundColor: COLORS.lavender, borderRadius: 16, margin: 4, paddingHorizontal: 12, paddingVertical: 7 },
@@ -457,34 +457,34 @@ const styles = StyleSheet.create({
   csTitle: { fontSize: 17, fontWeight: 'bold' },
   idChip: { color: COLORS.grey, fontSize: 12, fontWeight: 'normal' },
   input: { backgroundColor: COLORS.lavender, borderRadius: 20, flex: 1, paddingHorizontal: 14, paddingVertical: 10 },
-  msgBody: { flex: 1, marginLeft: 12 },
-  name: { fontWeight: 'bold' },
+  msgBody: { flex: 1, marginLeft: 10 },
+  name: { fontSize: 15, fontWeight: 'bold' },
   newChip: { backgroundColor: COLORS.green, borderRadius: 8, color: '#fff', fontSize: 11, fontWeight: 'bold', overflow: 'hidden', paddingHorizontal: 6 },
   newHiBtn: { alignSelf: 'center', backgroundColor: COLORS.lavender, borderRadius: 20, marginVertical: 8, paddingHorizontal: 16, paddingVertical: 9 },
   newHiBtnText: { color: COLORS.purple, fontWeight: 'bold' },
-  onlineDot: { backgroundColor: COLORS.green, borderColor: '#fff', borderRadius: 7, borderWidth: 2, bottom: 2, height: 14, position: 'absolute', right: 2, width: 14 },
-  onlineItem: { alignItems: 'center', marginHorizontal: 8, width: 60 },
-  onlineName: { color: COLORS.dark, fontSize: 12, marginTop: 4 },
-  onlineRow: { flexGrow: 0, paddingVertical: 10 },
-  row: { alignItems: 'center', borderBottomColor: COLORS.lightGrey, borderBottomWidth: 1, flexDirection: 'row', padding: 14 },
+  onlineDot: { backgroundColor: COLORS.green, borderColor: '#fff', borderRadius: 6, borderWidth: 2, bottom: 2, height: 12, position: 'absolute', right: 2, width: 12 },
+  onlineItem: { alignItems: 'center', marginHorizontal: 6, width: 52 },
+  onlineName: { color: COLORS.dark, fontSize: 11, marginTop: 4 },
+  onlineRow: { flexGrow: 0, paddingVertical: 8 },
+  row: { alignItems: 'center', borderBottomColor: COLORS.lightGrey, borderBottomWidth: 1, flexDirection: 'row', paddingHorizontal: 14, paddingVertical: 10 },
   rowRight: { alignItems: 'flex-end' },
   sayhiBadge: { backgroundColor: COLORS.pink, borderRadius: 9, color: '#fff', fontSize: 12, fontWeight: 'bold', overflow: 'hidden', paddingHorizontal: 6 },
-  sayHiBtn: { backgroundColor: COLORS.pink, borderRadius: 14, marginTop: 4, paddingHorizontal: 10, paddingVertical: 4 },
-  sayHiBtnText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
+  sayHiBtn: { backgroundColor: COLORS.pink, borderRadius: 14, marginTop: 4, paddingHorizontal: 10, paddingVertical: 3 },
+  sayHiBtnText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
   send: { backgroundColor: COLORS.purple, borderRadius: 20, justifyContent: 'center', marginLeft: 8, paddingHorizontal: 16 },
   sendText: { color: '#fff', fontWeight: 'bold' },
-  subTab: { borderBottomColor: 'transparent', borderBottomWidth: 2, paddingBottom: 8, paddingHorizontal: 16 },
+  subTab: { borderBottomColor: 'transparent', borderBottomWidth: 2, paddingBottom: 6, paddingHorizontal: 12 },
   subTabActive: { borderBottomColor: COLORS.pink },
-  subTabText: { color: COLORS.grey, fontWeight: '600' },
+  subTabText: { color: COLORS.grey, fontSize: 13, fontWeight: '600' },
   subTabTextActive: { color: COLORS.dark },
   subTabs: { borderBottomColor: COLORS.lightGrey, borderBottomWidth: 1, flexDirection: 'row', paddingHorizontal: 8 },
-  text: { color: COLORS.grey, marginTop: 2 },
-  time: { color: COLORS.grey, fontSize: 12 },
-  topTab: { borderBottomColor: 'transparent', borderBottomWidth: 2, flex: 1, paddingBottom: 10, paddingTop: 4 },
+  text: { color: COLORS.grey, fontSize: 13, marginTop: 2 },
+  time: { color: COLORS.grey, fontSize: 11 },
+  topTab: { borderBottomColor: 'transparent', borderBottomWidth: 2, flex: 1, paddingBottom: 8, paddingTop: 4 },
   topTabActive: { borderBottomColor: COLORS.purple },
-  topTabText: { color: COLORS.grey, fontSize: 16, fontWeight: '600', textAlign: 'center' },
+  topTabText: { color: COLORS.grey, fontSize: 14, fontWeight: '600', textAlign: 'center' },
   topTabTextActive: { color: COLORS.purple },
   topTabs: { borderBottomColor: COLORS.lightGrey, borderBottomWidth: 1, flexDirection: 'row', paddingHorizontal: 8 },
-  unreadBadge: { backgroundColor: '#ef4444', borderRadius: 10, marginTop: 4, minWidth: 20, paddingHorizontal: 6, paddingVertical: 2 },
-  unreadText: { color: '#fff', fontSize: 12, fontWeight: 'bold', textAlign: 'center' },
+  unreadBadge: { backgroundColor: '#ef4444', borderRadius: 10, marginTop: 4, minWidth: 18, paddingHorizontal: 6, paddingVertical: 1 },
+  unreadText: { color: '#fff', fontSize: 11, fontWeight: 'bold', textAlign: 'center' },
 });
