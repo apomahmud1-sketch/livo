@@ -21,6 +21,7 @@ import { COLORS } from '../config';
 import { useApp } from '../store';
 import LevelView from './profile/LevelView';
 import VipView from './profile/VipView';
+import VipFrame from '../components/VipFrame'; // [Vero] animated VIP avatar frame
 import {
   BADGES_ACH, BADGES_ACTIVITY, BEANS_PER_USD, EX_OPTS, HIGHEST_CALL_PRICE,
   LANGUAGES, PRICE_OPTS, PROFILE, PROFILE_MEDALS, TASKS, WD_OPTS,
@@ -35,7 +36,7 @@ function themeFor(dark) {
 }
 
 export default function ProfileScreen({ navigation }) {
-  const { diamonds, buyDiamonds, recharge, showToast } = useApp();
+  const { diamonds, buyDiamonds, recharge, showToast, vipLevel } = useApp();
   const [view, setView] = React.useState('main');
   const [dark, setDark] = React.useState(false);
   const [checkedIn, setCheckedIn] = React.useState(false);
@@ -167,7 +168,13 @@ export default function ProfileScreen({ navigation }) {
           <View style={[styles.headerCard, { backgroundColor: t.surface }]}>
             <View style={styles.idHead}>
               <TouchableOpacity onPress={() => setView('profile')} activeOpacity={0.8} accessibilityLabel="ছবিতে চাপ দিয়ে My Profile পেজ খোলো">
-                <Image source={AVATAR} style={styles.avatar} />
+                {vipLevel ? (
+                  <VipFrame frame="gold" size={78}>
+                    <Image source={AVATAR} style={styles.avatar} />
+                  </VipFrame>
+                ) : (
+                  <Image source={AVATAR} style={styles.avatar} />
+                )}
               </TouchableOpacity>
               <View style={styles.idMain}>
                 <View style={styles.nameRow}>
