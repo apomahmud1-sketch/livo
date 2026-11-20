@@ -62,9 +62,13 @@ export const PLATFORM_COMMISSION_PERCENT = 30;
 // Minimum withdrawal, in diamonds (admin can change).
 export const MIN_WITHDRAW_DIAMONDS = 10000;
 
+// [Vero] App theme copied from Vero Live: light green + white.
+// `purple` is the main accent everywhere (logo, buttons, active
+// tab), so changing it here re-themes the whole app at once.
+// Pink stays for the LIVE badge / gift accents, like Vero's.
 export const COLORS = {
-  purple: '#7c3aed',
-  purpleDark: '#5b21b6',
+  purple: '#16a34a',
+  purpleDark: '#14532d',
   pink: '#ec4899',
   pinkLight: '#f472b6',
   teal: '#0b3d3a',
@@ -73,7 +77,8 @@ export const COLORS = {
   dark: '#111827',
   grey: '#6b7280',
   lightGrey: '#e5e7eb',
-  lavender: '#f5f3ff',
+  lavender: '#f0fdf4',
+  mint: '#dcfce7',
   green: '#22c55e',
 };
 
