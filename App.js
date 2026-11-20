@@ -17,6 +17,8 @@ import HostDashboardScreen from './src/screens/HostDashboardScreen';
 import RankingScreen from './src/screens/RankingScreen';
 import VIPScreen from './src/screens/VIPScreen';
 import RewardsScreen from './src/screens/RewardsScreen'; // [F1] Lucky Spin + Daily Reward
+import MomentsScreen from './src/screens/MomentsScreen'; // [Vero] Moments feed
+import TasksScreen from './src/screens/TasksScreen'; // [Vero] Daily Tasks
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -41,6 +43,7 @@ function MainTabs() {
       }}
     >
       <Tab.Screen name="HomeTab" component={HomeScreen} options={{ tabBarLabel: 'Home', tabBarIcon: () => <Text>🏠</Text> }} />
+      <Tab.Screen name="MomentsTab" component={MomentsScreen} options={{ tabBarLabel: 'Moments', tabBarIcon: () => <Text>🎬</Text> }} />
       <Tab.Screen name="MessagesTab" component={MessagesScreen} options={{ tabBarLabel: 'Messages', tabBarIcon: () => <Text>💬</Text> }} />
       <Tab.Screen name="RankingTab" component={RankingScreen} options={{ tabBarLabel: 'Ranking', tabBarIcon: () => <Text>🏆</Text> }} />
       <Tab.Screen name="ProfileTab" component={ProfileScreen} options={{ tabBarLabel: 'Me', tabBarIcon: () => <Text>👤</Text> }} />
@@ -60,6 +63,7 @@ function Root() {
         <Stack.Screen name="HostDashboard" component={HostDashboardScreen} />
         <Stack.Screen name="VIP" component={VIPScreen} />
         <Stack.Screen name="Rewards" component={RewardsScreen} />
+        <Stack.Screen name="Tasks" component={TasksScreen} />
       </Stack.Navigator>
       <Toast />
       <StatusBar style="auto" />
