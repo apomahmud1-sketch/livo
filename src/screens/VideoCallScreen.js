@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Dimensions, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, GIFTS, getCallRate, getVoiceCallRate } from '../config';
 import { useApp } from '../store';
@@ -45,7 +45,7 @@ import { VOICE_PRESETS, applyVoicePreset, getVoicePresetLabel, resetVoicePreset 
 // ─────────────────────────────────────────────────────────────────
 export default function VideoCallScreen({ route, navigation }) {
   const { host, asHost, audioOnly } = route.params || {}; // [F2] audioOnly added
-  const { coins, chargeCall, sendGift, showToast } = useApp();
+  const { coins, chargeCall, sendGift, showToast, vipLevel } = useApp();
   const rate = getCallRate(host ? host.rateTier : 'tier2');
   const [stage, setStage] = useState(asHost ? 'calling' : 'incoming');
   const [seconds, setSeconds] = useState(0);
@@ -61,6 +61,16 @@ export default function VideoCallScreen({ route, navigation }) {
   const [voicePreset, setVoicePreset] = useState('normal');
   const [voicePanelOpen, setVoicePanelOpen] = useState(false);
   // [/F7]
+  // [Vero] Rare Vehicle — Premium members get a vehicle entrance
+  // effect when a call starts: a car slides across the screen once.
+  const vehicleX = useRef(new Animated.Value(-140)).current;
+  useEffect(() => {
+    if (stage === 'calling' && vipLevel) {
+      vehicleX.setValue(-140);
+      Animated.timing(vehicleX, { toValue: Dimensions.get('window').width + 140, duration: 2600, useNativeDriver: true }).start();
+    }
+  }, [stage, vipLevel, vehicleX]);
+  // [/Vero]
   const timerRef = useRef(null);
 
   useEffect(() => {
@@ -192,6 +202,11 @@ export default function VideoCallScreen({ route, navigation }) {
       <LiveVideo channel={`livo-call-${host.id}`} role="host" style={styles.video} />
       <Text style={styles.timer}>{mm}:{ss} · 🪙 {liveCost} coins</Text>
       <Text style={styles.callName}>{host.name} · {rate.label}</Text>
+      {vipLevel && (
+        <Animated.View style={[styles.vehicle, { transform: [{ translateX: vehicleX }] }]}>
+          <Text style={styles.vehicleText}>🏎️</Text>
+        </Animated.View>
+      )}
 
       <View style={styles.giftRow}>
         {GIFTS.slice(0, 4).map((g) => (
@@ -280,6 +295,10 @@ const styles = StyleSheet.create({
   timer: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginTop: 12, textAlign: 'center' },
   title: { color: COLORS.dark, fontSize: 26, fontWeight: 'bold', marginTop: 16, textAlign: 'center' },
   video: { height: 300 },
+  // [Vero] Rare Vehicle entrance effect.
+  vehicle: { position: 'absolute', top: 64, zIndex: 5 },
+  vehicleText: { fontSize: 48 },
+  // [/Vero]
   // [F7] Voice changer panel styles.
   voiceChip: { alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 12, margin: 4, paddingVertical: 8, width: 96 },
   voiceChipEmoji: { fontSize: 22 },
