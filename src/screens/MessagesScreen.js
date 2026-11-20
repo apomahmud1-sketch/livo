@@ -54,6 +54,11 @@ export const CHAT_PROFILES = {
   Rifda: { country: 'Bangladesh', age: 21, lv: 6, lang: 'Bengali', firstMsg: 'Assalamu alaikum' },
 };
 
+// Fixed row height: 44 avatar + 10 + 10 padding + 1 border = 65.
+// Lets FlatList skip measuring every row while scrolling.
+const ROW_H = 65;
+const msgLayout = (data, index) => ({ length: ROW_H, offset: ROW_H * index, index });
+
 const CALLS = [
   { id: 'k1', name: 'Sadiya Moni', color: '#f472b6', last: 'Video call · 12 মিনিট', time: '11:20' },
   { id: 'k2', name: 'bvG8K', color: '#e021c8', last: 'Missed call', time: 'গতকাল' },
@@ -102,13 +107,13 @@ function profileForHost(host, firstMsg) {
   };
 }
 
-function Avatar({ name, color, size = 44 }) {
+const Avatar = React.memo(function Avatar({ name, color, size = 44 }) {
   return (
     <View style={[styles.avatar, { backgroundColor: color, width: size, height: size, borderRadius: size / 2 }]}>
       <Text style={[styles.avatarText, { fontSize: size * 0.42 }]}>{name ? name[0] : '?'}</Text>
     </View>
   );
-}
+});
 
 export default function MessagesScreen({ navigation }) {
   const { hosts, showToast } = useApp();
@@ -359,10 +364,10 @@ export default function MessagesScreen({ navigation }) {
           </View>
 
           {subTab === 'chat' && (
-            <FlatList data={chats} keyExtractor={(m) => m.id} renderItem={renderChatRow} />
+            <FlatList data={chats} keyExtractor={(m) => m.id} renderItem={renderChatRow} removeClippedSubviews maxToRenderPerBatch={10} windowSize={8} initialNumToRender={10} updateCellsBatchingPeriod={50} getItemLayout={msgLayout} />
           )}
           {subTab === 'call' && (
-            <FlatList data={CALLS} keyExtractor={(m) => m.id} renderItem={renderCallRow} />
+            <FlatList data={CALLS} keyExtractor={(m) => m.id} renderItem={renderCallRow} removeClippedSubviews maxToRenderPerBatch={10} windowSize={8} initialNumToRender={10} updateCellsBatchingPeriod={50} getItemLayout={msgLayout} />
           )}
           {subTab === 'sayhi' && (
             <>
@@ -375,7 +380,7 @@ export default function MessagesScreen({ navigation }) {
               >
                 <Text style={styles.newHiBtnText}>↻ নতুন Say hi দেখো</Text>
               </TouchableOpacity>
-              <FlatList data={sayhiFeed} keyExtractor={(m) => m.id} renderItem={renderSayHiRow} />
+              <FlatList data={sayhiFeed} keyExtractor={(m) => m.id} renderItem={renderSayHiRow} removeClippedSubviews maxToRenderPerBatch={10} windowSize={8} initialNumToRender={10} updateCellsBatchingPeriod={50} getItemLayout={msgLayout} />
             </>
           )}
         </>
@@ -418,6 +423,7 @@ export default function MessagesScreen({ navigation }) {
         <FlatList
           data={hosts}
           keyExtractor={(h) => h.id}
+          removeClippedSubviews maxToRenderPerBatch={10} windowSize={8} initialNumToRender={10} updateCellsBatchingPeriod={50} getItemLayout={msgLayout}
           renderItem={({ item }) => (
             <TouchableOpacity style={styles.row} onPress={() => openChat(profileForHost(item, 'Hi!'))}>
               <Avatar name={item.name} color={item.color || '#7c3aed'} />
