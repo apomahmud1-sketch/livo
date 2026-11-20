@@ -8,6 +8,7 @@ import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { COLORS, VIP_PACKS } from '../config';
 import { useApp } from '../store';
+import VipFrame from '../components/VipFrame'; // [Vero] animated VIP avatar frame
 
 const VIP_LEVELS = [
   { level: 1, name: 'Baron', price: 60000, color: '#C0C0C0', perks: 2 },
@@ -39,6 +40,16 @@ export default function VIPScreen() {
             <Text style={styles.perkText}>{p}</Text>
           </View>
         ))}
+      </View>
+
+      <Text style={styles.sectionTitle}>Your VIP Frame</Text>
+      <View style={styles.framePreview}>
+        <VipFrame frame="gold" size={110}>
+          <View style={styles.frameAvatar}>
+            <Text style={styles.frameAvatarText}>M</Text>
+          </View>
+        </VipFrame>
+        <Text style={styles.frameNote}>Gold VIP frame — shows on your profile when Premium is active. The purple Dynamic frame is in the Frame Designer.</Text>
       </View>
 
       <Text style={styles.sectionTitle}>VIP Levels</Text>
@@ -84,6 +95,12 @@ const styles = StyleSheet.create({
   perkChip: { backgroundColor: COLORS.lavender, borderRadius: 14, marginBottom: 8, marginRight: 8, paddingHorizontal: 12, paddingVertical: 6 },
   perkGrid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 8 },
   perkText: { fontSize: 13, fontWeight: 'bold' },
+  // [Vero] VIP frame preview.
+  framePreview: { alignItems: 'center', backgroundColor: COLORS.lavender, borderRadius: 14, marginTop: 8, padding: 16 },
+  frameAvatar: { alignItems: 'center', backgroundColor: COLORS.purple, borderRadius: 44, height: 88, justifyContent: 'center', width: 88 },
+  frameAvatarText: { color: '#fff', fontSize: 40, fontWeight: 'bold' },
+  frameNote: { color: COLORS.grey, fontSize: 12, marginTop: 12, textAlign: 'center' },
+  // [/Vero]
   price: { fontSize: 16, marginTop: 4 },
   sectionTitle: { fontSize: 18, fontWeight: 'bold', marginTop: 20 },
   sub: { color: COLORS.grey, marginTop: 6 },
