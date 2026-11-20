@@ -27,6 +27,10 @@ export function AppProvider({ children }) {
   const [lastCheckinDate, setLastCheckinDate] = useState(null);
   const [checkinStreak, setCheckinStreak] = useState(0);
   const [rewardsLoaded, setRewardsLoaded] = useState(false);
+  // [Vero] Daily Tasks + Premium state (saved with the rewards key).
+  const [giftsSent, setGiftsSent] = useState(0);
+  const [claimedTasks, setClaimedTasks] = useState({});
+  const [vipLevel, setVipLevel] = useState(null);
   // [F1] Load saved spin / check-in state once, on start.
   useEffect(() => {
     (async () => {
@@ -38,6 +42,9 @@ export function AppProvider({ children }) {
           if (typeof saved.lastSpinDate === 'string') setLastSpinDate(saved.lastSpinDate);
           if (typeof saved.lastCheckinDate === 'string') setLastCheckinDate(saved.lastCheckinDate);
           if (typeof saved.checkinStreak === 'number') setCheckinStreak(saved.checkinStreak);
+          if (typeof saved.giftsSent === 'number') setGiftsSent(saved.giftsSent);
+          if (saved.claimedTasks && typeof saved.claimedTasks === 'object') setClaimedTasks(saved.claimedTasks);
+          if (typeof saved.vipLevel === 'string' || saved.vipLevel === null) setVipLevel(saved.vipLevel);
         }
       } catch (e) { /* storage unavailable — keep in-memory defaults */ }
       setRewardsLoaded(true);
@@ -49,8 +56,9 @@ export function AppProvider({ children }) {
     if (!rewardsLoaded) return;
     AsyncStorage.setItem(LIVO_REWARDS_KEY, JSON.stringify({
       spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak,
+      giftsSent, claimedTasks, vipLevel,
     })).catch(() => { /* storage unavailable — in-memory still works */ });
-  }, [rewardsLoaded, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak]);
+  }, [rewardsLoaded, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, vipLevel]);
   // [/F1]
   // Live host list (starts from the demo HOSTS in data.js). The Host
   // Dashboard changes a host's online state and call-rate tier here,
@@ -113,6 +121,7 @@ export function AppProvider({ children }) {
       return false;
     }
     setCoins((c) => c - gift.price);
+    setGiftsSent((n) => n + 1); // [Vero] counts toward the daily gift task
     setDiamonds((d) => d + gift.price * COIN_TO_DIAMOND_RATE);
     setEarnings((e) => e + gift.price * COIN_TO_DIAMOND_RATE);
     showToast(`Sent ${gift.emoji} ${gift.name} (-${gift.price} coins)`);
@@ -154,6 +163,25 @@ export function AppProvider({ children }) {
     }
   };
 
+  // [Vero] Daily Tasks — claim a finished task's coin reward once
+  // per day. claimedTasks is { 'YYYY-MM-DD': ['task-checkin', ...] }.
+  const claimTask = (taskId, dateKeyStr, reward) => {
+    const claimedToday = claimedTasks[dateKeyStr] || [];
+    if (claimedToday.includes(taskId)) return false;
+    setClaimedTasks((prev) => ({ ...prev, [dateKeyStr]: [...(prev[dateKeyStr] || []), taskId] }));
+    addRewardCoins(reward, 'Daily Task');
+    return true;
+  };
+
+  // [Vero] Premium (VIP) purchase — demo, no real payment yet (same
+  // pattern as buyDiamonds). Sets the active VIP level, saved on device.
+  const buyVip = (pack) => {
+    setVipLevel(pack.id);
+    showToast(`${pack.name} activated (demo — no real payment yet)`);
+    return true;
+  };
+  // [/Vero]
+
   // Record a daily check-in. `streak` is the new streak length
   // (the screen works it out from yesterday's date); the date is
   // stored so the screen can tell "already claimed today".
@@ -169,8 +197,8 @@ export function AppProvider({ children }) {
 
   const value = useMemo(
     // [F1] Reward state + actions exposed to RewardsScreen.
-    () => ({ coins, diamonds, earnings, following, toggleFollow, sendGift, recharge, buyDiamonds, chargeCall, chargeVoiceCall, callHistory, toast, showToast, hosts, setHostOnline, setHostRate, userCountry /* [F3] */, addRewardCoins, recordSpin, recordCheckin, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak }),
-    [coins, diamonds, earnings, following, callHistory, toast, hosts, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak]
+    () => ({ coins, diamonds, earnings, following, toggleFollow, sendGift, recharge, buyDiamonds, chargeCall, chargeVoiceCall, callHistory, toast, showToast, hosts, setHostOnline, setHostRate, userCountry /* [F3] */, addRewardCoins, recordSpin, recordCheckin, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, claimTask, vipLevel, buyVip /* [Vero] */ }),
+    [coins, diamonds, earnings, following, callHistory, toast, hosts, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, vipLevel]
     // [/F1]
   );
 
