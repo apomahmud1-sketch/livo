@@ -1,10 +1,14 @@
-import React, { createContext, useContext, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COIN_TO_DIAMOND_RATE, PLATFORM_COMMISSION_PERCENT, getVoiceCallRate } from './config';
 import { HOSTS } from './data';
 
 // Simple in-app state (demo). Supabase + the admin panel replace this
 // later; every screen uses this context, so the swap is in one place.
 const AppCtx = createContext(null);
+
+// AsyncStorage key for Lucky Spin + Daily Reward state.
+const LIVO_REWARDS_KEY = 'livo-rewards-v1';
 
 export function AppProvider({ children }) {
   const [coins, setCoins] = useState(2450);
@@ -13,18 +17,40 @@ export function AppProvider({ children }) {
   const [following, setFollowing] = useState(['2']);
   const [toast, setToast] = useState('');
   const [callHistory, setCallHistory] = useState([]);
-  // [F1] Lucky Spin + Daily Reward state (in-memory only — see note
-  // below). lastSpinDate / lastCheckinDate are 'YYYY-MM-DD' keys.
-  // NOTE: there is no AsyncStorage in this project and the Supabase
-  // profiles table has no last_spin_at / last_checkin_at columns
-  // (and no logged-in user identity in this store yet), so these
-  // reset when the app restarts. Persisting them needs either the
-  // @react-native-async-storage/async-storage dep or new profile
-  // columns + auth — a later step, not faked here.
+  // [F1] Lucky Spin + Daily Reward state, saved on the device with
+  // AsyncStorage (key LIVO_REWARDS_KEY). lastSpinDate /
+  // lastCheckinDate are 'YYYY-MM-DD' keys. The load runs once on
+  // start; saves only run after the load finishes, so saved values
+  // are never overwritten by the initial defaults.
   const [spinsUsedToday, setSpinsUsedToday] = useState(0);
   const [lastSpinDate, setLastSpinDate] = useState(null);
   const [lastCheckinDate, setLastCheckinDate] = useState(null);
   const [checkinStreak, setCheckinStreak] = useState(0);
+  const [rewardsLoaded, setRewardsLoaded] = useState(false);
+  // [F1] Load saved spin / check-in state once, on start.
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(LIVO_REWARDS_KEY);
+        if (raw) {
+          const saved = JSON.parse(raw);
+          if (typeof saved.spinsUsedToday === 'number') setSpinsUsedToday(saved.spinsUsedToday);
+          if (typeof saved.lastSpinDate === 'string') setLastSpinDate(saved.lastSpinDate);
+          if (typeof saved.lastCheckinDate === 'string') setLastCheckinDate(saved.lastCheckinDate);
+          if (typeof saved.checkinStreak === 'number') setCheckinStreak(saved.checkinStreak);
+        }
+      } catch (e) { /* storage unavailable — keep in-memory defaults */ }
+      setRewardsLoaded(true);
+    })();
+  }, []);
+  // [F1] Save spin / check-in state whenever it changes (only
+  // after the load above finished).
+  useEffect(() => {
+    if (!rewardsLoaded) return;
+    AsyncStorage.setItem(LIVO_REWARDS_KEY, JSON.stringify({
+      spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak,
+    })).catch(() => { /* storage unavailable — in-memory still works */ });
+  }, [rewardsLoaded, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak]);
   // [/F1]
   // Live host list (starts from the demo HOSTS in data.js). The Host
   // Dashboard changes a host's online state and call-rate tier here,
