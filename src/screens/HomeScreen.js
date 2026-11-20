@@ -336,6 +336,7 @@ export default function HomeScreen({ navigation }) {
         columnWrapperStyle={styles.row}
         renderItem={renderHost}
         contentContainerStyle={styles.list}
+        removeClippedSubviews maxToRenderPerBatch={8} windowSize={8} initialNumToRender={8} updateCellsBatchingPeriod={50}
         ListEmptyComponent={
           // [F3] Filter-aware empty state: when filters are active, say
           // so and offer to clear them. [/F3]
