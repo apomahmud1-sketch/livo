@@ -123,7 +123,7 @@ const HostCard = React.memo(function HostCard({ host, viewers, distanceLabel, na
 
 export default function HomeScreen({ navigation }) {
   const [tab, setTab] = useState('Popular');
-  const { coins, hosts: allHosts, userCountry } = useApp(); // [F3] userCountry from the store [/F3]
+  const { coins, hosts: allHosts, userCountry, showToast } = useApp(); // [F3] userCountry from the store [/F3]
 
   // [F3] Filters — one value per group, null = no filter. Options are
   // derived from the real host list below, so they always match the
@@ -172,6 +172,32 @@ export default function HomeScreen({ navigation }) {
     if (next) setMatchedHost(next);
   };
   // [/F6]
+
+  // [Vero] Random Match — pick a random ONLINE host and open their
+  // call at once. If nobody is online, say so instead of opening
+  // an offline host.
+  const randomMatch = () => {
+    const online = allHosts.filter((h) => h.online);
+    if (!online.length) {
+      showToast('No hosts online right now — try again soon.');
+      return;
+    }
+    const pick = online[Math.floor(Math.random() * online.length)];
+    navigation.navigate('VideoCall', { host: pick });
+  };
+
+  // [Vero] Story row item — tap a story to call that host.
+  const renderStory = ({ item }) => (
+    <TouchableOpacity style={styles.story} activeOpacity={0.8} onPress={() => navigation.navigate('VideoCall', { host: item })}>
+      <View style={[styles.storyRing, item.online ? styles.storyRingLive : styles.storyRingOff]}>
+        <View style={[styles.storyAvatarBg, { backgroundColor: item.color }]}>
+          <Text style={styles.storyAvatar}>{item.name[0]}</Text>
+        </View>
+      </View>
+      <Text style={styles.storyName} numberOfLines={1}>{item.name}</Text>
+    </TouchableOpacity>
+  );
+  // [/Vero]
 
   // [F3] Ask for location ONCE, the first time the Nearby tab opens.
   // If expo-location is not installed, loadLocationModule() returns
@@ -276,13 +302,30 @@ export default function HomeScreen({ navigation }) {
   );
 
   return (
-    <LinearGradient colors={['#fffbeb', '#fef3c7', '#fff7ed']} style={styles.bg}>
+    <LinearGradient colors={['#f0fdf4', '#ffffff']} style={styles.bg}>
       <View style={styles.header}>
         <Text style={styles.logo}>Livo</Text>
-        <TouchableOpacity style={styles.coinPill} onPress={() => navigation.navigate('WalletTab')}>
-          <Text style={styles.coinText}>🪙 {coins.toLocaleString()}</Text>
-        </TouchableOpacity>
+        <View style={styles.headerRight}>
+          <TouchableOpacity style={styles.randomBtn} onPress={randomMatch} activeOpacity={0.8}>
+            <Text style={styles.randomBtnText}>🎲</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.coinPill} onPress={() => navigation.navigate('WalletTab')}>
+            <Text style={styles.coinText}>🪙 {coins.toLocaleString()}</Text>
+          </TouchableOpacity>
+        </View>
       </View>
+      <Text style={styles.trendingSub}>Discover who's trending</Text>
+
+      {/* [Vero] Story row — tap a story to call that host. */}
+      <FlatList
+        data={allHosts}
+        keyExtractor={(h) => h.id}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        renderItem={renderStory}
+        contentContainerStyle={styles.storiesList}
+        removeClippedSubviews
+      />
 
       <View style={styles.tabs}>
         {TABS.map((t) => (
@@ -394,6 +437,20 @@ const styles = StyleSheet.create({
   // [/F1]
   tab: { color: COLORS.grey, fontSize: 14, marginRight: 16, paddingBottom: 6 },
   tabActive: { borderBottomColor: COLORS.pink, borderBottomWidth: 2, color: COLORS.dark, fontWeight: 'bold' },
+  // [Vero] Stories + Random Match styles.
+  headerRight: { alignItems: 'center', flexDirection: 'row' },
+  randomBtn: { alignItems: 'center', backgroundColor: COLORS.green, borderRadius: 18, height: 36, justifyContent: 'center', marginRight: 8, width: 36 },
+  randomBtnText: { fontSize: 18 },
+  trendingSub: { color: COLORS.grey, fontSize: 13, marginTop: 4, paddingHorizontal: 16 },
+  storiesList: { marginTop: 12, paddingHorizontal: 16 },
+  story: { alignItems: 'center', marginRight: 12, width: 64 },
+  storyRing: { alignItems: 'center', borderRadius: 32, borderWidth: 2.5, height: 64, justifyContent: 'center', width: 64 },
+  storyRingLive: { borderColor: COLORS.green },
+  storyRingOff: { borderColor: COLORS.lightGrey },
+  storyAvatarBg: { alignItems: 'center', borderRadius: 27, height: 54, justifyContent: 'center', width: 54 },
+  storyAvatar: { color: '#fff', fontSize: 22, fontWeight: 'bold' },
+  storyName: { fontSize: 11, marginTop: 4, textAlign: 'center' },
+  // [/Vero]
   tabs: { flexDirection: 'row', marginTop: 14, paddingHorizontal: 16 },
   viewers: { backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, position: 'absolute', right: 8, top: 8 },
   viewersText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
