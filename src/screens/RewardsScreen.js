@@ -7,9 +7,9 @@
 //   from CHECKIN_REWARDS in src/rewardsConfig.js.
 // • Winnings are added to the LIVE coin balance via the store's
 //   real addRewardCoins() — no demo / hard-coded balance.
-// • Persistence is IN-MEMORY (store.js): last-spin / last-check-in
-//   dates reset when the app restarts, until AsyncStorage or
-//   Supabase profile columns are added. Nothing here is faked.
+// • Persistence: last-spin / last-check-in dates and the streak are
+//   saved on the device (AsyncStorage in store.js), so they survive
+//   closing the app. Nothing here is faked.
 // • No new native dependencies: the wheel is plain Views +
 //   Animated (React Native core). No call summary anywhere.
 // ─────────────────────────────────────────────────────────────────
@@ -241,8 +241,8 @@ export default function RewardsScreen({ navigation }) {
 
         <Text style={styles.note}>
           Rewards are added to your real coin balance. Spin and check-in
-          history resets if the app is fully closed (saved on device in a
-          future update).
+          history is saved on your device, so it stays even if you close
+          the app.
         </Text>
       </ScrollView>
     </LinearGradient>
