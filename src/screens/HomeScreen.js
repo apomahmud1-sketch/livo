@@ -72,6 +72,55 @@ const TABS = ['Popular', 'Online', 'New', 'Nearby']; // [F3] 'Nearby' added [/F3
 // [F3] Gender chip labels (host.gender is 'female' / 'male'). [/F3]
 const GENDER_LABELS = { female: 'Female', male: 'Male' };
 
+// Host card, memoized: it only re-renders when its own host, viewer
+// count, distance or navigation changes — scrolling and tab switches
+// no longer redraw every visible card.
+const HostCard = React.memo(function HostCard({ host, viewers, distanceLabel, navigation }) {
+  return (
+    <TouchableOpacity
+      style={styles.card}
+      activeOpacity={0.85}
+      onPress={() => navigation.navigate('VideoCall', { host })}
+    >
+      <LinearGradient colors={[host.color, '#7c3aed']} style={styles.photo}>
+        <Text style={styles.avatar}>{host.name[0]}</Text>
+        {host.online ? (
+          <View style={styles.liveBadge}>
+            <Text style={styles.liveText}>● LIVE</Text>
+          </View>
+        ) : (
+          <View style={[styles.liveBadge, styles.offlineBadge]}>
+            <Text style={styles.liveText}>Offline</Text>
+          </View>
+        )}
+        {host.online && (
+          <View style={styles.viewers}>
+            <Text style={styles.viewersText}>👁 {formatViewers(viewers)}</Text>
+          </View>
+        )}
+        {host.online && (
+          <TouchableOpacity
+            style={styles.voiceBtn}
+            activeOpacity={0.8}
+            onPress={() => navigation.navigate('VideoCall', { host, audioOnly: true })}
+          >
+            <Text style={styles.voiceBtnText}>📞</Text>
+          </TouchableOpacity>
+        )}
+        <LinearGradient colors={['transparent', 'rgba(0,0,0,0.65)']} style={styles.bottomShade}>
+          <Text style={styles.name}>{host.name}</Text>
+          <View style={styles.chips}>
+            <Text style={[styles.chip, styles.lv]}>Lv{host.level}</Text>
+            <Text style={styles.chip}>{host.flag} {host.country}</Text>
+            <Text style={styles.chip}>{host.lang}</Text>
+            {distanceLabel ? <Text style={styles.chip}>📍 {distanceLabel}</Text> : null}
+          </View>
+        </LinearGradient>
+      </LinearGradient>
+    </TouchableOpacity>
+  );
+});
+
 export default function HomeScreen({ navigation }) {
   const [tab, setTab] = useState('Popular');
   const { coins, hosts: allHosts, userCountry } = useApp(); // [F3] userCountry from the store [/F3]
@@ -89,9 +138,9 @@ export default function HomeScreen({ navigation }) {
   };
   const clearFilters = () => setFilters({ country: null, gender: null, lang: null });
   // [F3] Filter options, derived from the real host list. [/F3]
-  const countryOptions = [...new Set(allHosts.map((h) => h.country))];
-  const genderOptions = [...new Set(allHosts.map((h) => h.gender).filter(Boolean))];
-  const langOptions = [...new Set(allHosts.map((h) => h.lang))];
+  const countryOptions = React.useMemo(() => [...new Set(allHosts.map((h) => h.country))], [allHosts]);
+  const genderOptions = React.useMemo(() => [...new Set(allHosts.map((h) => h.gender).filter(Boolean))], [allHosts]);
+  const langOptions = React.useMemo(() => [...new Set(allHosts.map((h) => h.lang))], [allHosts]);
 
   // [F3] Location state for the Nearby tab. 'idle' = never asked yet;
   // 'requesting' = permission prompt in flight; 'granted' = permission
@@ -157,20 +206,21 @@ export default function HomeScreen({ navigation }) {
   // the same allHosts list from the store. Nearby sorts with
   // sortNearbyHosts: nearest-first when coordinates exist, otherwise
   // same-country-first (stable order). [/F3]
-  const tabHosts =
-    tab === 'Online'
-      ? allHosts.filter((h) => h.online)
-      : tab === 'New'
-        ? [...allHosts].reverse()
-        : tab === 'Nearby'
-          ? sortNearbyHosts(allHosts, { userCoords, userCountry })
-          : allHosts;
-
-  const hosts = tabHosts.filter((h) => // [F3] filters apply on top of the tab [/F3]
-    (!filters.country || h.country === filters.country) &&
-    (!filters.gender || h.gender === filters.gender) &&
-    (!filters.lang || h.lang === filters.lang)
-  );
+  const hosts = React.useMemo(() => {
+    const tabHosts =
+      tab === 'Online'
+        ? allHosts.filter((h) => h.online)
+        : tab === 'New'
+          ? [...allHosts].reverse()
+          : tab === 'Nearby'
+            ? sortNearbyHosts(allHosts, { userCoords, userCountry })
+            : allHosts;
+    return tabHosts.filter((h) => // [F3] filters apply on top of the tab [/F3]
+      (!filters.country || h.country === filters.country) &&
+      (!filters.gender || h.gender === filters.gender) &&
+      (!filters.lang || h.lang === filters.lang)
+    );
+  }, [tab, allHosts, filters, userCoords, userCountry]);
 
   // [F3] Honest Nearby status line. Demo data has no SGP host, so
   // when there is no same-country host the fallback leaves the order
@@ -194,65 +244,12 @@ export default function HomeScreen({ navigation }) {
     }
   }
 
-  const renderHost = ({ item }) => {
+  const renderHost = React.useCallback(({ item }) => {
     const viewers = VIEWERS[item.id] || 0;
-    // [F3] Distance chip — only when location was granted and this
-    // host has coordinates. Host coords are demo city coords. [/F3]
     const distanceKm = userCoords ? distanceToHostKm(userCoords, item) : null;
     const distanceLabel = distanceKm !== null ? formatDistance(distanceKm) : '';
-    return (
-      <TouchableOpacity
-        style={styles.card}
-        activeOpacity={0.85}
-        onPress={() => navigation.navigate('VideoCall', { host: item })}
-      >
-        <LinearGradient colors={[item.color, '#7c3aed']} style={styles.photo}>
-          <Text style={styles.avatar}>{item.name[0]}</Text>
-          {item.online ? (
-            <View style={styles.liveBadge}>
-              <Text style={styles.liveText}>● LIVE</Text>
-            </View>
-          ) : (
-            <View style={[styles.liveBadge, styles.offlineBadge]}>
-              <Text style={styles.liveText}>Offline</Text>
-            </View>
-          )}
-          {item.online && (
-            <View style={styles.viewers}>
-              <Text style={styles.viewersText}>👁 {formatViewers(viewers)}</Text>
-            </View>
-          )}
-          {/* [F2] Voice-call button (online hosts only): opens the
-              audio-only call — same 'VideoCall' route with
-              audioOnly: true. Nested touchable: tapping it does not
-              fire the card's video-call onPress. */}
-          {item.online && (
-            <TouchableOpacity
-              style={styles.voiceBtn}
-              activeOpacity={0.8}
-              onPress={() => navigation.navigate('VideoCall', { host: item, audioOnly: true })}
-            >
-              <Text style={styles.voiceBtnText}>📞</Text>
-            </TouchableOpacity>
-          )}
-          {/* [/F2] */}
-          <LinearGradient
-            colors={['transparent', 'rgba(0,0,0,0.65)']}
-            style={styles.bottomShade}
-          >
-            <Text style={styles.name}>{item.name}</Text>
-            <View style={styles.chips}>
-              <Text style={[styles.chip, styles.lv]}>Lv{item.level}</Text>
-              <Text style={styles.chip}>{item.flag} {item.country}</Text>
-              <Text style={styles.chip}>{item.lang}</Text>
-              {/* [F3] 📍 distance chip, only when location is granted. [/F3] */}
-              {distanceLabel ? <Text style={styles.chip}>📍 {distanceLabel}</Text> : null}
-            </View>
-          </LinearGradient>
-        </LinearGradient>
-      </TouchableOpacity>
-    );
-  };
+    return <HostCard host={item} viewers={viewers} distanceLabel={distanceLabel} navigation={navigation} />;
+  }, [navigation, userCoords]);
 
   // [F3] One filter row: label + option chips. Tapping the active
   // chip clears that filter. [/F3]
@@ -368,10 +365,10 @@ export default function HomeScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  avatar: { color: '#fff', fontSize: 64, fontWeight: 'bold' },
-  bg: { flex: 1, paddingTop: 48 },
+  avatar: { color: '#fff', fontSize: 56, fontWeight: 'bold' },
+  bg: { flex: 1, paddingTop: 40 },
   bottomShade: { bottom: 0, justifyContent: 'flex-end', left: 0, padding: 8, position: 'absolute', right: 0 },
-  card: { borderRadius: 14, marginBottom: 14, overflow: 'hidden', width: '48%' },
+  card: { borderRadius: 14, marginBottom: 12, overflow: 'hidden', width: '48%' },
   chip: { backgroundColor: 'rgba(255,255,255,0.85)', borderRadius: 10, fontSize: 11, marginRight: 4, paddingHorizontal: 6, paddingVertical: 2 },
   chips: { flexDirection: 'row', marginTop: 4 },
   coinPill: { backgroundColor: '#fff', borderRadius: 20, elevation: 2, paddingHorizontal: 14, paddingVertical: 8 },
@@ -384,18 +381,18 @@ const styles = StyleSheet.create({
   list: { padding: 12 },
   liveBadge: { backgroundColor: '#ef4444', borderRadius: 10, left: 8, paddingHorizontal: 8, paddingVertical: 3, position: 'absolute', top: 8 },
   liveText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
-  logo: { color: COLORS.purple, fontSize: 28, fontWeight: 'bold' },
+  logo: { color: COLORS.purple, fontSize: 26, fontWeight: 'bold' },
   lv: { backgroundColor: '#fde68a' },
-  name: { color: '#fff', fontSize: 16, fontWeight: 'bold', textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 5 },
+  name: { color: '#fff', fontSize: 15, fontWeight: 'bold', textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 5 },
   offlineBadge: { backgroundColor: 'rgba(0,0,0,0.55)' },
-  photo: { alignItems: 'center', height: 190, justifyContent: 'center', overflow: 'hidden' },
+  photo: { alignItems: 'center', height: 170, justifyContent: 'center', overflow: 'hidden' },
   row: { justifyContent: 'space-between' },
   // [F1] Rewards banner styles.
   rewardsBanner: { backgroundColor: COLORS.purple, borderRadius: 12, marginHorizontal: 16, marginTop: 12, paddingHorizontal: 14, paddingVertical: 10 },
   rewardsBannerSub: { color: '#e9d5ff', fontSize: 12, marginTop: 2 },
   rewardsBannerText: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
   // [/F1]
-  tab: { color: COLORS.grey, fontSize: 15, marginRight: 16, paddingBottom: 6 },
+  tab: { color: COLORS.grey, fontSize: 14, marginRight: 16, paddingBottom: 6 },
   tabActive: { borderBottomColor: COLORS.pink, borderBottomWidth: 2, color: COLORS.dark, fontWeight: 'bold' },
   tabs: { flexDirection: 'row', marginTop: 14, paddingHorizontal: 16 },
   viewers: { backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, position: 'absolute', right: 8, top: 8 },
