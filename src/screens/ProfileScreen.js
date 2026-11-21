@@ -249,6 +249,7 @@ export default function ProfileScreen({ navigation }) {
             {menuRow('🎥', '#fde7f1', 'Host Dashboard', <Text style={styles.tagGreen}>Approved</Text>, () => navigation.navigate('HostDashboard'))}
             {menuRow('👥', '#fff0cd', 'My Invitation', <Text style={styles.tagGold}>Get Rewards</Text>, () => setView('invite'))}
             {menuRow('✅', '#e2f5ec', 'My Tasks', <Text style={styles.tagPink}>New Reward</Text>, () => setView('tasks'))}
+            {menuRow('🎡', '#fef3c7', 'Lucky Spin', <Text style={styles.tagPink}>Free spin</Text>, () => navigation.navigate('Rewards'))}
             {menuRow('👤', '#e0f5fa', 'My Profile', null, () => setView('profile'))}
             {menuRow('⚙️', '#eef0f4', 'Settings', null, () => setView('settings'))}
           </View>
