@@ -32,7 +32,7 @@
 // labelled on screen like the preview does.
 import React, { useState } from 'react';
 import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { CALL_RATES, COLORS, getCallRate } from '../config';
+import { COLORS } from '../config';
 import { useApp } from '../store';
 
 // Imran's 1-to-1 request. He is not in HOSTS; the object carries
@@ -64,7 +64,7 @@ const WEEK = [
 const CHART_H = 120;
 
 export default function HostDashboardScreen({ navigation }) {
-  const { showToast, hosts, setHostOnline, setHostRate } = useApp();
+  const { showToast, hosts, setHostOnline, setHostRate, callRates, getLiveCallRate } = useApp();
   // Nusrat is host id '2' (rateTier tier3 = 300/min, matching the
   // preview where 300 is the selected rate). Her online state and
   // rate come from the shared store, so Home updates at once.
@@ -74,7 +74,9 @@ export default function HostDashboardScreen({ navigation }) {
   // 'pending' | 'accepted' | 'declined'
   const [reqState, setReqState] = useState('pending');
 
-  const rate = getCallRate(myTier);
+  // [Live] Rates come from the store (live Supabase rows when the
+  // setup SQL is pasted, config.js demo tiers otherwise).
+  const rate = getLiveCallRate(myTier);
 
   const toggleOnline = () => {
     const next = !online;
@@ -88,7 +90,7 @@ export default function HostDashboardScreen({ navigation }) {
 
   const pickRate = (tierId) => {
     setHostRate('2', tierId);
-    const r = getCallRate(tierId);
+    const r = getLiveCallRate(tierId);
     showToast(`তোমার কল রেট এখন ${r.coinsPerMinute.toLocaleString('en-US')} coins/min`);
   };
 
@@ -188,7 +190,7 @@ export default function HostDashboardScreen({ navigation }) {
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Call Rate — প্রতি মিনিটে</Text>
         <View style={styles.ratesRow}>
-          {CALL_RATES.map((r) => (
+          {callRates.map((r) => (
             <TouchableOpacity
               key={r.id}
               style={[styles.rateBtn, myTier === r.id && styles.rateBtnSel]}
