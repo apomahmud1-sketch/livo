@@ -54,7 +54,7 @@ import {
   Ticket,
   Video,
 } from 'lucide-react-native';
-import { COLORS, getVoiceCallRate } from '../config'; // [F2] getVoiceCallRate added
+import { COLORS } from '../config'; // [F2] getVoiceCallRate added
 import { useApp } from '../store';
 // [F4] Auto-translation helper + the user's profile language
 // (PROFILE.language, 'English' -> 'en'; falls back to 'en').
@@ -101,14 +101,16 @@ function TranslatedBubble({ msg, translated, showOriginal, translating, onToggle
 
 export default function ChatDetailScreen({ navigation, route }) {
   const { profile } = route.params || {};
-  const { showToast, following, toggleFollow, hosts } = useApp(); // [F2] hosts added
+  const { showToast, following, toggleFollow, hosts, getLiveVoiceCallRate } = useApp(); // [F2] hosts added
   // [F2] Voice call needs the live store host (rate tier + online
   // state). Chat-only profiles (no storeId) have none — the voice
   // button then toasts instead of navigating.
   const chatHost = profile && profile.storeId
     ? hosts.find((h) => h.id === profile.storeId)
     : null;
-  const voiceRate = chatHost ? getVoiceCallRate(chatHost.rateTier) : null;
+  // [Live] Voice rate from the store (live Supabase tiers when the
+  // setup SQL is pasted, config.js demo tiers otherwise).
+  const voiceRate = chatHost ? getLiveVoiceCallRate(chatHost.rateTier) : null;
 
   const startVoiceCall = () => {
     if (!chatHost) {
