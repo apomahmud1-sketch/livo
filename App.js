@@ -38,14 +38,25 @@ function MainTabs() {
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: COLORS.purple,
+        tabBarActiveTintColor: COLORS.green, // [Ref] green active tab, like the reference
         tabBarInactiveTintColor: COLORS.grey,
       }}
     >
       <Tab.Screen name="HomeTab" component={HomeScreen} options={{ tabBarLabel: 'Home', tabBarIcon: () => <Text>🏠</Text> }} />
       <Tab.Screen name="MomentsTab" component={MomentsScreen} options={{ tabBarLabel: 'Moments', tabBarIcon: () => <Text>🎬</Text> }} />
       <Tab.Screen name="MessagesTab" component={MessagesScreen} options={{ tabBarLabel: 'Messages', tabBarIcon: () => <Text>💬</Text> }} />
-      <Tab.Screen name="RankingTab" component={RankingScreen} options={{ tabBarLabel: 'Ranking', tabBarIcon: () => <Text>🏆</Text> }} />
+      <Tab.Screen
+        name="LiveTab"
+        component={HostDashboardScreen}
+        options={{
+          tabBarLabel: '',
+          tabBarIcon: () => (
+            <View style={styles.liveBtn}>
+              <Text style={styles.liveBtnText}>📹</Text>
+            </View>
+          ),
+        }}
+      />
       <Tab.Screen name="ProfileTab" component={ProfileScreen} options={{ tabBarLabel: 'Me', tabBarIcon: () => <Text>👤</Text> }} />
     </Tab.Navigator>
   );
@@ -61,6 +72,7 @@ function Root() {
         <Stack.Screen name="ChatDetail" component={ChatDetailScreen} />
         <Stack.Screen name="WalletTab" component={WalletScreen} />
         <Stack.Screen name="HostDashboard" component={HostDashboardScreen} />
+        <Stack.Screen name="Ranking" component={RankingScreen} />
         <Stack.Screen name="VIP" component={VIPScreen} />
         <Stack.Screen name="Rewards" component={RewardsScreen} />
         <Stack.Screen name="Tasks" component={TasksScreen} />
@@ -80,6 +92,9 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  // Centre "Live" button — raised lime-green circle, like the reference.
+  liveBtn: { alignItems: 'center', backgroundColor: '#a3e635', borderRadius: 28, height: 56, justifyContent: 'center', marginTop: -18, width: 56 },
+  liveBtnText: { fontSize: 24 },
   toast: {
     backgroundColor: 'rgba(0,0,0,0.85)',
     borderRadius: 20,
