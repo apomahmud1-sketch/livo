@@ -4,8 +4,8 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
+import { House, MessageCircle, Play, UserRound, Video } from 'lucide-react-native';
 import { AppProvider, useApp } from './src/store';
-import { COLORS } from './src/config';
 import LoginScreen from './src/screens/LoginScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import VideoCallScreen from './src/screens/VideoCallScreen';
@@ -33,32 +33,67 @@ function Toast() {
   );
 }
 
+// Bottom nav rebuilt 2026-11-21 to match the v0 preview
+// (https://livo-puce.vercel.app): 5 equal columns, 50px items,
+// 9px labels, 20px lucide icons (stroke 1.9 inactive / 2.5 active),
+// active #20a64b, centre raised 49px #84e34d circle with Video icon,
+// Messages badge 2. Tab order: Home / Moments / Live / Messages / Me.
 function MainTabs() {
   return (
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: COLORS.green, // [Ref] green active tab, like the reference
-        tabBarInactiveTintColor: COLORS.grey,
-        tabBarStyle: { height: 60 },
+        tabBarActiveTintColor: '#20a64b',
+        tabBarInactiveTintColor: '#9aa39c',
+        tabBarStyle: styles.tabBar,
       }}
     >
-      <Tab.Screen name="HomeTab" component={HomeScreen} options={{ tabBarLabel: 'Home', tabBarIcon: () => <Text>🏠</Text> }} />
-      <Tab.Screen name="MomentsTab" component={MomentsScreen} options={{ tabBarLabel: 'Moments', tabBarIcon: () => <Text>🎬</Text> }} />
-      <Tab.Screen name="MessagesTab" component={MessagesScreen} options={{ tabBarLabel: 'Messages', tabBarIcon: () => <Text>💬</Text> }} />
+      <Tab.Screen
+        name="HomeTab"
+        component={HomeScreen}
+        options={{
+          tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>Home</Text>,
+          tabBarIcon: ({ focused }) => <House size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? '#20a64b' : '#9aa39c'} />,
+        }}
+      />
+      <Tab.Screen
+        name="MomentsTab"
+        component={MomentsScreen}
+        options={{
+          tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>Moments</Text>,
+          tabBarIcon: ({ focused }) => <Play size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? '#20a64b' : '#9aa39c'} />,
+        }}
+      />
       <Tab.Screen
         name="LiveTab"
         component={HostDashboardScreen}
         options={{
-          tabBarLabel: '',
+          tabBarLabel: () => null,
           tabBarIcon: () => (
             <View style={styles.liveBtn}>
-              <Text style={styles.liveBtnText}>📹</Text>
+              <Video size={23} color="#fff" strokeWidth={2.2} />
             </View>
           ),
         }}
       />
-      <Tab.Screen name="ProfileTab" component={ProfileScreen} options={{ tabBarLabel: 'Me', tabBarIcon: () => <Text>👤</Text> }} />
+      <Tab.Screen
+        name="MessagesTab"
+        component={MessagesScreen}
+        options={{
+          tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>Messages</Text>,
+          tabBarIcon: ({ focused }) => <MessageCircle size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? '#20a64b' : '#9aa39c'} />,
+          tabBarBadge: 2,
+          tabBarBadgeStyle: styles.msgBadge,
+        }}
+      />
+      <Tab.Screen
+        name="ProfileTab"
+        component={ProfileScreen}
+        options={{
+          tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>Me</Text>,
+          tabBarIcon: ({ focused }) => <UserRound size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? '#20a64b' : '#9aa39c'} />,
+        }}
+      />
     </Tab.Navigator>
   );
 }
@@ -93,9 +128,54 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  // Centre "Live" button — raised lime-green circle, like the reference.
-  liveBtn: { alignItems: 'center', backgroundColor: '#a3e635', borderRadius: 26, height: 52, justifyContent: 'center', marginTop: -10, width: 52 },
-  liveBtnText: { fontSize: 22 },
+  // Bottom nav — v0 design: mint-white bar, 70px total (8 + 50 + 12).
+  tabBar: {
+    backgroundColor: '#f9fffaf7',
+    borderTopColor: 'rgba(47,74,51,0.06)',
+    borderTopWidth: 1,
+    elevation: 8,
+    height: 70,
+    paddingBottom: 12,
+    paddingHorizontal: 9,
+    paddingTop: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+  },
+  tabLabel: { color: '#9aa39c', fontSize: 9, fontWeight: '500' },
+  tabLabelActive: { color: '#20a64b', fontWeight: '700' },
+  // Centre "Live" button — raised lime-green circle, like the v0 preview.
+  liveBtn: {
+    alignItems: 'center',
+    backgroundColor: '#84e34d',
+    borderColor: '#f9fffa',
+    borderRadius: 25,
+    borderWidth: 4,
+    elevation: 6,
+    height: 49,
+    justifyContent: 'center',
+    marginTop: -19,
+    shadowColor: '#51af31',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.27,
+    shadowRadius: 12,
+    width: 49,
+  },
+  // Messages badge — 14px red circle with white "2".
+  msgBadge: {
+    backgroundColor: '#f04f4b',
+    borderColor: '#f9fffa',
+    borderRadius: 7,
+    borderWidth: 1.5,
+    color: '#fff',
+    fontSize: 8,
+    fontWeight: '800',
+    height: 14,
+    lineHeight: 13,
+    minWidth: 14,
+    paddingHorizontal: 3,
+  },
   toast: {
     backgroundColor: 'rgba(0,0,0,0.85)',
     borderRadius: 20,
