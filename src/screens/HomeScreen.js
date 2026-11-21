@@ -1,108 +1,85 @@
-// Livo HomeScreen — 2026-11-21 redesign, exactly like the user's
-// reference screenshot: Stream / Follow header, wallet + Rank +
-// Search icons, region chips, "Earn Up to 30% Commission" banner,
-// portrait live cards (name + flag on photo, name + viewers below).
-// Livo HomeScreen — v2 "single live" (2026-11-17, updated 14:48 SGT
-// to match the preview the user corrected that afternoon)
-// ONE-FILE CHANGE ONLY: replace src/screens/HomeScreen.js in GitHub
-// (apomahmud1-sketch/livo) with this file, then rebuild in Expo.
-// Nothing else changes: same imports, same HOSTS data, same
-// navigation — tapping a live card still opens 'VideoCall' with
-// that host. (2026-11-21: dice + coin pill removed from the header;
-// Task 📋 + Search 🔍 icons at the top right instead, and the
-// Country / Gender / Language filter chips are gone.)
-// What changed vs v1:
-//  • No more call-list look: the 📞 after the name, the
-//    "Online now — video call" line and the green Online badge are gone.
-//  • Each host is now a LIVE tile like M Live's Popular page:
-//    red LIVE badge top-left + viewer count top-right, name / Lv /
-//    flag / language overlaid at the bottom of the photo,
-//    equal-size 2-column cards, light golden background.
-//  • 14:48 correction (user's screenshot mark-up): the bottom strip
-//    under the photo is GONE — no name, no status line, no
-//    "📹 Live · 🪙 120/min" strip on the card. The host name sits
-//    ON the photo, bottom-left, directly above the chips.
-//    The call rate is NOT lost: VideoCallScreen already shows it
-//    ("Rate: … coins / min") and bills per minute from getCallRate,
-//    so the rate is seen inside the live room, as the preview does.
-//  • Offline hosts show a grey "Offline" badge (top-left, where
-//    LIVE sits) and no LIVE badge, instead of looking like an
-//    available call.
-//  • Tabs are now Popular (default) / Online / New, like the
-//    M Live Popular page. "New" just shows the newest demo hosts
-//    first; there is no new backend field.
-//  • Viewer counts are DEMO numbers in the VIEWERS map below
-//    (same idea as the demo hosts in src/data.js). Replace them
-//    with real live-viewer counts from Supabase later; the
-//    layout does not depend on the exact numbers.
-// [F3] F3 — Nearby + filters (2026-11-19):
-//  • New "Nearby" tab next to Popular / Online / New, plus a filter
-//    bar (Country / Gender / Language). Filter options are derived
-//    from the real host list; tapping an active chip clears that
-//    filter; "✕ Clear filters" clears them all. Filters apply on
-//    top of the tab on the SAME real allHosts list from the store —
-//    there is no second list.
-//  • Location permission is requested ONCE, the first time Nearby
-//    is opened. Country-based proximity is the LIVE path today
-//    (same-country hosts first, then the rest). Real-distance mode
-//    is wired for when expo-location is ever installed later — it
-//    must not activate or crash without the package (see
-//    src/utils/nearby.js loadLocationModule). No location is ever
-//    read without permission.
-//  • A 📍 distance chip shows on cards only when location is
-//    granted. The Nearby status line is honest about what happened:
-//    permission off / not available on this build / no SGP hosts yet.
-//  • Host coordinates are DEMO city coordinates, not live host GPS;
-//    userCountry 'SGP' is a context value (store.js) that should
-//    come from the real profile/backend later. [/F3]
+// Livo HomeScreen — rebuilt 2026-11-21 to match the v0 preview
+// (https://livo-puce.vercel.app) exactly: Stream / Follow header
+// with green underline + gold coin pill + bare trophy/search icons,
+// region chips, orange "Earn Up to 30% Commission" banner,
+// "Live now" header, 2-column portrait live cards (Live pill with
+// green bars, name + flag + chevron on the photo, name + viewers +
+// location below, NO phone button), mint background #f0fdf4.
+// Hosts are HIS data from src/data.js (Ruma, Nusrat, Arif, Sadia,
+// Rakib offline, Priya) — v0's placeholder hosts are NOT used.
+// Icons are lucide-react-native (the same icon set v0 uses).
+// Behaviour kept: Stream = all hosts, Follow = followed hosts
+// (store.following, default ['2']); region chips filter by country;
+// Search filters by name/ID; trophy -> Ranking; banner -> HostDashboard;
+// card tap -> VideoCall with that host.
 import React, { useRef, useState } from 'react';
 import { FlatList, Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { ChartColumn, ChevronDown, ChevronRight, Coins, Eye, Globe, Search, Trophy } from 'lucide-react-native';
 import { COLORS } from '../config';
 import { useApp } from '../store';
 
-// Demo live-viewer counts, by host id (see header note).
+// Demo live-viewer counts, by host id. Replace with real live-viewer
+// counts from Supabase later; the layout does not depend on them.
 const VIEWERS = { 1: 1284, 2: 862, 3: 540, 4: 2310, 5: 0, 6: 1975 };
 
-const formatViewers = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
+const COUNTRY_NAMES = { BGD: 'Bangladesh', IND: 'India', PAK: 'Pakistan' };
+// Flag images from flagcdn (w40), shown 13x9 on the photo.
+const FLAG_URL = {
+  BGD: 'https://flagcdn.com/w40/bd.png',
+  IND: 'https://flagcdn.com/w40/in.png',
+  PAK: 'https://flagcdn.com/w40/pk.png',
+};
 
-// Portrait live card, like the reference: photo with a dark
-// "❚❚ Live" pill, the host name + flag on the photo, and a white
-// footer with the name + viewer count. Tapping the card opens the
-// live room; the pink 📞 button starts an audio-only (voice) call.
+const formatViewers = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
+const formatTotal = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : `${n}`);
+
+// Portrait live card, like the v0 preview: photo with a dark
+// "Live" pill (3 green bars), host name + flag + chevron circle on
+// the photo, name + eye viewers + location below. Tapping the card
+// opens the live room. NO phone/call button on cards.
 const HostCard = React.memo(function HostCard({ host, viewers, navigation }) {
+  const flagUri = FLAG_URL[host.country];
   return (
     <TouchableOpacity
-      style={styles.card}
+      style={[styles.card, !host.online && styles.cardOffline]}
       activeOpacity={0.85}
       onPress={() => navigation.navigate('VideoCall', { host })}
     >
-      <LinearGradient colors={[host.color, '#7c3aed']} style={styles.photo}>
+      <View style={styles.photo}>
         {host.photo ? (
-          <Image source={host.photo} style={styles.photoImg} />
+          <Image source={host.photo} style={styles.photoImg} resizeMode="cover" />
         ) : (
           <Text style={styles.avatar}>{host.name[0]}</Text>
         )}
         {host.online ? (
           <View style={styles.liveBadge}>
-            <Text style={styles.liveText}><Text style={styles.liveBars}>❚❚ </Text>Live</Text>
+            <View style={styles.liveBars}>
+              <View style={[styles.liveBar, { height: 5 }]} />
+              <View style={[styles.liveBar, { height: 9 }]} />
+              <View style={[styles.liveBar, { height: 7 }]} />
+            </View>
+            <Text style={styles.liveText}>Live</Text>
           </View>
-        ) : (
-          <View style={[styles.liveBadge, styles.offlineBadge]}>
-            <Text style={styles.liveText}>Offline</Text>
+        ) : null}
+        <View style={styles.nameRow}>
+          <View style={styles.nameLeft}>
+            <Text style={styles.name} numberOfLines={1}>{host.name}</Text>
+            {flagUri ? <Image source={{ uri: flagUri }} style={styles.flag} /> : null}
           </View>
-        )}
-        <View style={styles.chevronWrap}>
-          <Text style={styles.chevron}>›</Text>
+          <View style={styles.chevronCircle}>
+            <ChevronRight size={15} color="#fff" strokeWidth={2.5} />
+          </View>
         </View>
-        <LinearGradient colors={['transparent', 'rgba(0,0,0,0.65)']} style={styles.bottomShade}>
-          <Text style={styles.name}>{host.name} {host.flag}</Text>
-        </LinearGradient>
-      </LinearGradient>
-      <View style={styles.cardFooter}>
-        <Text style={styles.cardFooterName}>{host.name}</Text>
-        <Text style={styles.cardFooterViewers}>👁 {formatViewers(viewers)}</Text>
       </View>
+      <View style={styles.cardFooter}>
+        <Text style={styles.cardFooterName} numberOfLines={1}>{host.name}</Text>
+        <View style={styles.viewers}>
+          <Eye size={13} color="#818b84" strokeWidth={2} />
+          <Text style={styles.viewersText}>{formatViewers(viewers)}</Text>
+        </View>
+      </View>
+      <Text style={styles.location}>{COUNTRY_NAMES[host.country] || host.country}</Text>
     </TouchableOpacity>
   );
 });
@@ -117,15 +94,21 @@ export default function HomeScreen({ navigation }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchText, setSearchText] = useState('');
   const closeSearch = () => { setSearchText(''); setSearchOpen(false); };
+  const searching = searchText.trim().length > 0;
 
-  // Region chips, derived from the real host list (flag per country).
+  // Region chips, derived from the real host list.
   const regionOptions = React.useMemo(() => {
     const seen = {};
-    allHosts.forEach((h) => { if (!seen[h.country]) seen[h.country] = h.flag || ''; });
-    const names = { BGD: 'Bangladesh', IND: 'India', PAK: 'Pakistan' };
-    return [{ code: null, label: 'All', flag: '' }].concat(
-      Object.keys(seen).map((c) => ({ code: c, label: names[c] || c, flag: seen[c] }))
+    allHosts.forEach((h) => { if (!seen[h.country]) seen[h.country] = true; });
+    return [{ code: null, label: 'All' }].concat(
+      Object.keys(seen).map((c) => ({ code: c, label: COUNTRY_NAMES[c] || c }))
     );
+  }, [allHosts]);
+
+  // Total viewers of ONLINE hosts, for the "Live now" pill.
+  const totalLiveViewers = React.useMemo(() => {
+    const total = allHosts.reduce((s, h) => s + (h.online ? (VIEWERS[h.id] || 0) : 0), 0);
+    return formatTotal(total);
   }, [allHosts]);
 
   // Stream = all hosts (region filter on top, online first);
@@ -149,26 +132,84 @@ export default function HomeScreen({ navigation }) {
     <HostCard host={item} viewers={VIEWERS[item.id] || 0} navigation={navigation} />
   ), [navigation]);
 
+  // Commission banner + "Live now" header scroll with the list
+  // (hidden while searching, like the v0 phone screen).
+  const listHeader = searching ? null : (
+    <View>
+      <TouchableOpacity style={styles.commissionBanner} onPress={() => navigation.navigate('HostDashboard')} activeOpacity={0.9}>
+        <LinearGradient
+          colors={['#ff9b3f', '#ff743a', '#f7543d']}
+          locations={[0, 0.52, 1]}
+          start={{ x: 0.04, y: 0.31 }}
+          end={{ x: 0.96, y: 0.69 }}
+          style={styles.commissionInner}
+        >
+          <View style={styles.commissionText}>
+            <Text style={styles.commissionEyebrow}>CREATOR REWARDS</Text>
+            <Text style={styles.commissionTitle}>{'Earn Up to\n30% Commission'}</Text>
+            <View style={styles.commissionBtn}>
+              <Text style={styles.commissionBtnText}>Get Started</Text>
+              <ChevronRight size={13} color="#d85d2e" strokeWidth={2.5} />
+            </View>
+          </View>
+          <View style={styles.commissionArt}>
+            <View style={[styles.chartBox, { transform: [{ rotate: '-7deg' }] }]}>
+              <ChartColumn size={37} color="#fff0b2" strokeWidth={2} />
+            </View>
+            <View style={styles.coinBackWrap}>
+              <Coins size={33} color="#f3c044" strokeWidth={2} />
+            </View>
+            <View style={styles.coinFrontWrap}>
+              <Coins size={39} color="#f3c044" strokeWidth={2} />
+            </View>
+            <LinearGradient
+              colors={['#ffe58c', '#efaa27']}
+              style={[styles.commissionBadge, { transform: [{ rotate: '9deg' }] }]}
+            >
+              <Text style={styles.commissionBadgeText}>30%</Text>
+            </LinearGradient>
+          </View>
+        </LinearGradient>
+      </TouchableOpacity>
+
+      <View style={styles.liveNowRow}>
+        <View style={styles.liveNowLeft}>
+          <View style={styles.liveDot} />
+          <Text style={styles.liveNowText}>Live now</Text>
+          <View style={styles.totalPill}>
+            <Text style={styles.totalPillText}>{totalLiveViewers}</Text>
+          </View>
+        </View>
+        <Text style={styles.seeAll}>See all ›</Text>
+      </View>
+    </View>
+  );
+
   return (
-    <LinearGradient colors={['#f0fdf4', '#ffffff']} style={styles.bg}>
+    <View style={styles.bg}>
       <View style={styles.header}>
         <View style={styles.feedTabs}>
-          <TouchableOpacity onPress={() => setFeed('stream')} activeOpacity={0.8}>
+          <TouchableOpacity style={styles.tab} onPress={() => setFeed('stream')} activeOpacity={0.8}>
             <Text style={[styles.feedTab, feed === 'stream' && styles.feedTabActive]}>Stream</Text>
+            {feed === 'stream' ? <View style={styles.tabUnderline} /> : null}
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => setFeed('follow')} activeOpacity={0.8}>
+          <TouchableOpacity style={styles.tab} onPress={() => setFeed('follow')} activeOpacity={0.8}>
             <Text style={[styles.feedTab, feed === 'follow' && styles.feedTabActive]}>Follow</Text>
+            {feed === 'follow' ? <View style={styles.tabUnderline} /> : null}
           </TouchableOpacity>
         </View>
         <View style={styles.headerRight}>
-          <TouchableOpacity style={styles.coinPill} onPress={() => navigation.navigate('WalletTab')} activeOpacity={0.8}>
-            <Text style={styles.coinText}>🪙 {coins.toLocaleString()}</Text>
+          <TouchableOpacity onPress={() => navigation.navigate('WalletTab')} activeOpacity={0.8}>
+            <LinearGradient colors={['#fff8de', '#ffefb8']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.coinPill}>
+              <Coins size={13} color="#c89312" strokeWidth={2.2} />
+              <Text style={styles.coinText}>{coins.toLocaleString()}</Text>
+            </LinearGradient>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.navigate('Ranking')} activeOpacity={0.8}>
-            <Text style={styles.iconBtnText}>🏆</Text>
+          <TouchableOpacity style={styles.headerIcon} onPress={() => navigation.navigate('Ranking')} activeOpacity={0.8}>
+            <Trophy size={21} color="#111713" strokeWidth={2.2} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.iconBtn} onPress={() => setSearchOpen(true)} activeOpacity={0.8}>
-            <Text style={styles.iconBtnText}>🔍</Text>
+          <TouchableOpacity style={styles.headerIcon} onPress={() => setSearchOpen(true)} activeOpacity={0.8}>
+            <Search size={22} color="#111713" strokeWidth={2.2} />
           </TouchableOpacity>
         </View>
       </View>
@@ -190,7 +231,7 @@ export default function HomeScreen({ navigation }) {
         </View>
       )}
 
-      {/* Region chips — horizontal scroll, like the reference. */}
+      {/* Region chips — horizontal scroll, like the v0 preview. */}
       <ScrollView ref={regionScrollRef} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.regionList}>
         {regionOptions.map((r) => (
           <TouchableOpacity
@@ -199,31 +240,16 @@ export default function HomeScreen({ navigation }) {
             onPress={() => setRegion(r.code)}
             activeOpacity={0.8}
           >
+            <Globe size={12} color={region === r.code ? '#23a34e' : '#59615b'} strokeWidth={2} />
             <Text style={[styles.regionChipText, region === r.code && styles.regionChipTextActive]}>
-              {r.flag ? `${r.flag} ` : ''}{r.label}
+              {r.label}
             </Text>
           </TouchableOpacity>
         ))}
         <TouchableOpacity style={styles.regionMore} onPress={() => regionScrollRef.current?.scrollToEnd({ animated: true })} activeOpacity={0.8}>
-          <Text style={styles.regionMoreText}>⌄</Text>
+          <ChevronDown size={15} color="#59615b" strokeWidth={2} />
         </TouchableOpacity>
       </ScrollView>
-
-      {/* Commission banner — become a host, earn up to 30%. */}
-      <TouchableOpacity style={styles.commissionBanner} onPress={() => navigation.navigate('HostDashboard')} activeOpacity={0.85}>
-        <LinearGradient colors={['#f97316', '#f59e0b']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.commissionInner}>
-          <View style={styles.commissionText}>
-            <Text style={styles.commissionTitle}>Earn Up to 30% Commission</Text>
-            <Text style={styles.commissionBtn}>Get Started  ›</Text>
-          </View>
-          <View style={styles.commissionRight}>
-            <Text style={styles.commissionEmoji}>💰</Text>
-            <View style={styles.commissionBadge}>
-              <Text style={styles.commissionBadgeText}>30%</Text>
-            </View>
-          </View>
-        </LinearGradient>
-      </TouchableOpacity>
 
       <FlatList
         data={hosts}
@@ -232,6 +258,7 @@ export default function HomeScreen({ navigation }) {
         columnWrapperStyle={styles.row}
         renderItem={renderHost}
         contentContainerStyle={styles.list}
+        ListHeaderComponent={listHeader}
         removeClippedSubviews maxToRenderPerBatch={8} windowSize={8} initialNumToRender={8} updateCellsBatchingPeriod={50}
         ListEmptyComponent={
           searchText.trim() ? (
@@ -244,59 +271,76 @@ export default function HomeScreen({ navigation }) {
         }
       />
 
-    </LinearGradient>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  avatar: { color: '#fff', fontSize: 56, fontWeight: 'bold' },
-  bg: { flex: 1, paddingTop: 40 },
-  bottomShade: { bottom: 0, justifyContent: 'flex-end', left: 0, padding: 8, position: 'absolute', right: 0 },
-  card: { backgroundColor: '#fff', borderRadius: 14, marginBottom: 12, overflow: 'hidden', width: '48%' },
-  cardFooter: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 10, paddingVertical: 8 },
-  cardFooterName: { fontSize: 14, fontWeight: 'bold' },
-  cardFooterViewers: { color: COLORS.grey, fontSize: 12 },
+  avatar: { color: '#fff', fontSize: 56, fontWeight: '700' },
+  bg: { backgroundColor: '#f0fdf4', flex: 1, paddingTop: 40 },
+  card: { flex: 1, marginBottom: 17 },
+  cardOffline: { opacity: 0.6 },
+  cardFooter: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 1, paddingTop: 7 },
+  cardFooterName: { color: '#273029', flex: 1, fontSize: 11, fontWeight: '700', marginRight: 6 },
+  viewers: { alignItems: 'center', flexDirection: 'row', gap: 3 },
+  viewersText: { color: '#818b84', fontSize: 9, fontWeight: '500' },
+  location: { color: '#a0aaa2', fontSize: 9, paddingHorizontal: 1, paddingTop: 2 },
   empty: { color: COLORS.grey, marginTop: 40, textAlign: 'center' },
-  header: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16 },
-  list: { padding: 12 },
-  liveBadge: { backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 10, left: 8, paddingHorizontal: 8, paddingVertical: 3, position: 'absolute', top: 8 },
-  liveText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
-  name: { color: '#fff', fontSize: 15, fontWeight: 'bold', textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 5 },
-  offlineBadge: { backgroundColor: 'rgba(0,0,0,0.55)' },
-  photo: { alignItems: 'center', height: 220, justifyContent: 'center', overflow: 'hidden' },
-  photoImg: { height: '100%', position: 'absolute', width: '100%' },
-  row: { justifyContent: 'space-between' },
-  // Header: Stream / Follow tabs + wallet, Rank and Search buttons.
-  headerRight: { alignItems: 'center', flexDirection: 'row' },
-  feedTabs: { alignItems: 'flex-end', flexDirection: 'row' },
-  feedTab: { color: COLORS.grey, fontSize: 18, fontWeight: 'bold', marginRight: 12 },
-  feedTabActive: { color: COLORS.dark, fontSize: 24 },
-  coinPill: { backgroundColor: '#fef3c7', borderRadius: 18, elevation: 2, paddingHorizontal: 10, paddingVertical: 6 },
-  coinText: { fontSize: 12, fontWeight: 'bold' },
-  iconBtn: { alignItems: 'center', height: 36, justifyContent: 'center', marginLeft: 6, width: 34 },
-  iconBtnText: { fontSize: 22 },
+  list: { paddingBottom: 24, paddingHorizontal: 16 },
+  row: { gap: 12 },
+  // Header: 53px, Stream / Follow tabs + coin pill, trophy, search.
+  header: { alignItems: 'center', flexDirection: 'row', height: 53, justifyContent: 'space-between', paddingLeft: 21, paddingRight: 19 },
+  feedTabs: { alignItems: 'center', flexDirection: 'row', gap: 18 },
+  tab: { height: 53, justifyContent: 'center', position: 'relative' },
+  feedTab: { color: '#959b97', fontSize: 18, fontWeight: '600' },
+  feedTabActive: { color: '#111713', fontWeight: '800' },
+  tabUnderline: { backgroundColor: '#72d679', borderRadius: 2, bottom: 5, height: 3, left: 2, position: 'absolute', right: 2 },
+  headerRight: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  coinPill: { alignItems: 'center', borderColor: '#f2d47d', borderRadius: 999, borderWidth: 1, flexDirection: 'row', gap: 5, height: 27, minWidth: 49, paddingLeft: 5, paddingRight: 8 },
+  coinText: { color: '#3d3320', fontSize: 12, fontWeight: '700' },
+  headerIcon: { alignItems: 'center', justifyContent: 'center' },
   searchBar: { alignItems: 'center', backgroundColor: '#fff', borderRadius: 20, elevation: 2, flexDirection: 'row', marginHorizontal: 16, marginTop: 10, paddingHorizontal: 14, paddingVertical: 8 },
   searchInput: { flex: 1, fontSize: 14 },
-  searchClose: { color: COLORS.grey, fontSize: 18, fontWeight: 'bold', marginLeft: 8 },
-  // Region chips + commission banner.
-  regionList: { marginTop: 12, paddingHorizontal: 16 },
-  regionChip: { backgroundColor: '#fff', borderColor: '#e5e7eb', borderRadius: 18, borderWidth: 1, marginRight: 8, paddingHorizontal: 12, paddingVertical: 6 },
+  searchClose: { color: COLORS.grey, fontSize: 18, fontWeight: '700', marginLeft: 8 },
+  // Region chips.
+  regionList: { alignItems: 'center', paddingBottom: 13, paddingHorizontal: 9, paddingTop: 8 },
+  regionChip: { alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.74)', borderColor: '#e9eeea', borderRadius: 999, borderWidth: 1, flexDirection: 'row', gap: 4, height: 31, marginRight: 8, paddingHorizontal: 7 },
   regionChipActive: { backgroundColor: '#dcfce7', borderColor: '#dcfce7' },
-  regionChipText: { color: COLORS.dark, fontSize: 13, fontWeight: 'bold' },
-  regionChipTextActive: { color: COLORS.green },
-  regionMore: { alignItems: 'center', backgroundColor: '#fff', borderColor: '#e5e7eb', borderRadius: 16, borderWidth: 1, height: 32, justifyContent: 'center', width: 32 },
-  regionMoreText: { color: COLORS.dark, fontSize: 16, fontWeight: 'bold' },
-  commissionBanner: { borderRadius: 14, marginHorizontal: 16, marginTop: 12, overflow: 'hidden' },
-  commissionInner: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 18 },
-  commissionText: { flex: 1 },
-  commissionTitle: { color: '#fff', fontSize: 19, fontWeight: 'bold' },
-  commissionBtn: { alignSelf: 'flex-start', borderColor: '#fff', borderRadius: 16, borderWidth: 1.5, color: '#fff', fontSize: 13, fontWeight: 'bold', marginTop: 8, paddingHorizontal: 14, paddingVertical: 5 },
-  commissionEmoji: { fontSize: 30 },
-  commissionRight: { alignItems: 'center', flexDirection: 'row', marginLeft: 8 },
-  commissionBadge: { alignItems: 'center', backgroundColor: '#fbbf24', borderRadius: 20, height: 40, justifyContent: 'center', marginLeft: 8, width: 40 },
-  commissionBadgeText: { color: '#92400e', fontSize: 12, fontWeight: 'bold' },
-  // ">" chevron on the right edge of the photo, like the reference.
-  chevronWrap: { alignItems: 'flex-end', bottom: 0, justifyContent: 'center', position: 'absolute', right: 0, top: 0, width: 36 },
-  chevron: { color: '#fff', fontSize: 30, fontWeight: 'bold', textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
-  liveBars: { color: '#4ade80' },
+  regionChipText: { color: '#59615b', fontSize: 10, fontWeight: '600' },
+  regionChipTextActive: { color: '#16803b' },
+  regionMore: { alignItems: 'center', justifyContent: 'center', padding: 6 },
+  // Commission banner.
+  commissionBanner: { borderRadius: 19, elevation: 4, marginBottom: 20, marginTop: 1, shadowColor: '#ec6330', shadowOffset: { width: 0, height: 9 }, shadowOpacity: 0.17, shadowRadius: 18 },
+  commissionInner: { borderRadius: 19, flexDirection: 'row', height: 140, overflow: 'hidden' },
+  commissionText: { flex: 1, justifyContent: 'center', paddingLeft: 17, paddingRight: 150 },
+  commissionEyebrow: { color: '#fff2d8', fontSize: 8, fontWeight: '800', letterSpacing: 1.1, marginBottom: 6 },
+  commissionTitle: { color: '#fff', fontSize: 19, fontWeight: '800', letterSpacing: -0.58, lineHeight: 21.5 },
+  commissionBtn: { alignItems: 'center', alignSelf: 'flex-start', backgroundColor: '#fff8e8', borderRadius: 999, flexDirection: 'row', height: 25, marginTop: 11, paddingHorizontal: 10 },
+  commissionBtnText: { color: '#d85d2e', fontSize: 10, fontWeight: '700' },
+  commissionArt: { bottom: 0, position: 'absolute', right: 0, top: 0, width: 150 },
+  chartBox: { alignItems: 'center', backgroundColor: '#ffedb31f', borderColor: 'rgba(255,243,204,0.34)', borderRadius: 14, borderWidth: 1, height: 55, justifyContent: 'center', position: 'absolute', right: 52, top: 42, width: 62 },
+  coinBackWrap: { bottom: 34, left: 16, position: 'absolute' },
+  coinFrontWrap: { bottom: 12, left: 2, position: 'absolute' },
+  commissionBadge: { alignItems: 'center', borderColor: 'rgba(255,251,230,0.84)', borderRadius: 22, borderWidth: 2, height: 44, justifyContent: 'center', position: 'absolute', right: 14, top: 19, width: 44 },
+  commissionBadgeText: { color: '#a95819', fontSize: 12, fontWeight: '800' },
+  // "Live now" section header.
+  liveNowRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
+  liveNowLeft: { alignItems: 'center', flexDirection: 'row' },
+  liveDot: { backgroundColor: '#31bc63', borderRadius: 4, elevation: 2, height: 7, marginRight: 6, shadowColor: '#31bc63', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 4, width: 7 },
+  liveNowText: { color: '#1a211c', fontSize: 15, fontWeight: '800', marginRight: 6 },
+  totalPill: { backgroundColor: '#e4f7e8', borderRadius: 999, paddingHorizontal: 6, paddingVertical: 3 },
+  totalPillText: { color: '#3d9152', fontSize: 9, fontWeight: '700' },
+  seeAll: { color: '#7b857e', fontSize: 10, fontWeight: '600' },
+  // Host card photo + overlays.
+  photo: { alignItems: 'center', backgroundColor: '#dfe9df', borderRadius: 15, height: 215, justifyContent: 'center', overflow: 'hidden' },
+  photoImg: { height: '100%', position: 'absolute', width: '100%' },
+  liveBadge: { alignItems: 'center', backgroundColor: 'rgba(22,28,24,0.76)', borderColor: 'rgba(255,255,255,0.10)', borderRadius: 999, borderWidth: 1, flexDirection: 'row', height: 21, left: 8, paddingHorizontal: 8, position: 'absolute', top: 9 },
+  liveBars: { alignItems: 'flex-end', flexDirection: 'row', gap: 1, marginRight: 4 },
+  liveBar: { backgroundColor: '#62e17d', borderRadius: 1, width: 2 },
+  liveText: { color: '#fff', fontSize: 9, fontWeight: '700' },
+  nameRow: { alignItems: 'center', bottom: 10, flexDirection: 'row', justifyContent: 'space-between', left: 10, position: 'absolute', right: 8 },
+  nameLeft: { alignItems: 'center', flex: 1, flexDirection: 'row', marginRight: 6 },
+  name: { color: '#fff', flexShrink: 1, fontSize: 12, fontWeight: '800', textShadowColor: 'rgba(0,0,0,0.55)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 },
+  flag: { borderColor: 'rgba(255,255,255,0.75)', borderRadius: 2, borderWidth: 0.5, height: 9, marginLeft: 4, width: 13 },
+  chevronCircle: { alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.22)', borderColor: 'rgba(255,255,255,0.56)', borderRadius: 11, borderWidth: 1, flexShrink: 0, height: 21, justifyContent: 'center', width: 21 },
 });
