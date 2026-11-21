@@ -4,7 +4,9 @@
 // (apomahmud1-sketch/livo) with this file, then rebuild in Expo.
 // Nothing else changes: same imports, same HOSTS data, same
 // navigation — tapping a live card still opens 'VideoCall' with
-// that host, and the coin pill still opens 'WalletTab'.
+// that host. (2026-11-21: dice + coin pill removed from the header;
+// Task 📋 + Search 🔍 icons at the top right instead, and the
+// Country / Gender / Language filter chips are gone.)
 // What changed vs v1:
 //  • No more call-list look: the 📞 after the name, the
 //    "Online now — video call" line and the green Online badge are gone.
@@ -50,7 +52,7 @@
 //    userCountry 'SGP' is a context value (store.js) that should
 //    come from the real profile/backend later. [/F3]
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { FlatList, Image, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS } from '../config';
 import { useApp } from '../store';
@@ -68,9 +70,6 @@ const VIEWERS = { 1: 1284, 2: 862, 3: 540, 4: 2310, 5: 0, 6: 1975 };
 const formatViewers = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 
 const TABS = ['Popular', 'Online', 'New', 'Nearby']; // [F3] 'Nearby' added [/F3]
-
-// [F3] Gender chip labels (host.gender is 'female' / 'male'). [/F3]
-const GENDER_LABELS = { female: 'Female', male: 'Male' };
 
 // Host card, memoized: it only re-renders when its own host, viewer
 // count, distance or navigation changes — scrolling and tab switches
@@ -127,24 +126,15 @@ const HostCard = React.memo(function HostCard({ host, viewers, distanceLabel, na
 
 export default function HomeScreen({ navigation }) {
   const [tab, setTab] = useState('Popular');
-  const { coins, hosts: allHosts, userCountry, showToast } = useApp(); // [F3] userCountry from the store [/F3]
+  const { hosts: allHosts, userCountry } = useApp(); // [F3] userCountry from the store [/F3]
 
-  // [F3] Filters — one value per group, null = no filter. Options are
-  // derived from the real host list below, so they always match the
-  // hosts that actually exist. Filters apply on top of the tab, on
-  // the SAME allHosts list — no second list. [/F3]
-  const [filters, setFilters] = useState({ country: null, gender: null, lang: null });
-  const hasActiveFilters = Boolean(filters.country || filters.gender || filters.lang);
-  // [F3] Tap an active chip to clear just that filter; tap another
-  // option to switch to it. [/F3]
-  const toggleFilter = (key, value) => {
-    setFilters((f) => ({ ...f, [key]: f[key] === value ? null : value }));
-  };
-  const clearFilters = () => setFilters({ country: null, gender: null, lang: null });
-  // [F3] Filter options, derived from the real host list. [/F3]
-  const countryOptions = React.useMemo(() => [...new Set(allHosts.map((h) => h.country))], [allHosts]);
-  const genderOptions = React.useMemo(() => [...new Set(allHosts.map((h) => h.gender).filter(Boolean))], [allHosts]);
-  const langOptions = React.useMemo(() => [...new Set(allHosts.map((h) => h.lang))], [allHosts]);
+  // [Search] 2026-11-21 (user's screenshot mark-up): the Country /
+  // Gender / Language filter chips are GONE, and the top-right dice +
+  // coin pill are replaced by a Task icon + a Search icon. Search
+  // filters the live host list by name or user ID. [/Search]
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchText, setSearchText] = useState('');
+  const closeSearch = () => { setSearchText(''); setSearchOpen(false); };
 
   // [F3] Location state for the Nearby tab. 'idle' = never asked yet;
   // 'requesting' = permission prompt in flight; 'granted' = permission
@@ -176,19 +166,6 @@ export default function HomeScreen({ navigation }) {
     if (next) setMatchedHost(next);
   };
   // [/F6]
-
-  // [Vero] Random Match — pick a random ONLINE host and open their
-  // call at once. If nobody is online, say so instead of opening
-  // an offline host.
-  const randomMatch = () => {
-    const online = allHosts.filter((h) => h.online);
-    if (!online.length) {
-      showToast('No hosts online right now — try again soon.');
-      return;
-    }
-    const pick = online[Math.floor(Math.random() * online.length)];
-    navigation.navigate('VideoCall', { host: pick });
-  };
 
   // [Vero] Story row item — tap a story to call that host.
   const renderStory = ({ item }) => (
@@ -236,25 +213,25 @@ export default function HomeScreen({ navigation }) {
     })();
   }, [tab]);
 
-  // [F3] Tab ordering first, then the filters on top of it — all on
-  // the same allHosts list from the store. Nearby sorts with
-  // sortNearbyHosts: nearest-first when coordinates exist, otherwise
-  // same-country-first (stable order). [/F3]
+  // Tab ordering on the live allHosts list from the store. Nearby
+  // sorts with sortNearbyHosts: nearest-first when coordinates exist,
+  // otherwise same-country-first (stable order). When searching,
+  // the search text filters by name or user ID instead. [/F3]
   const hosts = React.useMemo(() => {
-    const tabHosts =
-      tab === 'Online'
-        ? allHosts.filter((h) => h.online)
-        : tab === 'New'
-          ? [...allHosts].reverse()
-          : tab === 'Nearby'
-            ? sortNearbyHosts(allHosts, { userCoords, userCountry })
-            : allHosts;
-    return tabHosts.filter((h) => // [F3] filters apply on top of the tab [/F3]
-      (!filters.country || h.country === filters.country) &&
-      (!filters.gender || h.gender === filters.gender) &&
-      (!filters.lang || h.lang === filters.lang)
-    );
-  }, [tab, allHosts, filters, userCoords, userCountry]);
+    const q = searchText.trim().toLowerCase();
+    if (q) {
+      return allHosts.filter((h) =>
+        h.name.toLowerCase().includes(q) || String(h.id).includes(q)
+      );
+    }
+    return tab === 'Online'
+      ? allHosts.filter((h) => h.online)
+      : tab === 'New'
+        ? [...allHosts].reverse()
+        : tab === 'Nearby'
+          ? sortNearbyHosts(allHosts, { userCoords, userCountry })
+          : allHosts;
+  }, [tab, allHosts, searchText, userCoords, userCountry]);
 
   // [F3] Honest Nearby status line. Demo data has no SGP host, so
   // when there is no same-country host the fallback leaves the order
@@ -285,44 +262,37 @@ export default function HomeScreen({ navigation }) {
     return <HostCard host={item} viewers={viewers} distanceLabel={distanceLabel} navigation={navigation} />;
   }, [navigation, userCoords]);
 
-  // [F3] One filter row: label + option chips. Tapping the active
-  // chip clears that filter. [/F3]
-  const renderFilterRow = (label, options, filterKey, formatOption) => (
-    <View style={styles.filterRow} key={label}>
-      <Text style={styles.filterLabel}>{label}</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterChips}>
-        {options.map((opt) => {
-          const active = filters[filterKey] === opt;
-          return (
-            <TouchableOpacity
-              key={opt}
-              style={[styles.filterChip, active && styles.filterChipActive]}
-              onPress={() => toggleFilter(filterKey, opt)}
-            >
-              <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>
-                {formatOption ? formatOption(opt) : opt}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-    </View>
-  );
-
   return (
     <LinearGradient colors={['#f0fdf4', '#ffffff']} style={styles.bg}>
       <View style={styles.header}>
         <Text style={styles.logo}>Livo</Text>
         <View style={styles.headerRight}>
-          <TouchableOpacity style={styles.randomBtn} onPress={randomMatch} activeOpacity={0.8}>
-            <Text style={styles.randomBtnText}>🎲</Text>
+          <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.navigate('Tasks')} activeOpacity={0.8}>
+            <Text style={styles.iconBtnText}>📋</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.coinPill} onPress={() => navigation.navigate('WalletTab')}>
-            <Text style={styles.coinText}>🪙 {coins.toLocaleString()}</Text>
+          <TouchableOpacity style={styles.iconBtn} onPress={() => setSearchOpen(true)} activeOpacity={0.8}>
+            <Text style={styles.iconBtnText}>🔍</Text>
           </TouchableOpacity>
         </View>
       </View>
       <Text style={styles.trendingSub}>Discover who's trending</Text>
+
+      {/* [Search] Search bar — by host name or user ID. */}
+      {searchOpen && (
+        <View style={styles.searchBar}>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search by name or user ID…"
+            value={searchText}
+            onChangeText={setSearchText}
+            autoFocus
+            returnKeyType="search"
+          />
+          <TouchableOpacity onPress={closeSearch} activeOpacity={0.8}>
+            <Text style={styles.searchClose}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* [Vero] Story row — tap a story to call that host. */}
       <FlatList
@@ -341,20 +311,6 @@ export default function HomeScreen({ navigation }) {
             <Text style={[styles.tab, tab === t && styles.tabActive]}>{t}</Text>
           </TouchableOpacity>
         ))}
-      </View>
-
-      {/* [F3] Filter bar: Country / Gender / Language chips, options
-          derived from the real host list. "✕ Clear filters" shows
-          only while a filter is active. [/F3] */}
-      <View style={styles.filterBar}>
-        {renderFilterRow('Country', countryOptions, 'country')}
-        {renderFilterRow('Gender', genderOptions, 'gender', (g) => GENDER_LABELS[g] || g)}
-        {renderFilterRow('Language', langOptions, 'lang')}
-        {hasActiveFilters && (
-          <TouchableOpacity style={styles.clearFilters} onPress={clearFilters}>
-            <Text style={styles.clearFiltersText}>✕ Clear filters</Text>
-          </TouchableOpacity>
-        )}
       </View>
 
       {/* [F3] Honest Nearby status line — only on the Nearby tab. [/F3] */}
@@ -386,15 +342,8 @@ export default function HomeScreen({ navigation }) {
         contentContainerStyle={styles.list}
         removeClippedSubviews maxToRenderPerBatch={8} windowSize={8} initialNumToRender={8} updateCellsBatchingPeriod={50}
         ListEmptyComponent={
-          // [F3] Filter-aware empty state: when filters are active, say
-          // so and offer to clear them. [/F3]
-          hasActiveFilters ? (
-            <View style={styles.emptyWrap}>
-              <Text style={styles.empty}>No hosts match these filters.</Text>
-              <TouchableOpacity onPress={clearFilters}>
-                <Text style={styles.emptyClear}>Clear filters</Text>
-              </TouchableOpacity>
-            </View>
+          searchText.trim() ? (
+            <Text style={styles.empty}>No host found for “{searchText.trim()}”.</Text>
           ) : (
             <Text style={styles.empty}>No hosts live right now.</Text>
           )
@@ -422,12 +371,7 @@ const styles = StyleSheet.create({
   card: { borderRadius: 14, marginBottom: 12, overflow: 'hidden', width: '48%' },
   chip: { backgroundColor: 'rgba(255,255,255,0.85)', borderRadius: 10, fontSize: 11, marginRight: 4, paddingHorizontal: 6, paddingVertical: 2 },
   chips: { flexDirection: 'row', marginTop: 4 },
-  coinPill: { backgroundColor: '#fff', borderRadius: 20, elevation: 2, paddingHorizontal: 14, paddingVertical: 8 },
-  coinText: { fontWeight: 'bold' },
   empty: { color: COLORS.grey, marginTop: 40, textAlign: 'center' },
-  // [F3] Filter-aware empty state: "Clear filters" link under the message. [/F3]
-  emptyWrap: { alignItems: 'center' },
-  emptyClear: { color: COLORS.pink, fontWeight: 'bold', marginTop: 8, textAlign: 'center' },
   header: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16 },
   list: { padding: 12 },
   liveBadge: { backgroundColor: '#ef4444', borderRadius: 10, left: 8, paddingHorizontal: 8, paddingVertical: 3, position: 'absolute', top: 8 },
@@ -446,10 +390,13 @@ const styles = StyleSheet.create({
   // [/F1]
   tab: { color: COLORS.grey, fontSize: 14, marginRight: 16, paddingBottom: 6 },
   tabActive: { borderBottomColor: COLORS.pink, borderBottomWidth: 2, color: COLORS.dark, fontWeight: 'bold' },
-  // [Vero] Stories + Random Match styles.
+  // [Vero] Stories styles + [Search] header icon buttons.
   headerRight: { alignItems: 'center', flexDirection: 'row' },
-  randomBtn: { alignItems: 'center', backgroundColor: COLORS.green, borderRadius: 18, height: 36, justifyContent: 'center', marginRight: 8, width: 36 },
-  randomBtnText: { fontSize: 18 },
+  iconBtn: { alignItems: 'center', backgroundColor: '#fff', borderRadius: 18, elevation: 2, height: 36, justifyContent: 'center', marginLeft: 8, width: 36 },
+  iconBtnText: { fontSize: 18 },
+  searchBar: { alignItems: 'center', backgroundColor: '#fff', borderRadius: 20, elevation: 2, flexDirection: 'row', marginHorizontal: 16, marginTop: 10, paddingHorizontal: 14, paddingVertical: 8 },
+  searchInput: { flex: 1, fontSize: 14 },
+  searchClose: { color: COLORS.grey, fontSize: 18, fontWeight: 'bold', marginLeft: 8 },
   trendingSub: { color: COLORS.grey, fontSize: 13, marginTop: 4, paddingHorizontal: 16 },
   storiesList: { marginTop: 12, paddingHorizontal: 16 },
   story: { alignItems: 'center', marginRight: 12, width: 64 },
@@ -464,17 +411,6 @@ const styles = StyleSheet.create({
   tabs: { flexDirection: 'row', marginTop: 14, paddingHorizontal: 16 },
   viewers: { backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, position: 'absolute', right: 8, top: 8 },
   viewersText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
-  // [F3] Filter bar styles. [/F3]
-  filterBar: { marginTop: 10, paddingHorizontal: 16 },
-  filterRow: { alignItems: 'center', flexDirection: 'row', marginBottom: 6 },
-  filterLabel: { color: COLORS.grey, fontSize: 12, fontWeight: 'bold', width: 64 },
-  filterChips: { flex: 1 },
-  filterChip: { backgroundColor: '#fff', borderColor: COLORS.grey, borderRadius: 14, borderWidth: 1, marginRight: 6, paddingHorizontal: 10, paddingVertical: 4 },
-  filterChipActive: { backgroundColor: COLORS.pink, borderColor: COLORS.pink },
-  filterChipText: { color: COLORS.dark, fontSize: 12 },
-  filterChipTextActive: { color: '#fff', fontWeight: 'bold' },
-  clearFilters: { alignSelf: 'flex-start', marginTop: 2 },
-  clearFiltersText: { color: COLORS.pink, fontSize: 12, fontWeight: 'bold' },
   // [F3] Nearby status line under the filter bar. [/F3]
   nearbyStatus: { color: COLORS.grey, fontSize: 12, marginTop: 2, paddingHorizontal: 16 },
   // [F2] Voice-call button on host cards (top-right, under the
