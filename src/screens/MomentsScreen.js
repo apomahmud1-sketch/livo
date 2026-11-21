@@ -5,7 +5,7 @@
 // the phone width (Dimensions), so the feed looks right on every
 // phone — small or big.
 import React, { useMemo, useState } from 'react';
-import { Dimensions, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Dimensions, FlatList, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS } from '../config';
 import { HOSTS } from '../data';
@@ -31,7 +31,11 @@ const MomentCard = React.memo(function MomentCard({ moment, liked, onLike, onCal
   return (
     <View style={styles.card}>
       <LinearGradient colors={[moment.host.color, '#111827']} style={[styles.photo, { height: PHOTO_H }]}>
-        <Text style={styles.bigAvatar}>{moment.host.name[0]}</Text>
+        {moment.host.photo ? (
+          <Image source={moment.host.photo} style={styles.photoImg} />
+        ) : (
+          <Text style={styles.bigAvatar}>{moment.host.name[0]}</Text>
+        )}
         {moment.host.online && (
           <View style={styles.liveBadge}>
             <Text style={styles.liveText}>● LIVE</Text>
@@ -117,6 +121,7 @@ const styles = StyleSheet.create({
   liveText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
   name: { color: '#fff', fontSize: 17, fontWeight: 'bold' },
   photo: { alignItems: 'center', justifyContent: 'center' },
+  photoImg: { height: '100%', position: 'absolute', width: '100%' },
   sub: { color: COLORS.grey, marginTop: 4, paddingHorizontal: 16 },
   title: { color: COLORS.dark, fontSize: 24, fontWeight: 'bold', paddingHorizontal: 16 },
 });
