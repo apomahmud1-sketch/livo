@@ -55,7 +55,7 @@
 //  • Host coordinates are DEMO city coordinates, not live host GPS;
 //    userCountry 'SGP' is a context value (store.js) that should
 //    come from the real profile/backend later. [/F3]
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { FlatList, Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS } from '../config';
@@ -85,22 +85,16 @@ const HostCard = React.memo(function HostCard({ host, viewers, navigation }) {
         )}
         {host.online ? (
           <View style={styles.liveBadge}>
-            <Text style={styles.liveText}>❚❚ Live</Text>
+            <Text style={styles.liveText}><Text style={styles.liveBars}>❚❚ </Text>Live</Text>
           </View>
         ) : (
           <View style={[styles.liveBadge, styles.offlineBadge]}>
             <Text style={styles.liveText}>Offline</Text>
           </View>
         )}
-        {host.online && (
-          <TouchableOpacity
-            style={styles.voiceBtn}
-            activeOpacity={0.8}
-            onPress={() => navigation.navigate('VideoCall', { host, audioOnly: true })}
-          >
-            <Text style={styles.voiceBtnText}>📞</Text>
-          </TouchableOpacity>
-        )}
+        <View style={styles.chevronWrap}>
+          <Text style={styles.chevron}>›</Text>
+        </View>
         <LinearGradient colors={['transparent', 'rgba(0,0,0,0.65)']} style={styles.bottomShade}>
           <Text style={styles.name}>{host.name} {host.flag}</Text>
         </LinearGradient>
@@ -119,6 +113,7 @@ export default function HomeScreen({ navigation }) {
   const { coins, hosts: allHosts, following } = useApp();
 
   // [Search] Search bar — by host name or user ID.
+  const regionScrollRef = useRef(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchText, setSearchText] = useState('');
   const closeSearch = () => { setSearchText(''); setSearchOpen(false); };
@@ -196,7 +191,7 @@ export default function HomeScreen({ navigation }) {
       )}
 
       {/* Region chips — horizontal scroll, like the reference. */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.regionList}>
+      <ScrollView ref={regionScrollRef} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.regionList}>
         {regionOptions.map((r) => (
           <TouchableOpacity
             key={r.code || 'all'}
@@ -209,6 +204,9 @@ export default function HomeScreen({ navigation }) {
             </Text>
           </TouchableOpacity>
         ))}
+        <TouchableOpacity style={styles.regionMore} onPress={() => regionScrollRef.current?.scrollToEnd({ animated: true })} activeOpacity={0.8}>
+          <Text style={styles.regionMoreText}>⌄</Text>
+        </TouchableOpacity>
       </ScrollView>
 
       {/* Commission banner — become a host, earn up to 30%. */}
@@ -218,7 +216,12 @@ export default function HomeScreen({ navigation }) {
             <Text style={styles.commissionTitle}>Earn Up to 30% Commission</Text>
             <Text style={styles.commissionBtn}>Get Started  ›</Text>
           </View>
-          <Text style={styles.commissionEmoji}>💰</Text>
+          <View style={styles.commissionRight}>
+            <Text style={styles.commissionEmoji}>💰</Text>
+            <View style={styles.commissionBadge}>
+              <Text style={styles.commissionBadgeText}>30%</Text>
+            </View>
+          </View>
         </LinearGradient>
       </TouchableOpacity>
 
@@ -266,30 +269,34 @@ const styles = StyleSheet.create({
   // Header: Stream / Follow tabs + wallet, Rank and Search buttons.
   headerRight: { alignItems: 'center', flexDirection: 'row' },
   feedTabs: { alignItems: 'flex-end', flexDirection: 'row' },
-  feedTab: { color: COLORS.grey, fontSize: 20, fontWeight: 'bold', marginRight: 14 },
-  feedTabActive: { color: COLORS.dark, fontSize: 26 },
-  coinPill: { backgroundColor: '#fef3c7', borderRadius: 18, elevation: 2, paddingHorizontal: 12, paddingVertical: 7 },
-  coinText: { fontSize: 13, fontWeight: 'bold' },
-  iconBtn: { alignItems: 'center', backgroundColor: '#fff', borderRadius: 18, elevation: 2, height: 36, justifyContent: 'center', marginLeft: 8, width: 36 },
-  iconBtnText: { fontSize: 18 },
+  feedTab: { color: COLORS.grey, fontSize: 18, fontWeight: 'bold', marginRight: 12 },
+  feedTabActive: { color: COLORS.dark, fontSize: 24 },
+  coinPill: { backgroundColor: '#fef3c7', borderRadius: 18, elevation: 2, paddingHorizontal: 10, paddingVertical: 6 },
+  coinText: { fontSize: 12, fontWeight: 'bold' },
+  iconBtn: { alignItems: 'center', height: 36, justifyContent: 'center', marginLeft: 6, width: 34 },
+  iconBtnText: { fontSize: 22 },
   searchBar: { alignItems: 'center', backgroundColor: '#fff', borderRadius: 20, elevation: 2, flexDirection: 'row', marginHorizontal: 16, marginTop: 10, paddingHorizontal: 14, paddingVertical: 8 },
   searchInput: { flex: 1, fontSize: 14 },
   searchClose: { color: COLORS.grey, fontSize: 18, fontWeight: 'bold', marginLeft: 8 },
   // Region chips + commission banner.
   regionList: { marginTop: 12, paddingHorizontal: 16 },
-  regionChip: { backgroundColor: '#fff', borderColor: '#e5e7eb', borderRadius: 18, borderWidth: 1, marginRight: 8, paddingHorizontal: 14, paddingVertical: 7 },
-  regionChipActive: { backgroundColor: COLORS.green, borderColor: COLORS.green },
+  regionChip: { backgroundColor: '#fff', borderColor: '#e5e7eb', borderRadius: 18, borderWidth: 1, marginRight: 8, paddingHorizontal: 12, paddingVertical: 6 },
+  regionChipActive: { backgroundColor: '#dcfce7', borderColor: '#dcfce7' },
   regionChipText: { color: COLORS.dark, fontSize: 13, fontWeight: 'bold' },
-  regionChipTextActive: { color: '#fff' },
+  regionChipTextActive: { color: COLORS.green },
+  regionMore: { alignItems: 'center', backgroundColor: '#fff', borderColor: '#e5e7eb', borderRadius: 16, borderWidth: 1, height: 32, justifyContent: 'center', width: 32 },
+  regionMoreText: { color: COLORS.dark, fontSize: 16, fontWeight: 'bold' },
   commissionBanner: { borderRadius: 14, marginHorizontal: 16, marginTop: 12, overflow: 'hidden' },
-  commissionInner: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14 },
+  commissionInner: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 18 },
   commissionText: { flex: 1 },
-  commissionTitle: { color: '#fff', fontSize: 17, fontWeight: 'bold' },
+  commissionTitle: { color: '#fff', fontSize: 19, fontWeight: 'bold' },
   commissionBtn: { alignSelf: 'flex-start', borderColor: '#fff', borderRadius: 16, borderWidth: 1.5, color: '#fff', fontSize: 13, fontWeight: 'bold', marginTop: 8, paddingHorizontal: 14, paddingVertical: 5 },
-  commissionEmoji: { fontSize: 32, marginLeft: 10 },
-  // [F2] Voice-call button on host cards (top-right, under the
-  // viewers pill; online hosts only).
-  voiceBtn: { alignItems: 'center', backgroundColor: 'rgba(236,72,153,0.95)', borderRadius: 20, height: 40, justifyContent: 'center', position: 'absolute', right: 8, top: 8, width: 40 },
-  voiceBtnText: { fontSize: 18 },
-  // [/F2]
+  commissionEmoji: { fontSize: 30 },
+  commissionRight: { alignItems: 'center', flexDirection: 'row', marginLeft: 8 },
+  commissionBadge: { alignItems: 'center', backgroundColor: '#fbbf24', borderRadius: 20, height: 40, justifyContent: 'center', marginLeft: 8, width: 40 },
+  commissionBadgeText: { color: '#92400e', fontSize: 12, fontWeight: 'bold' },
+  // ">" chevron on the right edge of the photo, like the reference.
+  chevronWrap: { alignItems: 'flex-end', bottom: 0, justifyContent: 'center', position: 'absolute', right: 0, top: 0, width: 36 },
+  chevron: { color: '#fff', fontSize: 30, fontWeight: 'bold', textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
+  liveBars: { color: '#4ade80' },
 });
