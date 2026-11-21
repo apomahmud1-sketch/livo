@@ -1,3 +1,7 @@
+// Livo HomeScreen — 2026-11-21 redesign, exactly like the user's
+// reference screenshot: Stream / Follow header, wallet + Rank +
+// Search icons, region chips, "Earn Up to 30% Commission" banner,
+// portrait live cards (name + flag on photo, name + viewers below).
 // Livo HomeScreen — v2 "single live" (2026-11-17, updated 14:48 SGT
 // to match the preview the user corrected that afternoon)
 // ONE-FILE CHANGE ONLY: replace src/screens/HomeScreen.js in GitHub
@@ -51,30 +55,22 @@
 //  • Host coordinates are DEMO city coordinates, not live host GPS;
 //    userCountry 'SGP' is a context value (store.js) that should
 //    come from the real profile/backend later. [/F3]
-import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, Image, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useState } from 'react';
+import { FlatList, Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS } from '../config';
 import { useApp } from '../store';
-// [F3] Nearby helpers: guarded expo-location loader, haversine
-// distance, formatting, and the nearest / same-country sort. [/F3]
-import { distanceToHostKm, formatDistance, loadLocationModule, sortNearbyHosts } from '../utils/nearby';
-// [F6] AI Smart Match — card modal + host picker (real store hosts only).
-import SmartMatchCard from '../components/SmartMatchCard';
-import { getUserPreferences, pickSmartMatch } from '../utils/smartMatch';
-// [/F6]
 
 // Demo live-viewer counts, by host id (see header note).
 const VIEWERS = { 1: 1284, 2: 862, 3: 540, 4: 2310, 5: 0, 6: 1975 };
 
 const formatViewers = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 
-const TABS = ['Popular', 'Online', 'New', 'Nearby']; // [F3] 'Nearby' added [/F3]
-
-// Host card, memoized: it only re-renders when its own host, viewer
-// count, distance or navigation changes — scrolling and tab switches
-// no longer redraw every visible card.
-const HostCard = React.memo(function HostCard({ host, viewers, distanceLabel, navigation }) {
+// Portrait live card, like the reference: photo with a dark
+// "❚❚ Live" pill, the host name + flag on the photo, and a white
+// footer with the name + viewer count. Tapping the card opens the
+// live room; the pink 📞 button starts an audio-only (voice) call.
+const HostCard = React.memo(function HostCard({ host, viewers, navigation }) {
   return (
     <TouchableOpacity
       style={styles.card}
@@ -89,16 +85,11 @@ const HostCard = React.memo(function HostCard({ host, viewers, distanceLabel, na
         )}
         {host.online ? (
           <View style={styles.liveBadge}>
-            <Text style={styles.liveText}>● LIVE</Text>
+            <Text style={styles.liveText}>❚❚ Live</Text>
           </View>
         ) : (
           <View style={[styles.liveBadge, styles.offlineBadge]}>
             <Text style={styles.liveText}>Offline</Text>
-          </View>
-        )}
-        {host.online && (
-          <View style={styles.viewers}>
-            <Text style={styles.viewersText}>👁 {formatViewers(viewers)}</Text>
           </View>
         )}
         {host.online && (
@@ -111,112 +102,40 @@ const HostCard = React.memo(function HostCard({ host, viewers, distanceLabel, na
           </TouchableOpacity>
         )}
         <LinearGradient colors={['transparent', 'rgba(0,0,0,0.65)']} style={styles.bottomShade}>
-          <Text style={styles.name}>{host.name}</Text>
-          <View style={styles.chips}>
-            <Text style={[styles.chip, styles.lv]}>Lv{host.level}</Text>
-            <Text style={styles.chip}>{host.flag} {host.country}</Text>
-            <Text style={styles.chip}>{host.lang}</Text>
-            {distanceLabel ? <Text style={styles.chip}>📍 {distanceLabel}</Text> : null}
-          </View>
+          <Text style={styles.name}>{host.name} {host.flag}</Text>
         </LinearGradient>
       </LinearGradient>
+      <View style={styles.cardFooter}>
+        <Text style={styles.cardFooterName}>{host.name}</Text>
+        <Text style={styles.cardFooterViewers}>👁 {formatViewers(viewers)}</Text>
+      </View>
     </TouchableOpacity>
   );
 });
 
 export default function HomeScreen({ navigation }) {
-  const [tab, setTab] = useState('Popular');
-  const { hosts: allHosts, userCountry } = useApp(); // [F3] userCountry from the store [/F3]
+  const [feed, setFeed] = useState('stream'); // stream | follow
+  const [region, setRegion] = useState(null); // null = All, else 'BGD' / 'IND' / 'PAK'
+  const { coins, hosts: allHosts, following } = useApp();
 
-  // [Search] 2026-11-21 (user's screenshot mark-up): the Country /
-  // Gender / Language filter chips are GONE, and the top-right dice +
-  // coin pill are replaced by a Task icon + a Search icon. Search
-  // filters the live host list by name or user ID. [/Search]
+  // [Search] Search bar — by host name or user ID.
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchText, setSearchText] = useState('');
   const closeSearch = () => { setSearchText(''); setSearchOpen(false); };
 
-  // [F3] Location state for the Nearby tab. 'idle' = never asked yet;
-  // 'requesting' = permission prompt in flight; 'granted' = permission
-  // given and coordinates read; 'denied' = permission refused;
-  // 'unavailable' = expo-location is not installed in this build
-  // (the normal case today) or the position read failed. No location
-  // is ever read without permission. [/F3]
-  const [userCoords, setUserCoords] = useState(null);
-  const [locStatus, setLocStatus] = useState('idle');
-  const locationRequestedRef = useRef(false); // [F3] permission is requested only once [/F3]
+  // Region chips, derived from the real host list (flag per country).
+  const regionOptions = React.useMemo(() => {
+    const seen = {};
+    allHosts.forEach((h) => { if (!seen[h.country]) seen[h.country] = h.flag || ''; });
+    const names = { BGD: 'Bangladesh', IND: 'India', PAK: 'Pakistan' };
+    return [{ code: null, label: 'All', flag: '' }].concat(
+      Object.keys(seen).map((c) => ({ code: c, label: names[c] || c, flag: seen[c] }))
+    );
+  }, [allHosts]);
 
-  // [F6] AI Smart Match — picks from the live store host list
-  // (allHosts), so Host Dashboard online/rate changes apply.
-  const [matchVisible, setMatchVisible] = useState(false);
-  const [matchedHost, setMatchedHost] = useState(null);
-  const runSmartMatch = () => {
-    setMatchedHost(pickSmartMatch(allHosts, getUserPreferences()));
-    setMatchVisible(true);
-  };
-  const callMatchedHost = () => {
-    if (!matchedHost) return;
-    setMatchVisible(false);
-    // Same as tapping a Home card: normal incoming screen + billing.
-    navigation.navigate('VideoCall', { host: matchedHost });
-  };
-  const findAnotherMatch = () => {
-    const next = pickSmartMatch(allHosts, getUserPreferences(), matchedHost ? [matchedHost.id] : []);
-    // Null when no other host is online — keep showing the current match.
-    if (next) setMatchedHost(next);
-  };
-  // [/F6]
-
-  // [Vero] Story row item — tap a story to call that host.
-  const renderStory = ({ item }) => (
-    <TouchableOpacity style={styles.story} activeOpacity={0.8} onPress={() => navigation.navigate('VideoCall', { host: item })}>
-      <View style={[styles.storyRing, item.online ? styles.storyRingLive : styles.storyRingOff]}>
-        {item.photo ? (
-          <Image source={item.photo} style={styles.storyAvatarImg} />
-        ) : (
-          <View style={[styles.storyAvatarBg, { backgroundColor: item.color }]}>
-            <Text style={styles.storyAvatar}>{item.name[0]}</Text>
-          </View>
-        )}
-      </View>
-      <Text style={styles.storyName} numberOfLines={1}>{item.name}</Text>
-    </TouchableOpacity>
-  );
-  // [/Vero]
-
-  // [F3] Ask for location ONCE, the first time the Nearby tab opens.
-  // If expo-location is not installed, loadLocationModule() returns
-  // null and we fall back to country-based proximity — no crash, no
-  // permission prompt, no location read. [/F3]
-  useEffect(() => {
-    if (tab !== 'Nearby' || locationRequestedRef.current) return;
-    locationRequestedRef.current = true;
-    (async () => {
-      const Location = loadLocationModule();
-      if (!Location) {
-        setLocStatus('unavailable'); // [F3] expo-location not installed in this build [/F3]
-        return;
-      }
-      try {
-        setLocStatus('requesting');
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
-          setLocStatus('denied');
-          return;
-        }
-        const pos = await Location.getCurrentPositionAsync({}); // [F3] only after permission is granted [/F3]
-        setUserCoords({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
-        setLocStatus('granted');
-      } catch (e) {
-        setLocStatus('unavailable');
-      }
-    })();
-  }, [tab]);
-
-  // Tab ordering on the live allHosts list from the store. Nearby
-  // sorts with sortNearbyHosts: nearest-first when coordinates exist,
-  // otherwise same-country-first (stable order). When searching,
-  // the search text filters by name or user ID instead. [/F3]
+  // Stream = all hosts (region filter on top, online first);
+  // Follow = only the hosts the user follows (store.following holds
+  // host ids). Searching filters by name or user ID instead.
   const hosts = React.useMemo(() => {
     const q = searchText.trim().toLowerCase();
     if (q) {
@@ -224,58 +143,40 @@ export default function HomeScreen({ navigation }) {
         h.name.toLowerCase().includes(q) || String(h.id).includes(q)
       );
     }
-    return tab === 'Online'
-      ? allHosts.filter((h) => h.online)
-      : tab === 'New'
-        ? [...allHosts].reverse()
-        : tab === 'Nearby'
-          ? sortNearbyHosts(allHosts, { userCoords, userCountry })
-          : allHosts;
-  }, [tab, allHosts, searchText, userCoords, userCountry]);
+    let list = feed === 'follow'
+      ? allHosts.filter((h) => following.includes(String(h.id)))
+      : allHosts;
+    if (region) list = list.filter((h) => h.country === region);
+    return [...list].sort((a, b) => (b.online ? 1 : 0) - (a.online ? 1 : 0));
+  }, [feed, region, allHosts, following, searchText]);
 
-  // [F3] Honest Nearby status line. Demo data has no SGP host, so
-  // when there is no same-country host the fallback leaves the order
-  // unchanged and the line says so instead of pretending otherwise. [/F3]
-  const hasSameCountryHost = allHosts.some((h) => h.country === userCountry);
-  let nearbyStatus = '';
-  if (tab === 'Nearby') {
-    if (userCoords) {
-      nearbyStatus = '📍 Sorted by distance from you.';
-    } else if (!hasSameCountryHost) {
-      const prefix =
-        locStatus === 'denied' ? 'Location permission off — ' :
-        locStatus === 'unavailable' ? 'Location not available on this build — ' : '';
-      nearbyStatus = `${prefix}No hosts from ${userCountry} yet — showing all hosts`;
-    } else if (locStatus === 'denied') {
-      nearbyStatus = 'Location permission off — showing hosts from your country first.';
-    } else if (locStatus === 'unavailable') {
-      nearbyStatus = 'Location not available on this build — showing hosts from your country first.';
-    } else {
-      nearbyStatus = 'Showing hosts from your country first.';
-    }
-  }
-
-  const renderHost = React.useCallback(({ item }) => {
-    const viewers = VIEWERS[item.id] || 0;
-    const distanceKm = userCoords ? distanceToHostKm(userCoords, item) : null;
-    const distanceLabel = distanceKm !== null ? formatDistance(distanceKm) : '';
-    return <HostCard host={item} viewers={viewers} distanceLabel={distanceLabel} navigation={navigation} />;
-  }, [navigation, userCoords]);
+  const renderHost = React.useCallback(({ item }) => (
+    <HostCard host={item} viewers={VIEWERS[item.id] || 0} navigation={navigation} />
+  ), [navigation]);
 
   return (
     <LinearGradient colors={['#f0fdf4', '#ffffff']} style={styles.bg}>
       <View style={styles.header}>
-        <Text style={styles.logo}>Livo</Text>
+        <View style={styles.feedTabs}>
+          <TouchableOpacity onPress={() => setFeed('stream')} activeOpacity={0.8}>
+            <Text style={[styles.feedTab, feed === 'stream' && styles.feedTabActive]}>Stream</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setFeed('follow')} activeOpacity={0.8}>
+            <Text style={[styles.feedTab, feed === 'follow' && styles.feedTabActive]}>Follow</Text>
+          </TouchableOpacity>
+        </View>
         <View style={styles.headerRight}>
-          <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.navigate('Tasks')} activeOpacity={0.8}>
-            <Text style={styles.iconBtnText}>📋</Text>
+          <TouchableOpacity style={styles.coinPill} onPress={() => navigation.navigate('WalletTab')} activeOpacity={0.8}>
+            <Text style={styles.coinText}>🪙 {coins.toLocaleString()}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.navigate('Ranking')} activeOpacity={0.8}>
+            <Text style={styles.iconBtnText}>🏆</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.iconBtn} onPress={() => setSearchOpen(true)} activeOpacity={0.8}>
             <Text style={styles.iconBtnText}>🔍</Text>
           </TouchableOpacity>
         </View>
       </View>
-      <Text style={styles.trendingSub}>Discover who's trending</Text>
 
       {/* [Search] Search bar — by host name or user ID. */}
       {searchOpen && (
@@ -294,44 +195,32 @@ export default function HomeScreen({ navigation }) {
         </View>
       )}
 
-      {/* [Vero] Story row — tap a story to call that host. */}
-      <FlatList
-        data={allHosts}
-        keyExtractor={(h) => h.id}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        renderItem={renderStory}
-        contentContainerStyle={styles.storiesList}
-        removeClippedSubviews
-      />
-
-      <View style={styles.tabs}>
-        {TABS.map((t) => (
-          <TouchableOpacity key={t} onPress={() => setTab(t)}>
-            <Text style={[styles.tab, tab === t && styles.tabActive]}>{t}</Text>
+      {/* Region chips — horizontal scroll, like the reference. */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.regionList}>
+        {regionOptions.map((r) => (
+          <TouchableOpacity
+            key={r.code || 'all'}
+            style={[styles.regionChip, region === r.code && styles.regionChipActive]}
+            onPress={() => setRegion(r.code)}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.regionChipText, region === r.code && styles.regionChipTextActive]}>
+              {r.flag ? `${r.flag} ` : ''}{r.label}
+            </Text>
           </TouchableOpacity>
         ))}
-      </View>
+      </ScrollView>
 
-      {/* [F3] Honest Nearby status line — only on the Nearby tab. [/F3] */}
-      {tab === 'Nearby' && nearbyStatus ? (
-        <Text style={styles.nearbyStatus}>{nearbyStatus}</Text>
-      ) : null}
-      {/* [F1] Lucky Spin + Daily Reward entry — opens the Rewards screen. */}
-      <TouchableOpacity
-        style={styles.rewardsBanner}
-        onPress={() => navigation.navigate('Rewards')}
-        activeOpacity={0.85}
-      >
-        <Text style={styles.rewardsBannerText}>🎡 Lucky Spin • Daily Reward</Text>
-        <Text style={styles.rewardsBannerSub}>1 free spin today — win coins!</Text>
+      {/* Commission banner — become a host, earn up to 30%. */}
+      <TouchableOpacity style={styles.commissionBanner} onPress={() => navigation.navigate('HostDashboard')} activeOpacity={0.85}>
+        <LinearGradient colors={['#f97316', '#f59e0b']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.commissionInner}>
+          <View style={styles.commissionText}>
+            <Text style={styles.commissionTitle}>Earn Up to 30% Commission</Text>
+            <Text style={styles.commissionBtn}>Get Started  ›</Text>
+          </View>
+          <Text style={styles.commissionEmoji}>💰</Text>
+        </LinearGradient>
       </TouchableOpacity>
-      {/* [/F1] */}
-      {/* [F6] AI Smart Match button — under the tabs. */}
-      <TouchableOpacity style={styles.smartMatchBtn} onPress={runSmartMatch} activeOpacity={0.85}>
-        <Text style={styles.smartMatchText}>✨ Smart Match — find someone to talk to</Text>
-      </TouchableOpacity>
-      {/* [/F6] */}
 
       <FlatList
         data={hosts}
@@ -344,22 +233,14 @@ export default function HomeScreen({ navigation }) {
         ListEmptyComponent={
           searchText.trim() ? (
             <Text style={styles.empty}>No host found for “{searchText.trim()}”.</Text>
+          ) : feed === 'follow' ? (
+            <Text style={styles.empty}>You're not following anyone yet.</Text>
           ) : (
             <Text style={styles.empty}>No hosts live right now.</Text>
           )
         }
       />
 
-      {/* [F6] AI Smart Match result modal. */}
-      <SmartMatchCard
-        visible={matchVisible}
-        host={matchedHost}
-        onCall={callMatchedHost}
-        onFindAnother={findAnotherMatch}
-        onClose={() => setMatchVisible(false)}
-        onTryAgain={runSmartMatch}
-      />
-      {/* [/F6] */}
     </LinearGradient>
   );
 }
@@ -368,58 +249,47 @@ const styles = StyleSheet.create({
   avatar: { color: '#fff', fontSize: 56, fontWeight: 'bold' },
   bg: { flex: 1, paddingTop: 40 },
   bottomShade: { bottom: 0, justifyContent: 'flex-end', left: 0, padding: 8, position: 'absolute', right: 0 },
-  card: { borderRadius: 14, marginBottom: 12, overflow: 'hidden', width: '48%' },
-  chip: { backgroundColor: 'rgba(255,255,255,0.85)', borderRadius: 10, fontSize: 11, marginRight: 4, paddingHorizontal: 6, paddingVertical: 2 },
-  chips: { flexDirection: 'row', marginTop: 4 },
+  card: { backgroundColor: '#fff', borderRadius: 14, marginBottom: 12, overflow: 'hidden', width: '48%' },
+  cardFooter: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 10, paddingVertical: 8 },
+  cardFooterName: { fontSize: 14, fontWeight: 'bold' },
+  cardFooterViewers: { color: COLORS.grey, fontSize: 12 },
   empty: { color: COLORS.grey, marginTop: 40, textAlign: 'center' },
   header: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16 },
   list: { padding: 12 },
-  liveBadge: { backgroundColor: '#ef4444', borderRadius: 10, left: 8, paddingHorizontal: 8, paddingVertical: 3, position: 'absolute', top: 8 },
+  liveBadge: { backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 10, left: 8, paddingHorizontal: 8, paddingVertical: 3, position: 'absolute', top: 8 },
   liveText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
-  logo: { color: COLORS.purple, fontSize: 26, fontWeight: 'bold' },
-  lv: { backgroundColor: '#fde68a' },
   name: { color: '#fff', fontSize: 15, fontWeight: 'bold', textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 5 },
   offlineBadge: { backgroundColor: 'rgba(0,0,0,0.55)' },
-  photo: { alignItems: 'center', height: 170, justifyContent: 'center', overflow: 'hidden' },
+  photo: { alignItems: 'center', height: 220, justifyContent: 'center', overflow: 'hidden' },
   photoImg: { height: '100%', position: 'absolute', width: '100%' },
   row: { justifyContent: 'space-between' },
-  // [F1] Rewards banner styles.
-  rewardsBanner: { backgroundColor: COLORS.purple, borderRadius: 12, marginHorizontal: 16, marginTop: 12, paddingHorizontal: 14, paddingVertical: 10 },
-  rewardsBannerSub: { color: '#e9d5ff', fontSize: 12, marginTop: 2 },
-  rewardsBannerText: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
-  // [/F1]
-  tab: { color: COLORS.grey, fontSize: 14, marginRight: 16, paddingBottom: 6 },
-  tabActive: { borderBottomColor: COLORS.pink, borderBottomWidth: 2, color: COLORS.dark, fontWeight: 'bold' },
-  // [Vero] Stories styles + [Search] header icon buttons.
+  // Header: Stream / Follow tabs + wallet, Rank and Search buttons.
   headerRight: { alignItems: 'center', flexDirection: 'row' },
+  feedTabs: { alignItems: 'flex-end', flexDirection: 'row' },
+  feedTab: { color: COLORS.grey, fontSize: 20, fontWeight: 'bold', marginRight: 14 },
+  feedTabActive: { color: COLORS.dark, fontSize: 26 },
+  coinPill: { backgroundColor: '#fef3c7', borderRadius: 18, elevation: 2, paddingHorizontal: 12, paddingVertical: 7 },
+  coinText: { fontSize: 13, fontWeight: 'bold' },
   iconBtn: { alignItems: 'center', backgroundColor: '#fff', borderRadius: 18, elevation: 2, height: 36, justifyContent: 'center', marginLeft: 8, width: 36 },
   iconBtnText: { fontSize: 18 },
   searchBar: { alignItems: 'center', backgroundColor: '#fff', borderRadius: 20, elevation: 2, flexDirection: 'row', marginHorizontal: 16, marginTop: 10, paddingHorizontal: 14, paddingVertical: 8 },
   searchInput: { flex: 1, fontSize: 14 },
   searchClose: { color: COLORS.grey, fontSize: 18, fontWeight: 'bold', marginLeft: 8 },
-  trendingSub: { color: COLORS.grey, fontSize: 13, marginTop: 4, paddingHorizontal: 16 },
-  storiesList: { marginTop: 12, paddingHorizontal: 16 },
-  story: { alignItems: 'center', marginRight: 12, width: 64 },
-  storyRing: { alignItems: 'center', borderRadius: 32, borderWidth: 2.5, height: 64, justifyContent: 'center', width: 64 },
-  storyRingLive: { borderColor: COLORS.green },
-  storyRingOff: { borderColor: COLORS.lightGrey },
-  storyAvatarBg: { alignItems: 'center', borderRadius: 27, height: 54, justifyContent: 'center', width: 54 },
-  storyAvatar: { color: '#fff', fontSize: 22, fontWeight: 'bold' },
-  storyAvatarImg: { borderRadius: 27, height: 54, width: 54 },
-  storyName: { fontSize: 11, marginTop: 4, textAlign: 'center' },
-  // [/Vero]
-  tabs: { flexDirection: 'row', marginTop: 14, paddingHorizontal: 16 },
-  viewers: { backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, position: 'absolute', right: 8, top: 8 },
-  viewersText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
-  // [F3] Nearby status line under the filter bar. [/F3]
-  nearbyStatus: { color: COLORS.grey, fontSize: 12, marginTop: 2, paddingHorizontal: 16 },
+  // Region chips + commission banner.
+  regionList: { marginTop: 12, paddingHorizontal: 16 },
+  regionChip: { backgroundColor: '#fff', borderColor: '#e5e7eb', borderRadius: 18, borderWidth: 1, marginRight: 8, paddingHorizontal: 14, paddingVertical: 7 },
+  regionChipActive: { backgroundColor: COLORS.green, borderColor: COLORS.green },
+  regionChipText: { color: COLORS.dark, fontSize: 13, fontWeight: 'bold' },
+  regionChipTextActive: { color: '#fff' },
+  commissionBanner: { borderRadius: 14, marginHorizontal: 16, marginTop: 12, overflow: 'hidden' },
+  commissionInner: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14 },
+  commissionText: { flex: 1 },
+  commissionTitle: { color: '#fff', fontSize: 17, fontWeight: 'bold' },
+  commissionBtn: { alignSelf: 'flex-start', borderColor: '#fff', borderRadius: 16, borderWidth: 1.5, color: '#fff', fontSize: 13, fontWeight: 'bold', marginTop: 8, paddingHorizontal: 14, paddingVertical: 5 },
+  commissionEmoji: { fontSize: 32, marginLeft: 10 },
   // [F2] Voice-call button on host cards (top-right, under the
   // viewers pill; online hosts only).
-  voiceBtn: { alignItems: 'center', backgroundColor: 'rgba(236,72,153,0.95)', borderRadius: 20, height: 40, justifyContent: 'center', position: 'absolute', right: 8, top: 40, width: 40 },
+  voiceBtn: { alignItems: 'center', backgroundColor: 'rgba(236,72,153,0.95)', borderRadius: 20, height: 40, justifyContent: 'center', position: 'absolute', right: 8, top: 8, width: 40 },
   voiceBtnText: { fontSize: 18 },
   // [/F2]
-  // [F6] AI Smart Match button (purple, under the tabs).
-  smartMatchBtn: { alignItems: 'center', backgroundColor: COLORS.purple, borderRadius: 24, marginHorizontal: 16, marginTop: 12, paddingVertical: 12 },
-  smartMatchText: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
-  // [/F6]
 });
