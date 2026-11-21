@@ -23,7 +23,6 @@ import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Camera, Film, Heart, Image as ImageIcon, MessageCircle, Phone, Play, Plus, Share2, Video, X } from 'lucide-react-native';
 import { VideoView, useVideoPlayer } from 'expo-video';
-import { HOSTS } from '../data';
 import { useApp } from '../store';
 import { supabase } from '../supabase/client';
 
@@ -347,7 +346,7 @@ function UploadSheet({ visible, onClose, onPosted, showToast }) {
 }
 
 export default function MomentsScreen({ navigation }) {
-  const { showToast } = useApp();
+  const { showToast, hosts } = useApp();
   const [likedIds, setLikedIds] = useState({});
   const [ownMoments, setOwnMoments] = useState([]);
   const [momentsLoaded, setMomentsLoaded] = useState(false);
@@ -373,15 +372,17 @@ export default function MomentsScreen({ navigation }) {
     AsyncStorage.setItem(LIVO_MOMENTS_KEY, JSON.stringify(ownMoments)).catch(() => {});
   }, [momentsLoaded, ownMoments]);
 
-  const demoMoments = useMemo(() => HOSTS.map((host, i) => ({
+  // [Live] Host moments come from the store hosts (live Supabase
+  // rows when the setup SQL is pasted, demo HOSTS otherwise).
+  const hostMoments = useMemo(() => hosts.map((host, i) => ({
     id: host.id,
     host,
     caption: CAPTIONS[i % CAPTIONS.length],
     likes: LIKES[i % LIKES.length],
     comments: COMMENTS[i % COMMENTS.length],
-  })), []);
+  })), [hosts]);
 
-  // Own posts first (newest first), then the demo host moments.
+  // Own posts first (newest first), then the host moments.
   const moments = useMemo(() => {
     const own = ownMoments.map((m) => ({
       id: m.id,
@@ -393,8 +394,8 @@ export default function MomentsScreen({ navigation }) {
       mediaUri: m.mediaUri,
       mediaType: m.mediaType,
     }));
-    return [...own, ...demoMoments];
-  }, [ownMoments, demoMoments]);
+    return [...own, ...hostMoments];
+  }, [ownMoments, hostMoments]);
 
   const toggleLike = (id) => setLikedIds((prev) => ({ ...prev, [id]: !prev[id] }));
 
