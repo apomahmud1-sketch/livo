@@ -1,6 +1,6 @@
-import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import React, { useEffect, useRef } from 'react';
+import { BackHandler, StyleSheet, Text, View } from 'react-native';
+import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
@@ -98,9 +98,55 @@ function MainTabs() {
   );
 }
 
+const navigationRef = createNavigationContainerRef();
+
+// ── Android hardware back button (2026-11-21) ────────────────────
+// The native stack already pops inner pages (ChatDetail, VideoCall,
+// WalletTab, …) — this handler only adds the two behaviours the
+// native stack does NOT do:
+//  • On a root tab screen other than Home, back goes to the Home tab
+//    first instead of closing the app.
+//  • On the Home tab, back needs a double-press within 2s to exit.
+// It returns false for stack screens, so the native pop runs exactly
+// once (no double-pop). It is registered after the navigator mounts,
+// so it runs before the navigator's own back listener.
+function useHardwareBack() {
+  const { showToast } = useApp();
+  const lastPressRef = useRef(0);
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      const nav = navigationRef.current;
+      if (!nav || !nav.isReady()) return false;
+      const rootState = nav.getRootState();
+      if (!rootState || !rootState.routes || !rootState.routes.length) return false;
+      const top = rootState.routes[rootState.index];
+      // A stack screen above Main (ChatDetail, VideoCall, …):
+      // let the native stack pop it — do nothing here.
+      if (!top || top.name !== 'Main') return false;
+      // On a tab: which tab is focused?
+      const tabState = top.state;
+      const focusedTab = tabState && tabState.routes
+        ? tabState.routes[tabState.index].name
+        : 'HomeTab';
+      if (focusedTab !== 'HomeTab') {
+        nav.navigate('Main', { screen: 'HomeTab' });
+        return true;
+      }
+      // Home tab: double-press within 2s exits the app.
+      const now = Date.now();
+      if (now - lastPressRef.current < 2000) return false;
+      lastPressRef.current = now;
+      showToast('আরেকবার চাপলে অ্যাপ বন্ধ হবে');
+      return true;
+    });
+    return () => sub.remove();
+  }, [showToast]);
+}
+
 function Root() {
+  useHardwareBack();
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Login" component={LoginScreen} />
         <Stack.Screen name="Main" component={MainTabs} />
