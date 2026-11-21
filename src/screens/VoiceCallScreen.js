@@ -16,8 +16,9 @@
 // testing, token server for production — see src/agora/LiveVideo.js).
 //
 // BILLING: voice rate = HALF the host's video tier, derived via
-// getVoiceCallRate() in config.js (30/60/150/300/600 coins/min for
-// video tiers 60/120/300/600/1200). Charged on end, per started
+// getLiveVoiceCallRate() from the store (live Supabase tiers when
+// the setup SQL is pasted, config.js demo tiers otherwise —
+// 30/60/150/300/600 coins/min for video tiers 60/120/300/600/1200). Charged on end, per started
 // minute, through store.chargeVoiceCall — same rule as video.
 // CALL SUMMARY: there is none. When the call ends, everyone goes
 // straight back (toast only) — the host sees the earnings in the
@@ -32,7 +33,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { COLORS, getVoiceCallRate } from '../config';
+import { COLORS } from '../config';
 import { useApp } from '../store';
 import LiveVideo, {
   leaveAgoraChannel,
@@ -42,8 +43,10 @@ import LiveVideo, {
 
 export default function VoiceCallScreen({ route, navigation }) {
   const { host, asHost } = route.params || {};
-  const { coins, chargeVoiceCall, showToast } = useApp();
-  const voiceRate = getVoiceCallRate(host ? host.rateTier : 'tier2');
+  const { coins, chargeVoiceCall, showToast, getLiveVoiceCallRate } = useApp();
+  // [Live] Voice rate from the store (live Supabase tiers when the
+  // setup SQL is pasted, config.js demo tiers otherwise).
+  const voiceRate = getLiveVoiceCallRate(host ? host.rateTier : 'tier2');
   const [seconds, setSeconds] = useState(0);
   const [muted, setMuted] = useState(false);
   const [speaker, setSpeaker] = useState(true);
