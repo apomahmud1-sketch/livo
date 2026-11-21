@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Dimensions, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { COLORS, GIFTS, getCallRate, getVoiceCallRate } from '../config';
+import { COLORS } from '../config';
 import { useApp } from '../store';
 // [F5] Full-screen gift animation for expensive gifts (price >= 1000 coins)
 import FullScreenGift from '../components/FullScreenGift';
@@ -45,8 +45,10 @@ import { VOICE_PRESETS, applyVoicePreset, getVoicePresetLabel, resetVoicePreset 
 // ─────────────────────────────────────────────────────────────────
 export default function VideoCallScreen({ route, navigation }) {
   const { host, asHost, audioOnly } = route.params || {}; // [F2] audioOnly added
-  const { coins, chargeCall, sendGift, showToast, vipLevel } = useApp();
-  const rate = getCallRate(host ? host.rateTier : 'tier2');
+  const { coins, chargeCall, sendGift, showToast, vipLevel, gifts, getLiveCallRate, getLiveVoiceCallRate } = useApp();
+  // [Live] Rates + gifts come from the store (live Supabase rows
+  // when the setup SQL is pasted, config.js demo values otherwise).
+  const rate = getLiveCallRate(host ? host.rateTier : 'tier2');
   const [stage, setStage] = useState(asHost ? 'calling' : 'incoming');
   const [seconds, setSeconds] = useState(0);
   const [muted, setMuted] = useState(false);
@@ -99,7 +101,7 @@ export default function VideoCallScreen({ route, navigation }) {
     // Voice calls bill at the half-price voice rate, video at the
     // full tier rate — the Accept gate uses the right one.
     const perMinute = audioOnly
-      ? getVoiceCallRate(host ? host.rateTier : 'tier2').coinsPerMinute
+      ? getLiveVoiceCallRate(host ? host.rateTier : 'tier2').coinsPerMinute
       : rate.coinsPerMinute;
     if (coins < perMinute) {
       showToast('Not enough coins for 1 minute — please recharge first.');
@@ -141,7 +143,9 @@ export default function VideoCallScreen({ route, navigation }) {
   // [F5] Send a gift: charge coins via the store first, then show the
   // full-screen animation ONLY for expensive gifts. Cheap gifts keep
   // the old toast-only behaviour (sendGift already toasted).
-  // Threshold from the real gift data (GIFTS in src/config.js):
+  // Threshold from the real gift data (gifts from the store — live
+  // Supabase rows when the setup SQL is pasted, config.js demo
+  // values otherwise):
   // the expensive gifts are Sports Car 2999, Rocket 4999 and
   // Castle 9999 — everything at or below Diamond Ring (999) is cheap.
   const EXPENSIVE_GIFT_MIN_COINS = 1000;
@@ -209,7 +213,7 @@ export default function VideoCallScreen({ route, navigation }) {
       )}
 
       <View style={styles.giftRow}>
-        {GIFTS.slice(0, 4).map((g) => (
+        {gifts.slice(0, 4).map((g) => (
           <TouchableOpacity key={g.id} style={styles.gift} onPress={() => handleSendGift(g)}>
             <Text style={styles.giftEmoji}>{g.emoji}</Text>
             <Text style={styles.giftPrice}>{g.price}</Text>
