@@ -13,8 +13,8 @@
 // ── DEMO DATA (Supabase replaces this later) ──────────────────────
 // The Chat / Call lists use the preview's demo names (Sadiya Moni,
 // bvG8K, qSOgr, Em Em, LULA, Rifda) with coloured initial avatars —
-// the app has no host photos for them yet (assets hold only
-// host-arif.jpg / host-nusrat.jpg). Say hi greetings, chat profiles,
+// host photos now live in assets (host-ruma/sadia/rakib/priya/arif/nusrat.jpg);
+// the top row, Say hi and Contacts show them. Say hi greetings, chat profiles,
 // replies and the Customer service answers are the preview's demo
 // content. Nothing here spends real coins or tickets yet.
 // ── FOLLOW-UP (not silently changed) ──────────────────────────────
@@ -24,6 +24,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   FlatList,
+  Image,
   ScrollView,
   StyleSheet,
   Text,
@@ -107,7 +108,10 @@ function profileForHost(host, firstMsg) {
   };
 }
 
-const Avatar = React.memo(function Avatar({ name, color, size = 44 }) {
+const Avatar = React.memo(function Avatar({ name, color, size = 44, photo }) {
+  if (photo) {
+    return <Image source={photo} style={{ width: size, height: size, borderRadius: size / 2 }} />;
+  }
   return (
     <View style={[styles.avatar, { backgroundColor: color, width: size, height: size, borderRadius: size / 2 }]}>
       <Text style={[styles.avatarText, { fontSize: size * 0.42 }]}>{name ? name[0] : '?'}</Text>
@@ -187,7 +191,7 @@ export default function MessagesScreen({ navigation }) {
 
   const renderChatRow = ({ item }) => (
     <TouchableOpacity style={styles.row} onPress={() => openChat(profileForChat(item))}>
-      <Avatar name={item.name} color={item.color} />
+      <Avatar name={item.name} color={item.color} photo={item.photo} />
       <View style={styles.msgBody}>
         <Text style={styles.name}>{item.name}</Text>
         <Text style={styles.text} numberOfLines={1}>{item.last}</Text>
@@ -208,7 +212,7 @@ export default function MessagesScreen({ navigation }) {
       style={styles.row}
       onPress={() => showToast(`${item.name}-এর কল হিস্ট্রি (প্রিভিউ)`)}
     >
-      <Avatar name={item.name} color={item.color} />
+      <Avatar name={item.name} color={item.color} photo={item.photo} />
       <View style={styles.msgBody}>
         <Text style={styles.name}>{item.name}</Text>
         <Text style={styles.text} numberOfLines={1}>{item.last}</Text>
@@ -226,7 +230,7 @@ export default function MessagesScreen({ navigation }) {
       onPress={() => openChat(profileForHost(item.host, item.text))}
     >
       <View>
-        <Avatar name={item.host.name} color={item.host.color || '#7c3aed'} />
+        <Avatar name={item.host.name} color={item.host.color || '#7c3aed'} photo={item.host.photo} />
         <View style={styles.onlineDot} />
       </View>
       <View style={styles.msgBody}>
@@ -335,7 +339,7 @@ export default function MessagesScreen({ navigation }) {
                 onPress={() => navigation.navigate('VideoCall', { host: h })}
               >
                 <View>
-                  <Avatar name={h.name} color={h.color || '#7c3aed'} size={44} />
+                  <Avatar name={h.name} color={h.color || '#7c3aed'} size={44} photo={h.photo} />
                   <View style={styles.onlineDot} />
                 </View>
                 <Text style={styles.onlineName} numberOfLines={1}>{h.name}</Text>
@@ -426,7 +430,7 @@ export default function MessagesScreen({ navigation }) {
           removeClippedSubviews maxToRenderPerBatch={10} windowSize={8} initialNumToRender={10} updateCellsBatchingPeriod={50} getItemLayout={msgLayout}
           renderItem={({ item }) => (
             <TouchableOpacity style={styles.row} onPress={() => openChat(profileForHost(item, 'Hi!'))}>
-              <Avatar name={item.name} color={item.color || '#7c3aed'} />
+              <Avatar name={item.name} color={item.color || '#7c3aed'} photo={item.photo} />
               <View style={styles.msgBody}>
                 <Text style={styles.name}>{item.name}</Text>
                 <Text style={styles.text} numberOfLines={1}>ID: {item.id} · {item.lang}</Text>
