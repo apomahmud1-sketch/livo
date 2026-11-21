@@ -40,6 +40,7 @@ function MainTabs() {
         headerShown: false,
         tabBarActiveTintColor: COLORS.green, // [Ref] green active tab, like the reference
         tabBarInactiveTintColor: COLORS.grey,
+        tabBarStyle: { height: 60 },
       }}
     >
       <Tab.Screen name="HomeTab" component={HomeScreen} options={{ tabBarLabel: 'Home', tabBarIcon: () => <Text>🏠</Text> }} />
@@ -93,8 +94,8 @@ export default function App() {
 
 const styles = StyleSheet.create({
   // Centre "Live" button — raised lime-green circle, like the reference.
-  liveBtn: { alignItems: 'center', backgroundColor: '#a3e635', borderRadius: 28, height: 56, justifyContent: 'center', marginTop: -18, width: 56 },
-  liveBtnText: { fontSize: 24 },
+  liveBtn: { alignItems: 'center', backgroundColor: '#a3e635', borderRadius: 26, height: 52, justifyContent: 'center', marginTop: -10, width: 52 },
+  liveBtnText: { fontSize: 22 },
   toast: {
     backgroundColor: 'rgba(0,0,0,0.85)',
     borderRadius: 20,
