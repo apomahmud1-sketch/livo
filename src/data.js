@@ -7,12 +7,12 @@
 // These coordinates are DEMO city coordinates (Dhaka / Delhi /
 // Karachi / Mumbai), NOT live host GPS. [/F3]
 export const HOSTS = [
-  { id: '1', name: 'Ruma', country: 'BGD', flag: '🇧🇩', lang: 'Bengali', level: 6, rateTier: 'tier2', color: '#f472b6', online: true, status: 'Online now — video call 💬', gender: 'female', lat: 23.8103, lng: 90.4125 }, // [F3] Dhaka [/F3]
-  { id: '2', name: 'Nusrat', country: 'IND', flag: '🇮🇳', lang: 'English', level: 5, rateTier: 'tier3', color: '#a78bfa', online: true, status: 'Online now — chatting 🎤', gender: 'female', lat: 28.6139, lng: 77.2090 }, // [F3] Delhi [/F3]
-  { id: '3', name: 'Arif', country: 'BGD', flag: '🇧🇩', lang: 'Bengali', level: 4, rateTier: 'tier1', color: '#60a5fa', online: true, status: 'Online now — say hi 👋', gender: 'male', lat: 23.8103, lng: 90.4125 }, // [F3] Dhaka [/F3]
-  { id: '4', name: 'Sadia', country: 'PAK', flag: '🇵🇰', lang: 'English', level: 7, rateTier: 'tier4', color: '#fbbf24', online: true, status: 'Online now — video call 💛', gender: 'female', lat: 24.8607, lng: 67.0011 }, // [F3] Karachi [/F3]
-  { id: '5', name: 'Rakib', country: 'BGD', flag: '🇧🇩', lang: 'Bengali', level: 3, rateTier: 'tier1', color: '#34d399', online: false, status: 'Offline — back soon', gender: 'male', lat: 23.8103, lng: 90.4125 }, // [F3] Dhaka [/F3]
-  { id: '6', name: 'Priya', country: 'IND', flag: '🇮🇳', lang: 'English', level: 5, rateTier: 'tier5', color: '#fb7185', online: true, status: 'Online now — premium call 👑', gender: 'female', lat: 19.0760, lng: 72.8777 }, // [F3] Mumbai [/F3]
+  { id: '1', name: 'Ruma', country: 'BGD', flag: '🇧🇩', lang: 'Bengali', level: 6, rateTier: 'tier2', color: '#f472b6', photo: require('../assets/host-ruma.jpg'), online: true, status: 'Online now — video call 💬', gender: 'female', lat: 23.8103, lng: 90.4125 }, // [F3] Dhaka [/F3]
+  { id: '2', name: 'Nusrat', country: 'IND', flag: '🇮🇳', lang: 'English', level: 5, rateTier: 'tier3', color: '#a78bfa', photo: require('../assets/host-nusrat.jpg'), online: true, status: 'Online now — chatting 🎤', gender: 'female', lat: 28.6139, lng: 77.2090 }, // [F3] Delhi [/F3]
+  { id: '3', name: 'Arif', country: 'BGD', flag: '🇧🇩', lang: 'Bengali', level: 4, rateTier: 'tier1', color: '#60a5fa', photo: require('../assets/host-arif.jpg'), online: true, status: 'Online now — say hi 👋', gender: 'male', lat: 23.8103, lng: 90.4125 }, // [F3] Dhaka [/F3]
+  { id: '4', name: 'Sadia', country: 'PAK', flag: '🇵🇰', lang: 'English', level: 7, rateTier: 'tier4', color: '#fbbf24', photo: require('../assets/host-sadia.jpg'), online: true, status: 'Online now — video call 💛', gender: 'female', lat: 24.8607, lng: 67.0011 }, // [F3] Karachi [/F3]
+  { id: '5', name: 'Rakib', country: 'BGD', flag: '🇧🇩', lang: 'Bengali', level: 3, rateTier: 'tier1', color: '#34d399', photo: require('../assets/host-rakib.jpg'), online: false, status: 'Offline — back soon', gender: 'male', lat: 23.8103, lng: 90.4125 }, // [F3] Dhaka [/F3]
+  { id: '6', name: 'Priya', country: 'IND', flag: '🇮🇳', lang: 'English', level: 5, rateTier: 'tier5', color: '#fb7185', photo: require('../assets/host-priya.jpg'), online: true, status: 'Online now — premium call 👑', gender: 'female', lat: 19.0760, lng: 72.8777 }, // [F3] Mumbai [/F3]
 ];
 
 export const MESSAGES = [
