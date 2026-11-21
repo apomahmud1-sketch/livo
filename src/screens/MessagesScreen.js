@@ -1,28 +1,18 @@
-// Livo MessagesScreen — v2 (2026-11-19)
-// Rebuilt from the web preview's Messages demo (livo-home-preview v24,
-// section #msgSection): top tabs Message / Notice / Contacts, a row of
-// round photos of online hosts, then Chat / Say hi (badge) / Call tabs,
-// and a chat list with name, last message, time and unread red badge.
-// Tapping any chat opens the ChatDetail screen (ChatDetailScreen.js).
-//
-// ── WIRING ─────────────────────────────────────────────────────────
-// The online-host row and the Contacts list read the LIVE host list
-// from the shared store (useApp hosts), so the Host Dashboard's
-// Online/Offline switch really adds/removes hosts here too. Tapping
-// an online host opens the live room (VideoCallScreen), as before.
-// ── DEMO DATA (Supabase replaces this later) ──────────────────────
-// The Chat / Call lists use the preview's demo names (Sadiya Moni,
-// bvG8K, qSOgr, Em Em, LULA, Rifda) with coloured initial avatars —
-// host photos now live in assets (host-ruma/sadia/rakib/priya/arif/nusrat.jpg);
-// the top row, Say hi and Contacts show them. Say hi greetings, chat profiles,
-// replies and the Customer service answers are the preview's demo
-// content. Nothing here spends real coins or tickets yet.
-// ── FOLLOW-UP (not silently changed) ──────────────────────────────
-// ChatDetail's Follow button is local state here; the store's
-// following list is used only when the chat opened from a store host.
+// Livo MessagesScreen — v3 (2026-11-21)
+// Restyled to the v0 Home design (~/workspace/v0-design/SPEC.md):
+// mint #f0fdf4 background, Stream/Follow-style top tabs (18px,
+// selected #111713 + green #72d679 underline, inactive #959b97),
+// sub-tabs in the same style, red #f04f4b badges, green online dots
+// (#31bc63 + glow) on real host photos, lucide icons everywhere
+// (no emoji). All behaviour, demo data and wording unchanged.
+// ── ANDROID BACK (2026-11-21) ────────────────────────────────────
+// The Customer Service view is rendered by state (csOpen), not by a
+// route, so the native stack cannot pop it: a focus-effect
+// BackHandler closes it first when it is open.
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  BackHandler,
   FlatList,
   Image,
   ScrollView,
@@ -32,6 +22,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { Bell, ChevronLeft, Headphones, RotateCw, Send, Video } from 'lucide-react-native';
 import { COLORS } from '../config';
 import { useApp } from '../store';
 
@@ -128,6 +120,19 @@ export default function MessagesScreen({ navigation }) {
   const [csMsgs, setCsMsgs] = useState([{ id: 'cs0', me: false, text: 'hello, what can i help you' }]);
   const [csText, setCsText] = useState('');
 
+  // ── Android back: the Customer Service view is state, not a
+  // route — close it first instead of leaving the Messages tab.
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!csOpen) return undefined;
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        setCsOpen(false);
+        return true;
+      });
+      return () => sub.remove();
+    }, [csOpen]),
+  );
+
   // ── Say hi feed: seeded from online hosts, badge = feed length ──
   const [sayhiFeed, setSayhiFeed] = useState(() => {
     const online = hosts.filter((h) => h.online);
@@ -219,7 +224,7 @@ export default function MessagesScreen({ navigation }) {
       </View>
       <View style={styles.rowRight}>
         <Text style={styles.time}>{item.time}</Text>
-        <Text style={styles.callIcon}>📹</Text>
+        <Video size={18} color="#9aa39c" style={styles.callIcon} />
       </View>
     </TouchableOpacity>
   );
@@ -258,10 +263,10 @@ export default function MessagesScreen({ navigation }) {
       <View style={styles.bg}>
         <View style={styles.csHead}>
           <TouchableOpacity onPress={() => setCsOpen(false)}>
-            <Text style={styles.backBtn}>‹</Text>
+            <ChevronLeft size={26} color="#111713" />
           </TouchableOpacity>
           <View style={[styles.avatar, { backgroundColor: '#db2777', width: 40, height: 40, borderRadius: 20 }]}>
-            <Text style={styles.avatarText}>🎧</Text>
+            <Headphones size={20} color="#fff" />
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.csTitle}>Customer service</Text>
@@ -302,7 +307,7 @@ export default function MessagesScreen({ navigation }) {
               setCsText('');
             }}
           >
-            <Text style={styles.sendText}>➤</Text>
+            <Send size={18} color="#fff" />
           </TouchableOpacity>
         </View>
       </View>
@@ -311,7 +316,7 @@ export default function MessagesScreen({ navigation }) {
 
   return (
     <View style={styles.bg}>
-      {/* Top tabs: Message / Notice / Contacts */}
+      {/* Top tabs: Message / Notice / Contacts — Home Stream/Follow style */}
       <View style={styles.topTabs}>
         {[
           { id: 'message', label: 'Message' },
@@ -320,10 +325,11 @@ export default function MessagesScreen({ navigation }) {
         ].map((t) => (
           <TouchableOpacity
             key={t.id}
-            style={[styles.topTab, topTab === t.id && styles.topTabActive]}
+            style={styles.topTab}
             onPress={() => setTopTab(t.id)}
           >
             <Text style={[styles.topTabText, topTab === t.id && styles.topTabTextActive]}>{t.label}</Text>
+            {topTab === t.id ? <View style={styles.tabUnderline} /> : null}
           </TouchableOpacity>
         ))}
       </View>
@@ -347,7 +353,7 @@ export default function MessagesScreen({ navigation }) {
             ))}
           </ScrollView>
 
-          {/* Sub tabs: Chat / Say hi / Call */}
+          {/* Sub tabs: Chat / Say hi / Call — same style as the top tabs */}
           <View style={styles.subTabs}>
             {[
               { id: 'chat', label: 'Chat' },
@@ -356,13 +362,14 @@ export default function MessagesScreen({ navigation }) {
             ].map((t) => (
               <TouchableOpacity
                 key={t.id}
-                style={[styles.subTab, subTab === t.id && styles.subTabActive]}
+                style={styles.subTab}
                 onPress={() => setSubTab(t.id)}
               >
                 <Text style={[styles.subTabText, subTab === t.id && styles.subTabTextActive]}>
                   {t.label}
                   {t.badge ? <Text style={styles.sayhiBadge}> {t.badge}</Text> : null}
                 </Text>
+                {subTab === t.id ? <View style={styles.tabUnderline} /> : null}
               </TouchableOpacity>
             ))}
           </View>
@@ -382,7 +389,8 @@ export default function MessagesScreen({ navigation }) {
                   if (h) showToast(`${h.name}-এর কাছ থেকে নতুন Say hi এসেছে`);
                 }}
               >
-                <Text style={styles.newHiBtnText}>↻ নতুন Say hi দেখো</Text>
+                <RotateCw size={14} color="#20a64b" />
+                <Text style={styles.newHiBtnText}> নতুন Say hi দেখো</Text>
               </TouchableOpacity>
               <FlatList data={sayhiFeed} keyExtractor={(m) => m.id} renderItem={renderSayHiRow} removeClippedSubviews maxToRenderPerBatch={10} windowSize={8} initialNumToRender={10} updateCellsBatchingPeriod={50} getItemLayout={msgLayout} />
             </>
@@ -397,7 +405,7 @@ export default function MessagesScreen({ navigation }) {
             onPress={() => showToast('System message: Task completed! Rewards have been credited automatically')}
           >
             <View style={[styles.avatar, { backgroundColor: '#f1eafd' }]}>
-              <Text style={styles.avatarText}>🔔</Text>
+              <Bell size={20} color="#7c3aed" />
             </View>
             <View style={styles.msgBody}>
               <Text style={styles.name}>System message</Text>
@@ -412,7 +420,7 @@ export default function MessagesScreen({ navigation }) {
           </TouchableOpacity>
           <TouchableOpacity style={styles.row} onPress={() => setCsOpen(true)}>
             <View style={[styles.avatar, { backgroundColor: '#fde7f1' }]}>
-              <Text style={styles.avatarText}>🎧</Text>
+              <Headphones size={20} color="#db2777" />
             </View>
             <View style={styles.msgBody}>
               <Text style={styles.name}>Customer service</Text>
@@ -449,52 +457,49 @@ export default function MessagesScreen({ navigation }) {
 const styles = StyleSheet.create({
   avatar: { alignItems: 'center', borderRadius: 22, height: 44, justifyContent: 'center', width: 44 },
   avatarText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
-  backBtn: { color: COLORS.dark, fontSize: 28, fontWeight: 'bold', paddingHorizontal: 8 },
-  bg: { backgroundColor: '#fff', flex: 1, paddingTop: 36 },
-  callIcon: { fontSize: 18, marginTop: 4 },
+  bg: { backgroundColor: '#f0fdf4', flex: 1, paddingTop: 36 },
+  callIcon: { marginTop: 4 },
   chipsRow: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 12, paddingVertical: 6 },
-  chip: { backgroundColor: COLORS.lavender, borderRadius: 16, margin: 4, paddingHorizontal: 12, paddingVertical: 7 },
-  chipText: { color: COLORS.purple, fontSize: 13, fontWeight: '600' },
-  composer: { flexDirection: 'row', padding: 12 },
+  chip: { backgroundColor: '#fff', borderColor: '#e9eeea', borderRadius: 16, borderWidth: 1, margin: 4, paddingHorizontal: 12, paddingVertical: 7 },
+  chipText: { color: '#20a64b', fontSize: 13, fontWeight: '600' },
+  composer: { alignItems: 'center', flexDirection: 'row', padding: 12 },
   csBubble: { borderRadius: 14, marginHorizontal: 14, marginVertical: 4, maxWidth: '80%', paddingHorizontal: 12, paddingVertical: 9 },
-  csBubbleMe: { alignSelf: 'flex-end', backgroundColor: COLORS.purple },
-  csBubbleMeText: { color: '#fff' },
-  csBubbleText: { color: COLORS.dark },
-  csBubbleThem: { alignSelf: 'flex-start', backgroundColor: '#f1f5f9' },
-  csHead: { alignItems: 'center', borderBottomColor: COLORS.lightGrey, borderBottomWidth: 1, flexDirection: 'row', paddingBottom: 10, paddingHorizontal: 8 },
+  csBubbleMe: { alignSelf: 'flex-end', backgroundColor: '#dcfce7' },
+  csBubbleMeText: { color: '#111713' },
+  csBubbleText: { color: '#111713' },
+  csBubbleThem: { alignSelf: 'flex-start', backgroundColor: '#fff', borderColor: '#e9eeea', borderWidth: 1 },
+  csHead: { alignItems: 'center', borderBottomColor: '#e9eeea', borderBottomWidth: 1, flexDirection: 'row', paddingBottom: 10, paddingHorizontal: 8 },
   csMsgs: { flex: 1, paddingTop: 10 },
-  csSub: { color: COLORS.grey, fontSize: 12 },
-  csTitle: { fontSize: 17, fontWeight: 'bold' },
-  idChip: { color: COLORS.grey, fontSize: 12, fontWeight: 'normal' },
-  input: { backgroundColor: COLORS.lavender, borderRadius: 20, flex: 1, paddingHorizontal: 14, paddingVertical: 10 },
+  csSub: { color: '#818b84', fontSize: 12 },
+  csTitle: { color: '#111713', fontSize: 17, fontWeight: '800' },
+  idChip: { color: '#818b84', fontSize: 12, fontWeight: 'normal' },
+  input: { backgroundColor: '#fff', borderColor: '#e9eeea', borderRadius: 20, borderWidth: 1, flex: 1, paddingHorizontal: 14, paddingVertical: 10 },
   msgBody: { flex: 1, marginLeft: 10 },
-  name: { fontSize: 15, fontWeight: 'bold' },
-  newChip: { backgroundColor: COLORS.green, borderRadius: 8, color: '#fff', fontSize: 11, fontWeight: 'bold', overflow: 'hidden', paddingHorizontal: 6 },
-  newHiBtn: { alignSelf: 'center', backgroundColor: COLORS.lavender, borderRadius: 20, marginVertical: 8, paddingHorizontal: 16, paddingVertical: 9 },
-  newHiBtnText: { color: COLORS.purple, fontWeight: 'bold' },
-  onlineDot: { backgroundColor: COLORS.green, borderColor: '#fff', borderRadius: 6, borderWidth: 2, bottom: 2, height: 12, position: 'absolute', right: 2, width: 12 },
+  name: { color: '#1a211c', fontSize: 15, fontWeight: '800' },
+  newChip: { backgroundColor: '#20a64b', borderRadius: 8, color: '#fff', fontSize: 11, fontWeight: 'bold', overflow: 'hidden', paddingHorizontal: 6 },
+  newHiBtn: { alignItems: 'center', alignSelf: 'center', backgroundColor: '#fff', borderColor: '#e9eeea', borderRadius: 20, borderWidth: 1, flexDirection: 'row', marginVertical: 8, paddingHorizontal: 16, paddingVertical: 9 },
+  newHiBtnText: { color: '#20a64b', fontWeight: 'bold' },
+  onlineDot: { backgroundColor: '#31bc63', borderColor: '#fff', borderRadius: 6, borderWidth: 2, bottom: 2, elevation: 3, height: 12, position: 'absolute', right: 2, shadowColor: '#31bc63', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 4, width: 12 },
   onlineItem: { alignItems: 'center', marginHorizontal: 6, width: 52 },
-  onlineName: { color: COLORS.dark, fontSize: 11, marginTop: 4 },
+  onlineName: { color: '#273029', fontSize: 11, marginTop: 4 },
   onlineRow: { flexGrow: 0, paddingVertical: 8 },
-  row: { alignItems: 'center', borderBottomColor: COLORS.lightGrey, borderBottomWidth: 1, flexDirection: 'row', paddingHorizontal: 14, paddingVertical: 10 },
+  row: { alignItems: 'center', borderBottomColor: '#e9eeea', borderBottomWidth: 1, flexDirection: 'row', paddingHorizontal: 14, paddingVertical: 10 },
   rowRight: { alignItems: 'flex-end' },
-  sayhiBadge: { backgroundColor: COLORS.pink, borderRadius: 9, color: '#fff', fontSize: 12, fontWeight: 'bold', overflow: 'hidden', paddingHorizontal: 6 },
-  sayHiBtn: { backgroundColor: COLORS.pink, borderRadius: 14, marginTop: 4, paddingHorizontal: 10, paddingVertical: 3 },
+  sayhiBadge: { backgroundColor: '#f04f4b', borderRadius: 9, color: '#fff', fontSize: 8, fontWeight: '800', overflow: 'hidden', paddingHorizontal: 6 },
+  sayHiBtn: { backgroundColor: '#20a64b', borderRadius: 14, marginTop: 4, paddingHorizontal: 10, paddingVertical: 3 },
   sayHiBtnText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
-  send: { backgroundColor: COLORS.purple, borderRadius: 20, justifyContent: 'center', marginLeft: 8, paddingHorizontal: 16 },
-  sendText: { color: '#fff', fontWeight: 'bold' },
-  subTab: { borderBottomColor: 'transparent', borderBottomWidth: 2, paddingBottom: 6, paddingHorizontal: 12 },
-  subTabActive: { borderBottomColor: COLORS.pink },
-  subTabText: { color: COLORS.grey, fontSize: 13, fontWeight: '600' },
-  subTabTextActive: { color: COLORS.dark },
-  subTabs: { borderBottomColor: COLORS.lightGrey, borderBottomWidth: 1, flexDirection: 'row', paddingHorizontal: 8 },
-  text: { color: COLORS.grey, fontSize: 13, marginTop: 2 },
-  time: { color: COLORS.grey, fontSize: 11 },
-  topTab: { borderBottomColor: 'transparent', borderBottomWidth: 2, flex: 1, paddingBottom: 8, paddingTop: 4 },
-  topTabActive: { borderBottomColor: COLORS.purple },
-  topTabText: { color: COLORS.grey, fontSize: 14, fontWeight: '600', textAlign: 'center' },
-  topTabTextActive: { color: COLORS.purple },
-  topTabs: { borderBottomColor: COLORS.lightGrey, borderBottomWidth: 1, flexDirection: 'row', paddingHorizontal: 8 },
-  unreadBadge: { backgroundColor: '#ef4444', borderRadius: 10, marginTop: 4, minWidth: 18, paddingHorizontal: 6, paddingVertical: 1 },
-  unreadText: { color: '#fff', fontSize: 11, fontWeight: 'bold', textAlign: 'center' },
+  send: { alignItems: 'center', backgroundColor: '#20a64b', borderRadius: 20, justifyContent: 'center', marginLeft: 8, paddingHorizontal: 14, paddingVertical: 10 },
+  subTab: { paddingBottom: 8, paddingHorizontal: 12, paddingTop: 4, position: 'relative' },
+  subTabText: { color: '#959b97', fontSize: 16, fontWeight: '600' },
+  subTabTextActive: { color: '#111713', fontWeight: '800' },
+  subTabs: { borderBottomColor: '#e9eeea', borderBottomWidth: 1, flexDirection: 'row', paddingHorizontal: 8 },
+  tabUnderline: { backgroundColor: '#72d679', borderRadius: 3, bottom: 5, height: 3, left: 2, position: 'absolute', right: 2 },
+  text: { color: '#818b84', fontSize: 13, marginTop: 2 },
+  time: { color: '#a0aaa2', fontSize: 11 },
+  topTab: { alignItems: 'center', flex: 1, paddingBottom: 10, paddingTop: 4, position: 'relative' },
+  topTabText: { color: '#959b97', fontSize: 18, fontWeight: '600', textAlign: 'center' },
+  topTabTextActive: { color: '#111713', fontWeight: '800' },
+  topTabs: { borderBottomColor: '#e9eeea', borderBottomWidth: 1, flexDirection: 'row', paddingHorizontal: 8 },
+  unreadBadge: { alignItems: 'center', backgroundColor: '#f04f4b', borderRadius: 7, height: 14, justifyContent: 'center', marginTop: 4, minWidth: 14, paddingHorizontal: 4 },
+  unreadText: { color: '#fff', fontSize: 8, fontWeight: '800', textAlign: 'center' },
 });
