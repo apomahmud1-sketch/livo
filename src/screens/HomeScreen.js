@@ -50,7 +50,7 @@
 //    userCountry 'SGP' is a context value (store.js) that should
 //    come from the real profile/backend later. [/F3]
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { FlatList, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS } from '../config';
 import { useApp } from '../store';
@@ -83,7 +83,11 @@ const HostCard = React.memo(function HostCard({ host, viewers, distanceLabel, na
       onPress={() => navigation.navigate('VideoCall', { host })}
     >
       <LinearGradient colors={[host.color, '#7c3aed']} style={styles.photo}>
-        <Text style={styles.avatar}>{host.name[0]}</Text>
+        {host.photo ? (
+          <Image source={host.photo} style={styles.photoImg} />
+        ) : (
+          <Text style={styles.avatar}>{host.name[0]}</Text>
+        )}
         {host.online ? (
           <View style={styles.liveBadge}>
             <Text style={styles.liveText}>● LIVE</Text>
@@ -190,9 +194,13 @@ export default function HomeScreen({ navigation }) {
   const renderStory = ({ item }) => (
     <TouchableOpacity style={styles.story} activeOpacity={0.8} onPress={() => navigation.navigate('VideoCall', { host: item })}>
       <View style={[styles.storyRing, item.online ? styles.storyRingLive : styles.storyRingOff]}>
-        <View style={[styles.storyAvatarBg, { backgroundColor: item.color }]}>
-          <Text style={styles.storyAvatar}>{item.name[0]}</Text>
-        </View>
+        {item.photo ? (
+          <Image source={item.photo} style={styles.storyAvatarImg} />
+        ) : (
+          <View style={[styles.storyAvatarBg, { backgroundColor: item.color }]}>
+            <Text style={styles.storyAvatar}>{item.name[0]}</Text>
+          </View>
+        )}
       </View>
       <Text style={styles.storyName} numberOfLines={1}>{item.name}</Text>
     </TouchableOpacity>
@@ -429,6 +437,7 @@ const styles = StyleSheet.create({
   name: { color: '#fff', fontSize: 15, fontWeight: 'bold', textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 5 },
   offlineBadge: { backgroundColor: 'rgba(0,0,0,0.55)' },
   photo: { alignItems: 'center', height: 170, justifyContent: 'center', overflow: 'hidden' },
+  photoImg: { height: '100%', position: 'absolute', width: '100%' },
   row: { justifyContent: 'space-between' },
   // [F1] Rewards banner styles.
   rewardsBanner: { backgroundColor: COLORS.purple, borderRadius: 12, marginHorizontal: 16, marginTop: 12, paddingHorizontal: 14, paddingVertical: 10 },
@@ -449,6 +458,7 @@ const styles = StyleSheet.create({
   storyRingOff: { borderColor: COLORS.lightGrey },
   storyAvatarBg: { alignItems: 'center', borderRadius: 27, height: 54, justifyContent: 'center', width: 54 },
   storyAvatar: { color: '#fff', fontSize: 22, fontWeight: 'bold' },
+  storyAvatarImg: { borderRadius: 27, height: 54, width: 54 },
   storyName: { fontSize: 11, marginTop: 4, textAlign: 'center' },
   // [/Vero]
   tabs: { flexDirection: 'row', marginTop: 14, paddingHorizontal: 16 },
