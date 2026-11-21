@@ -6,7 +6,7 @@
 // store (buyVip) and is saved on the device.
 import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { COLORS, VIP_PACKS } from '../config';
+import { COLORS } from '../config';
 import { useApp } from '../store';
 import VipFrame from '../components/VipFrame'; // [Vero] animated VIP avatar frame
 
@@ -27,7 +27,7 @@ const PRIVILEGES = [
 ];
 
 export default function VIPScreen() {
-  const { vipLevel, buyVip } = useApp();
+  const { vipLevel, buyVip, vipPacks } = useApp();
   return (
     <ScrollView style={styles.bg} contentContainerStyle={styles.wrap}>
       <Text style={styles.title}>👑 Premium</Text>
@@ -65,7 +65,9 @@ export default function VIPScreen() {
       ))}
 
       <Text style={styles.sectionTitle}>Buy Premium</Text>
-      {VIP_PACKS.map((p) => (
+      {/* [Live] Buy packs come from the store (live Supabase rows
+          when the setup SQL is pasted, config.js demo packs otherwise). */}
+      {vipPacks.map((p) => (
         <View key={p.id} style={styles.card}>
           <Text style={styles.name}>{p.name} · {p.days} days</Text>
           <Text style={styles.price}>{p.price}</Text>
