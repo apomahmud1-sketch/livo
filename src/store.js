@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { COIN_TO_DIAMOND_RATE, PLATFORM_COMMISSION_PERCENT, getVoiceCallRate } from './config';
+import { CALL_RATES, COIN_PACKS, COIN_TO_DIAMOND_RATE, GIFTS, PLATFORM_COMMISSION_PERCENT, VIP_PACKS, VOICE_RATE_DIVISOR, getVoiceCallRate } from './config';
+import { fetchLiveCatalog, fetchLiveHosts } from './supabase/live';
 import { HOSTS } from './data';
 
 // Simple in-app state (demo). Supabase + the admin panel replace this
@@ -64,6 +65,64 @@ export function AppProvider({ children }) {
   // Dashboard changes a host's online state and call-rate tier here,
   // so Home re-renders with the change. Supabase replaces this later.
   const [hosts, setHosts] = useState(HOSTS);
+  // [Live] Catalog values from Supabase (null = not loaded / failed
+  // → the config.js demo defaults below are used instead). Each
+  // table is applied independently, so a missing gifts table never
+  // blocks the call rates. liveSource is 'supabase' once ANY live
+  // data was applied, otherwise 'demo'.
+  const [liveCallRates, setLiveCallRates] = useState(null);
+  const [liveCoinPacks, setLiveCoinPacks] = useState(null);
+  const [liveGifts, setLiveGifts] = useState(null);
+  const [liveVipPacks, setLiveVipPacks] = useState(null);
+  const [liveSource, setLiveSource] = useState('demo');
+  // [Live] Load live data once, on start. fetchLive* never throws
+  // and never hangs (5s timeout each, demo fallback inside), so a
+  // dead network or an unpasted setup SQL can never block startup.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [hostsLive, catalog] = await Promise.all([
+          fetchLiveHosts(),
+          fetchLiveCatalog(),
+        ]);
+        if (cancelled) return;
+        let usedLive = false;
+        if (hostsLive && hostsLive.length > 0) {
+          setHosts(hostsLive);
+          usedLive = true;
+        }
+        if (catalog) {
+          if (catalog.callRates) { setLiveCallRates(catalog.callRates); usedLive = true; }
+          if (catalog.coinPacks) { setLiveCoinPacks(catalog.coinPacks); usedLive = true; }
+          if (catalog.gifts) { setLiveGifts(catalog.gifts); usedLive = true; }
+          if (catalog.vipPacks) { setLiveVipPacks(catalog.vipPacks); usedLive = true; }
+        }
+        if (usedLive) setLiveSource('supabase');
+      } catch (e) { /* never break startup — demo data stays */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  // [Live] Resolved catalog: live rows when loaded, config demo
+  // defaults otherwise. Screens read these, never config.js directly.
+  const callRates = liveCallRates || CALL_RATES;
+  const coinPacks = liveCoinPacks || COIN_PACKS;
+  const gifts = liveGifts || GIFTS;
+  const vipPacks = liveVipPacks || VIP_PACKS;
+  // [Live] Rate lookups against the resolved (live or demo) tiers.
+  // Same shapes as config.js getCallRate / getVoiceCallRate.
+  const getLiveCallRate = (tierId) =>
+    callRates.find((r) => r.id === tierId) || callRates[1] || CALL_RATES[1];
+  const getLiveVoiceCallRate = (tierId) => {
+    const video = getLiveCallRate(tierId);
+    const coinsPerMinute = Math.floor(video.coinsPerMinute / VOICE_RATE_DIVISOR);
+    return {
+      id: video.id,
+      name: `${video.name} (Voice)`,
+      coinsPerMinute,
+      label: `${coinsPerMinute} coins/min (voice)`,
+    };
+  };
   // [F3] The user's home country, used by the Nearby tab for
   // country-based proximity (same-country hosts first). Grounded in
   // ProfileScreen.js Location 'SGP-Singapore' for Mr.lee. This is a
@@ -197,8 +256,12 @@ export function AppProvider({ children }) {
 
   const value = useMemo(
     // [F1] Reward state + actions exposed to RewardsScreen.
-    () => ({ coins, diamonds, earnings, following, toggleFollow, sendGift, recharge, buyDiamonds, chargeCall, chargeVoiceCall, callHistory, toast, showToast, hosts, setHostOnline, setHostRate, userCountry /* [F3] */, addRewardCoins, recordSpin, recordCheckin, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, claimTask, vipLevel, buyVip /* [Vero] */ }),
-    [coins, diamonds, earnings, following, callHistory, toast, hosts, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, vipLevel]
+    // [Live] callRates/coinPacks/gifts/vipPacks are the resolved live
+    // (Supabase) or demo (config.js) catalog; getLiveCallRate /
+    // getLiveVoiceCallRate look tiers up in them; liveSource tells
+    // screens where the data came from ('demo' | 'supabase').
+    () => ({ coins, diamonds, earnings, following, toggleFollow, sendGift, recharge, buyDiamonds, chargeCall, chargeVoiceCall, callHistory, toast, showToast, hosts, setHostOnline, setHostRate, userCountry /* [F3] */, addRewardCoins, recordSpin, recordCheckin, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, claimTask, vipLevel, buyVip /* [Vero] */, callRates, coinPacks, gifts, vipPacks, getLiveCallRate, getLiveVoiceCallRate, liveSource /* [Live] */ }),
+    [coins, diamonds, earnings, following, callHistory, toast, hosts, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, vipLevel, callRates, coinPacks, gifts, vipPacks, liveSource]
     // [/F1]
   );
 
