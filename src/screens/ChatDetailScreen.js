@@ -1,11 +1,11 @@
-// Livo ChatDetailScreen — v2 (2026-11-19)
-// The chat screen that opens from any Chat / Say hi / Contacts row
-// (preview livo-home-preview v24, #msgSection → .cd-view): host name +
-// green online dot on top, a profile card (level badge, Follow button,
-// country, age, Real badge, language, photos), the host's message
-// bubble with Translation settings, the "Spend x1 to unlock chat"
-// line, a Say something box + Send, and translate / photo / video
-// (Free) / gift icons at the bottom.
+// Livo ChatDetailScreen — v3 (2026-11-21)
+// Restyled to the v0 Home design (~/workspace/v0-design/SPEC.md):
+// mint #f0fdf4 background, white profile card with soft shadow,
+// green #20a64b Follow button and Send button, white incoming
+// bubbles / light-green #dcfce7 outgoing bubbles, lucide icons
+// everywhere (no emoji). All behaviour, demo data and wording
+// unchanged — except the unlock line's 🎫, which is now a lucide
+// Ticket icon (same words).
 //
 // ── BEHAVIOUR (from the preview) ───────────────────────────────────
 // The first message sent spends ticket x1 and unlocks the chat (the
@@ -39,6 +39,21 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import {
+  Check,
+  ChevronLeft,
+  Coins,
+  Gift,
+  Globe,
+  Heart,
+  Image as ImageIcon,
+  MapPin,
+  MoreHorizontal,
+  Phone,
+  Smile,
+  Ticket,
+  Video,
+} from 'lucide-react-native';
 import { COLORS, getVoiceCallRate } from '../config'; // [F2] getVoiceCallRate added
 import { useApp } from '../store';
 // [F4] Auto-translation helper + the user's profile language
@@ -97,7 +112,7 @@ export default function ChatDetailScreen({ navigation, route }) {
 
   const startVoiceCall = () => {
     if (!chatHost) {
-      showToast('ভয়েস কল লাইভ হোস্টদের জন্য — Home থেকে হোস্টের কার্ডে 📞 চাপুন');
+      showToast('ভয়েস কল শুধু লাইভ হোস্টদের জন্য');
       return;
     }
     if (!chatHost.online) {
@@ -231,7 +246,7 @@ export default function ChatDetailScreen({ navigation, route }) {
       {/* Header: back, unread badge, name + online dot, more */}
       <View style={styles.head}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backBtn}>‹</Text>
+          <ChevronLeft size={28} color="#111713" />
         </TouchableOpacity>
         {profile.unread > 0 ? (
           <View style={styles.unreadBadge}>
@@ -241,7 +256,7 @@ export default function ChatDetailScreen({ navigation, route }) {
         <Text style={styles.title}>{profile.name}</Text>
         <View style={styles.onlineDot} />
         <TouchableOpacity onPress={() => showToast('রিপোর্ট / ব্লক অপশন (প্রিভিউ)')}>
-          <Text style={styles.moreBtn}>•••</Text>
+          <MoreHorizontal size={24} color="#111713" />
         </TouchableOpacity>
       </View>
 
@@ -255,7 +270,8 @@ export default function ChatDetailScreen({ navigation, route }) {
           <View style={styles.cardTop}>
             <Text style={styles.cardName}>{profile.name}</Text>
             <View style={styles.lvBadge}>
-              <Text style={styles.lvText}>♥ {profile.lv}</Text>
+              <Heart size={11} color="#fff" fill="#fff" />
+              <Text style={styles.lvText}> {profile.lv}</Text>
             </View>
             <TouchableOpacity
               style={[styles.followBtn, isFollowing && styles.followBtnOn]}
@@ -267,9 +283,15 @@ export default function ChatDetailScreen({ navigation, route }) {
             </TouchableOpacity>
           </View>
           <View style={styles.metaRow}>
-            <Text style={styles.meta}>📍 {profile.country}</Text>
-            <Text style={styles.meta}>♀ {profile.age}</Text>
-            <Text style={styles.meta}>✓ Real</Text>
+            <View style={styles.metaItem}>
+              <MapPin size={13} color="#273029" />
+              <Text style={styles.meta}> {profile.country}</Text>
+            </View>
+            <Text style={styles.meta}>{profile.age}</Text>
+            <View style={styles.metaItem}>
+              <Check size={13} color="#20a64b" strokeWidth={3} />
+              <Text style={styles.meta}> Real</Text>
+            </View>
           </View>
           <Text style={styles.lang}>{profile.lang}</Text>
           <View style={styles.photosRow}>
@@ -328,15 +350,18 @@ export default function ChatDetailScreen({ navigation, route }) {
 
       {/* Unlock line — hidden after the first message unlocks the chat */}
       {!unlocked && (
-        <Text style={styles.unlock}>
-          Spend 🎫 <Text style={styles.unlockX1}>x1</Text> to unlock chat with her. No reply in 30 mins? Auto refund.
-        </Text>
+        <View style={styles.unlockRow}>
+          <Ticket size={15} color="#111713" />
+          <Text style={styles.unlock}>
+            {' '}Spend <Text style={styles.unlockX1}>x1</Text> to unlock chat with her. No reply in 30 mins? Auto refund.
+          </Text>
+        </View>
       )}
 
       {/* Composer */}
       <View style={styles.inputBar}>
         <TouchableOpacity onPress={() => showToast('ইমোজি প্যানেল খুলবে (প্রিভিউ)')}>
-          <Text style={styles.emojiBtn}>😊</Text>
+          <Smile size={24} color="#9aa39c" />
         </TouchableOpacity>
         <TextInput
           style={styles.input}
@@ -352,37 +377,42 @@ export default function ChatDetailScreen({ navigation, route }) {
 
       {/* Bottom actions */}
       <View style={styles.actions}>
-        {/* [F4] 🌐 toggles chat auto-translation (was a preview toast).
+        {/* [F4] Globe toggles chat auto-translation (was a preview toast).
             Highlighted while ON. */}
         <TouchableOpacity
           style={[styles.act, translateOn && styles.actOn]}
           onPress={toggleTranslate}
         >
-          <Text style={styles.actIcon}>🌐</Text>
+          <Globe size={26} color={translateOn ? '#20a64b' : '#9aa39c'} />
         </TouchableOpacity>
         {/* [/F4] */}
         <TouchableOpacity
           style={styles.act}
           onPress={() => showToast(unlocked ? 'ছবি বাছাই খুলবে (প্রিভিউ)' : 'ছবি পাঠাতে আগে চ্যাট আনলক করো')}
         >
-          <Text style={styles.actIcon}>🖼️</Text>
+          <ImageIcon size={26} color="#9aa39c" />
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.act}
           onPress={() => showToast('Free ভিডিও কল শুরু হচ্ছে… (প্রিভিউ)')}
         >
           <Text style={styles.freeBadge}>Free</Text>
-          <Text style={styles.actIcon}>📹</Text>
+          <Video size={26} color="#9aa39c" />
         </TouchableOpacity>
         {/* [F2] Voice call: audio-only, half the video rate (rate
             shown above the icon when the host is known). */}
         <TouchableOpacity style={styles.act} onPress={startVoiceCall}>
-          {voiceRate && <Text style={styles.voiceRate}>🪙 {voiceRate.coinsPerMinute}/min</Text>}
-          <Text style={styles.actIcon}>📞</Text>
+          {voiceRate && (
+            <View style={styles.voiceRateRow}>
+              <Coins size={11} color="#20a64b" />
+              <Text style={styles.voiceRate}> {voiceRate.coinsPerMinute}/min</Text>
+            </View>
+          )}
+          <Phone size={26} color="#9aa39c" />
         </TouchableOpacity>
         {/* [/F2] */}
         <TouchableOpacity style={styles.act} onPress={() => showToast('গিফট প্যানেল খুলবে (প্রিভিউ)')}>
-          <Text style={styles.actIcon}>🎁</Text>
+          <Gift size={26} color="#9aa39c" />
         </TouchableOpacity>
       </View>
     </View>
@@ -390,60 +420,59 @@ export default function ChatDetailScreen({ navigation, route }) {
 }
 
 const styles = StyleSheet.create({
-  actions: { borderTopColor: COLORS.lightGrey, borderTopWidth: 1, flexDirection: 'row', justifyContent: 'space-around', paddingVertical: 10 },
+  actions: { borderTopColor: '#e9eeea', borderTopWidth: 1, flexDirection: 'row', justifyContent: 'space-around', paddingVertical: 10 },
   act: { alignItems: 'center', minWidth: 56 },
-  // [F4] Highlight on the 🌐 button while auto-translate is ON.
-  actOn: { backgroundColor: '#ede9fe', borderRadius: 12 },
+  // [F4] Highlight on the Globe button while auto-translate is ON.
+  actOn: { backgroundColor: '#dcfce7', borderRadius: 12 },
   // [F4] Original text shown small under a translated message.
-  origText: { color: COLORS.grey, fontSize: 12, fontStyle: 'italic', marginTop: 4 },
-  translatingNote: { color: COLORS.grey, fontSize: 11, marginTop: 4 },
+  origText: { color: '#818b84', fontSize: 12, fontStyle: 'italic', marginTop: 4 },
+  translatingNote: { color: '#818b84', fontSize: 11, marginTop: 4 },
   // [/F4]
-  actIcon: { fontSize: 26 },
-  backBtn: { color: COLORS.dark, fontSize: 32, fontWeight: 'bold', paddingHorizontal: 8 },
-  bg: { backgroundColor: '#fff', flex: 1, paddingTop: 48 },
+  bg: { backgroundColor: '#f0fdf4', flex: 1, paddingTop: 48 },
   body: { flex: 1, paddingHorizontal: 14 },
   bubble: { borderRadius: 14, maxWidth: 260, paddingHorizontal: 12, paddingVertical: 9 },
-  bubbleMe: { backgroundColor: COLORS.purple },
-  bubbleMeText: { color: '#fff' },
-  bubbleText: { color: COLORS.dark },
-  bubbleThem: { backgroundColor: '#f1f5f9' },
-  card: { backgroundColor: '#fdf4ff', borderRadius: 16, marginTop: 10, padding: 14 },
-  cardName: { fontSize: 18, fontWeight: 'bold' },
+  bubbleMe: { backgroundColor: '#dcfce7' },
+  bubbleMeText: { color: '#111713' },
+  bubbleText: { color: '#111713' },
+  bubbleThem: { backgroundColor: '#fff', borderColor: '#e9eeea', borderWidth: 1 },
+  card: { backgroundColor: '#fff', borderRadius: 16, elevation: 2, marginTop: 10, padding: 14, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
+  cardName: { color: '#111713', fontSize: 18, fontWeight: '800' },
   cardTop: { alignItems: 'center', flexDirection: 'row' },
-  empty: { color: COLORS.grey, marginTop: 40, textAlign: 'center' },
-  emojiBtn: { fontSize: 24, paddingHorizontal: 6 },
-  followBtn: { backgroundColor: COLORS.pink, borderRadius: 14, marginLeft: 'auto', paddingHorizontal: 14, paddingVertical: 6 },
-  followBtnOn: { backgroundColor: COLORS.lightGrey },
+  empty: { color: '#818b84', marginTop: 40, textAlign: 'center' },
+  followBtn: { backgroundColor: '#20a64b', borderRadius: 14, marginLeft: 'auto', paddingHorizontal: 14, paddingVertical: 6 },
+  followBtnOn: { backgroundColor: '#e9eeea' },
   followText: { color: '#fff', fontWeight: 'bold' },
-  followTextOn: { color: COLORS.dark },
-  freeBadge: { color: COLORS.green, fontSize: 11, fontWeight: 'bold' },
-  head: { alignItems: 'center', borderBottomColor: COLORS.lightGrey, borderBottomWidth: 1, flexDirection: 'row', paddingBottom: 10, paddingHorizontal: 8 },
-  input: { backgroundColor: COLORS.lavender, borderRadius: 20, flex: 1, paddingHorizontal: 14, paddingVertical: 10 },
+  followTextOn: { color: '#273029' },
+  freeBadge: { color: '#20a64b', fontSize: 11, fontWeight: 'bold' },
+  head: { alignItems: 'center', borderBottomColor: '#e9eeea', borderBottomWidth: 1, flexDirection: 'row', paddingBottom: 10, paddingHorizontal: 8 },
+  input: { backgroundColor: '#fff', borderColor: '#e9eeea', borderRadius: 20, borderWidth: 1, flex: 1, marginLeft: 6, paddingHorizontal: 14, paddingVertical: 10 },
   inputBar: { alignItems: 'center', flexDirection: 'row', padding: 12 },
-  lang: { color: COLORS.purple, fontWeight: '600', marginTop: 8 },
-  lvBadge: { backgroundColor: COLORS.pink, borderRadius: 10, marginLeft: 8, paddingHorizontal: 8, paddingVertical: 2 },
+  lang: { color: '#20a64b', fontWeight: '600', marginTop: 8 },
+  lvBadge: { alignItems: 'center', backgroundColor: COLORS.pink, borderRadius: 10, flexDirection: 'row', marginLeft: 8, paddingHorizontal: 8, paddingVertical: 2 },
   lvText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
-  meta: { color: COLORS.dark, marginRight: 12 },
-  metaRow: { flexDirection: 'row', marginTop: 8 },
+  meta: { color: '#273029' },
+  metaItem: { alignItems: 'center', flexDirection: 'row', marginRight: 12 },
+  metaRow: { alignItems: 'center', flexDirection: 'row', marginTop: 8 },
   miniAva: { alignItems: 'center', borderRadius: 16, height: 32, justifyContent: 'center', marginRight: 8, width: 32 },
   miniAvaText: { color: '#fff', fontWeight: 'bold' },
-  moreBtn: { color: COLORS.dark, fontSize: 20, fontWeight: 'bold', paddingHorizontal: 8 },
   msgRow: { alignItems: 'flex-start', flexDirection: 'row', marginVertical: 4 },
   msgRowMe: { alignItems: 'flex-end', flexDirection: 'row', justifyContent: 'flex-end', marginVertical: 4 },
-  onlineDot: { backgroundColor: COLORS.green, borderRadius: 5, height: 10, marginLeft: 6, width: 10 },
+  onlineDot: { backgroundColor: '#31bc63', borderRadius: 5, elevation: 2, height: 10, marginLeft: 6, shadowColor: '#31bc63', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 3, width: 10 },
   photoLetter: { color: '#fff', fontSize: 32, fontWeight: 'bold' },
   photoTile: { alignItems: 'center', borderRadius: 12, height: 110, justifyContent: 'center', marginRight: 10, width: 110 },
   photosRow: { flexDirection: 'row', marginTop: 10 },
-  sendBtn: { backgroundColor: COLORS.purple, borderRadius: 18, marginLeft: 8, paddingHorizontal: 16, paddingVertical: 10 },
+  sendBtn: { backgroundColor: '#20a64b', borderRadius: 18, marginLeft: 8, paddingHorizontal: 16, paddingVertical: 10 },
   sendText: { color: '#fff', fontWeight: 'bold' },
-  time: { color: COLORS.grey, fontSize: 12, marginVertical: 8, textAlign: 'center' },
-  title: { fontSize: 18, fontWeight: 'bold', marginLeft: 4 },
-  translateLink: { color: COLORS.purple, fontSize: 12, marginTop: 4 },
-  unlock: { fontSize: 14, fontWeight: '700', lineHeight: 21, paddingHorizontal: 16, paddingTop: 10 },
-  unlockX1: { color: '#e021c8' },
-  // [F2] Voice-call rate label above the 📞 button.
-  voiceRate: { color: COLORS.purple, fontSize: 11, fontWeight: 'bold' },
+  time: { color: '#a0aaa2', fontSize: 12, marginVertical: 8, textAlign: 'center' },
+  title: { color: '#111713', fontSize: 18, fontWeight: '800', marginLeft: 4 },
+  translateLink: { color: '#20a64b', fontSize: 12, marginTop: 4 },
+  unlock: { color: '#111713', flex: 1, fontSize: 14, fontWeight: '700', lineHeight: 21 },
+  unlockRow: { alignItems: 'flex-start', flexDirection: 'row', paddingHorizontal: 16, paddingTop: 10 },
+  unlockX1: { color: '#20a64b' },
+  // [F2] Voice-call rate label above the Phone button.
+  voiceRate: { color: '#20a64b', fontSize: 11, fontWeight: 'bold' },
+  voiceRateRow: { alignItems: 'center', flexDirection: 'row' },
   // [/F2]
-  unreadBadge: { backgroundColor: '#ef4444', borderRadius: 10, marginLeft: 4, minWidth: 20, paddingHorizontal: 6, paddingVertical: 2 },
-  unreadText: { color: '#fff', fontSize: 12, fontWeight: 'bold', textAlign: 'center' },
+  unreadBadge: { alignItems: 'center', backgroundColor: '#f04f4b', borderRadius: 7, height: 14, justifyContent: 'center', marginLeft: 4, minWidth: 14, paddingHorizontal: 4 },
+  unreadText: { color: '#fff', fontSize: 8, fontWeight: '800', textAlign: 'center' },
 });
