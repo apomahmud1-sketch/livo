@@ -1,8 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Dimensions, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Dimensions, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { COLORS } from '../config';
+import { COLORS, PLATFORM_COMMISSION_PERCENT } from '../config';
 import { useApp } from '../store';
+import { supabase } from '../supabase/client';
+import { joinLiveRoom, leaveLiveRoom } from '../supabase/presence';
+// [Calls] Real signalling over Supabase Realtime (src/calls/signalling.js):
+// the caller inserts a ringing calls row on Accept; the callee's app
+// (listening via useIncomingCallListener at the app root) navigates
+// here with { callId, isCallee, caller }; Accept/Decline/End update
+// the row and the other side sees it through its subscription.
+import {
+  acceptCall,
+  buildChannelName,
+  declineCall,
+  endCallRecord,
+  placeCall,
+  subscribeToCallUpdates,
+} from '../calls/signalling';
 // [F5] Full-screen gift animation for expensive gifts (price >= 1000 coins)
 import FullScreenGift from '../components/FullScreenGift';
 import { PROFILE } from './profile/levelData';
@@ -37,14 +52,32 @@ import { VOICE_PRESETS, applyVoicePreset, getVoicePresetLabel, resetVoicePreset 
 // The host opens the call with asHost: true (Host Dashboard
 // Go Live + Imran Accept); Home cards open it as the viewer.
 // Real video: <LiveVideo> joins the Agora channel
-// `livo-call-<hostId>` when the call is accepted. The mic,
-// camera-switch and beauty buttons below call the real Agora
-// engine (mute / switchCamera / beauty filter). The token comes
-// from EXPO_PUBLIC_AGORA_TOKEN (Temp Token for testing) or the
-// token prop — see src/agora/LiveVideo.js.
+// `livo-call-<hostId>` when the call is accepted, fetching a fresh
+// token from the token server first (EXPO_PUBLIC_AGORA_TOKEN_SERVER_URL,
+// dev fallback EXPO_PUBLIC_AGORA_TOKEN) — see src/agora/LiveVideo.js.
+// Signalling: the caller inserts a ringing row in the calls table
+// on Accept (placeCall); the callee arrives here via
+// useIncomingCallListener with { callId, isCallee, caller } and the
+// incoming screen shows the REAL caller. Accept/Decline/End update
+// the row (acceptCall / declineCall / endCallRecord) and the other
+// side sees it through its Realtime subscription. No push exists:
+// the callee only rings while their app is open.
 // ─────────────────────────────────────────────────────────────────
 export default function VideoCallScreen({ route, navigation }) {
-  const { host, asHost, audioOnly } = route.params || {}; // [F2] audioOnly added
+  const { host, asHost, audioOnly: audioOnlyParam, callId: incomingCallId, callType, isCallee, caller } = route.params || {}; // [F2] audioOnly added; [Calls] callId/isCallee/caller for real invites
+  // Voice invites (callType 'voice') render the audio-only screen,
+  // exactly like the audioOnly param from ChatDetail.
+  const audioOnly = audioOnlyParam || callType === 'voice';
+  // The calls row for this call (placed on Accept, or the invite
+  // row when answering). Null = local-only call (demo host or not
+  // signed in) — the call still works, it just has no signalling.
+  const callIdRef = useRef(incomingCallId || null);
+  const callUnsubRef = useRef(null);
+  const roomChannelRef = useRef(null);
+  useEffect(() => () => {
+    if (callUnsubRef.current) callUnsubRef.current();
+    if (roomChannelRef.current) leaveLiveRoom(roomChannelRef.current);
+  }, []);
   const { coins, chargeCall, sendGift, showToast, vipLevel, gifts, getLiveCallRate, getLiveVoiceCallRate } = useApp();
   // [Live] Rates + gifts come from the store (live Supabase rows
   // when the setup SQL is pasted, config.js demo values otherwise).
@@ -82,6 +115,38 @@ export default function VideoCallScreen({ route, navigation }) {
     return () => clearInterval(timerRef.current);
   }, [stage]);
 
+  // [Presence] Join the live-room presence channel when the call
+  // connects, so the host's viewer count is real (see
+  // src/supabase/presence.js). Leaves on unmount / endCall.
+  useEffect(() => {
+    if (stage !== 'calling') return undefined;
+    let cancelled = false;
+    (async () => {
+      let viewer = { id: undefined, name: 'Guest' };
+      try {
+        const { data } = await supabase.auth.getUser();
+        const u = data && data.user;
+        if (u) {
+          viewer = {
+            id: u.id,
+            name: (u.user_metadata && (u.user_metadata.full_name || u.user_metadata.name)) || u.email || 'Guest',
+          };
+        }
+      } catch (e) {
+        // Anonymous viewer — presence still counts the join.
+      }
+      if (cancelled) return;
+      roomChannelRef.current = joinLiveRoom(host && host.id, viewer);
+    })();
+    return () => {
+      cancelled = true;
+      if (roomChannelRef.current) {
+        leaveLiveRoom(roomChannelRef.current);
+        roomChannelRef.current = null;
+      }
+    };
+  }, [stage, host]);
+
   if (!host) {
     return (
       <View style={styles.center}>
@@ -97,7 +162,7 @@ export default function VideoCallScreen({ route, navigation }) {
   const ss = String(seconds % 60).padStart(2, '0');
   const liveCost = Math.ceil(seconds / 60) * rate.coinsPerMinute;
 
-  const accept = () => {
+  const accept = async () => {
     // Voice calls bill at the half-price voice rate, video at the
     // full tier rate — the Accept gate uses the right one.
     const perMinute = audioOnly
@@ -107,18 +172,77 @@ export default function VideoCallScreen({ route, navigation }) {
       showToast('Not enough coins for 1 minute — please recharge first.');
       return;
     }
+    if (isCallee && callIdRef.current) {
+      // Answering a real invite: mark the row accepted so the
+      // caller knows (their subscription fires). A failure here
+      // must not block the call itself — still join the channel.
+      acceptCall(callIdRef.current).catch(() => {});
+    } else if (!asHost && !callIdRef.current) {
+      // Outgoing call: ring the host. The invite row is placed
+      // NOW (on Accept, not on screen open) so a caller who backs
+      // out of the incoming screen never rings anyone. Null when
+      // there is no signed-in user or no DB host row (demo host):
+      // the call then proceeds local-only, as before.
+      try {
+        const row = await placeCall({
+          host,
+          callType: audioOnly ? 'voice' : 'video',
+          ratePerMinute: perMinute,
+        });
+        if (row) {
+          callIdRef.current = row.id;
+          callUnsubRef.current = subscribeToCallUpdates(row.id, (updated) => {
+            if (updated.status === 'declined') {
+              showToast('Call declined');
+              navigation.goBack();
+            } else if (updated.status === 'ended') {
+              navigation.goBack();
+            }
+          });
+        }
+      } catch (e) {
+        // Signalling failure never blocks the call itself.
+      }
+    }
     setStage('calling');
+  };
+
+  // Decline from the incoming screen: for a real invite this marks
+  // the row declined so the caller sees it at once.
+  const decline = () => {
+    if (isCallee && callIdRef.current) {
+      declineCall(callIdRef.current).catch(() => {});
+    }
+    navigation.goBack();
   };
 
   const endCall = () => {
     clearInterval(timerRef.current);
+    if (callUnsubRef.current) callUnsubRef.current();
     // [F7] The Agora engine is a shared singleton — reset the voice
     // so the effect does not leak into the next call.
     resetVoicePreset(getAgoraEngine());
     // [/F7]
     leaveAgoraChannel();
+    if (roomChannelRef.current) {
+      leaveLiveRoom(roomChannelRef.current);
+      roomChannelRef.current = null;
+    }
     const minutes = Math.max(1, Math.ceil(seconds / 60));
-    chargeCall(host, minutes, rate.coinsPerMinute);
+    const cost = chargeCall(host, minutes, rate.coinsPerMinute);
+    // Record the finished call on the signalling row (billing
+    // already happened in the store above). Host share = cost
+    // after the platform commission, in diamonds.
+    if (callIdRef.current && typeof cost === 'number') {
+      const hostShare = Math.round((cost * (100 - PLATFORM_COMMISSION_PERCENT)) / 100);
+      endCallRecord(callIdRef.current, {
+        durationSeconds: seconds,
+        billedMinutes: minutes,
+        costCoins: cost,
+        hostEarningsDiamonds: hostShare,
+      }).catch(() => {});
+      callIdRef.current = null;
+    }
     // No call summary for anyone (user 2026-11-18): the host sees
     // the earnings in the Host Dashboard. Just go back.
     showToast('কল শেষ হয়েছে');
@@ -150,7 +274,7 @@ export default function VideoCallScreen({ route, navigation }) {
   // Castle 9999 — everything at or below Diamond Ring (999) is cheap.
   const EXPENSIVE_GIFT_MIN_COINS = 1000;
   const handleSendGift = (gift) => {
-    if (!sendGift(gift)) return; // not enough coins — toast already shown
+    if (!sendGift(gift, host)) return; // not enough coins — toast already shown
     if (gift.price >= EXPENSIVE_GIFT_MIN_COINS) {
       setBigGift(gift);
     }
@@ -175,12 +299,22 @@ export default function VideoCallScreen({ route, navigation }) {
   // [/F7]
 
   if (stage === 'incoming') {
+    // Real invite (isCallee): the caller is the person on this
+    // screen — their real photo + name from profiles. Outgoing
+    // (local) calls keep showing the host, as before. Photo, name
+    // and Accept / Decline only — no rate line, no extra text.
+    const incomingName = (isCallee && caller && caller.name) || host.name;
+    const incomingPhoto = (isCallee && caller && caller.photo) || null;
     return (
       <LinearGradient colors={[COLORS.purpleDark, COLORS.purple, COLORS.pink]} style={styles.center}>
-        <Text style={styles.avatarBig}>{host.name[0]}</Text>
-        <Text style={styles.title}>{host.name}</Text>
+        {incomingPhoto ? (
+          <Image source={incomingPhoto} style={styles.avatarImg} />
+        ) : (
+          <Text style={styles.avatarBig}>{incomingName ? incomingName[0] : '?'}</Text>
+        )}
+        <Text style={styles.title}>{incomingName}</Text>
         <View style={styles.row}>
-          <TouchableOpacity style={[styles.btn, styles.btnDecline]} onPress={() => navigation.goBack()}>
+          <TouchableOpacity style={[styles.btn, styles.btnDecline]} onPress={decline}>
             <Text style={styles.btnText}>✕ Decline</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.btn, styles.btnAccept]} onPress={accept}>
@@ -203,7 +337,7 @@ export default function VideoCallScreen({ route, navigation }) {
   // calling
   return (
     <View style={styles.callBg}>
-      <LiveVideo channel={`livo-call-${host.id}`} role="host" style={styles.video} />
+      <LiveVideo channel={buildChannelName(host.id)} role="host" style={styles.video} />
       <Text style={styles.timer}>{mm}:{ss} · 🪙 {liveCost} coins</Text>
       <Text style={styles.callName}>{host.name} · {rate.label}</Text>
       {vipLevel && (
@@ -277,6 +411,8 @@ export default function VideoCallScreen({ route, navigation }) {
 
 const styles = StyleSheet.create({
   avatarBig: { backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 60, color: '#fff', fontSize: 64, fontWeight: 'bold', height: 120, lineHeight: 120, overflow: 'hidden', textAlign: 'center', width: 120 },
+  // [Calls] Real caller photo on the incoming screen (from profiles).
+  avatarImg: { borderRadius: 60, height: 120, width: 120 },
   btn: { backgroundColor: COLORS.purple, borderRadius: 24, marginTop: 16, paddingHorizontal: 24, paddingVertical: 12 },
   btnAccept: { backgroundColor: COLORS.green, marginLeft: 12 },
   btnDecline: { backgroundColor: '#ef4444' },
