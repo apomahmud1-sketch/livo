@@ -2,16 +2,34 @@ import React, { useState } from 'react';
 import { Alert, ImageBackground, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS } from '../config';
+import { signInWithGoogle } from '../supabase/auth';
 
-export default function LoginScreen({ navigation }) {
+// Real login: Google (Gmail) via Supabase Auth. On success the App.js
+// auth gate switches to Main automatically — this screen never
+// navigates itself. (The old fake goHome() that just jumped to Main
+// is gone.)
+export default function LoginScreen() {
   const [agreed, setAgreed] = useState(true);
+  const [busy, setBusy] = useState(false);
 
-  const goHome = () => {
+  const signIn = async () => {
     if (!agreed) {
       Alert.alert('Please agree first', 'Tick "Agree to User Agreement & Privacy Policy and confirm I\'m over 18" to continue.');
       return;
     }
-    navigation.replace('Main');
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { error } = await signInWithGoogle();
+      if (error) {
+        // The user closing the Google sheet is not an error to shout about.
+        if (error.message !== 'Google sign-in was cancelled.') {
+          Alert.alert('Google sign-in failed', error.message);
+        }
+      }
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -22,8 +40,8 @@ export default function LoginScreen({ navigation }) {
         <Text style={styles.subtitle}>Premium 1-to-1 video calls</Text>
 
         <View style={styles.bottom}>
-          <TouchableOpacity style={[styles.btn, styles.btnPink]} onPress={goHome}>
-            <Text style={styles.btnWhiteText}>G Google</Text>
+          <TouchableOpacity style={[styles.btn, styles.btnPink, busy && styles.btnDisabled]} onPress={signIn} disabled={busy}>
+            <Text style={styles.btnWhiteText}>{busy ? 'Signing in…' : 'G Google'}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.agreeRow} onPress={() => setAgreed(!agreed)}>
@@ -47,6 +65,7 @@ const styles = StyleSheet.create({
   bottom: { marginTop: 'auto' },
   btn: { alignItems: 'center', borderRadius: 30, marginTop: 12, paddingVertical: 15 },
   btnPink: { backgroundColor: '#ec4899' },
+  btnDisabled: { opacity: 0.65 },
   btnWhiteText: { color: '#fff', fontSize: 17, fontWeight: 'bold' },
   check: { color: '#fff', fontWeight: 'bold' },
   checkbox: { alignItems: 'center', borderColor: '#fff', borderRadius: 4, borderWidth: 2, height: 22, justifyContent: 'center', marginRight: 10, width: 22 },
