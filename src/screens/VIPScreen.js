@@ -1,9 +1,11 @@
 // Livo VIPScreen — Vero-style Premium.
 // Shows the VIP level ladder (Baron → Legend, prices in coins,
 // from vip-config.json), the 10 privilege effects, and the 3
-// dollar packs to buy. Buying is demo for now (no real payment
-// yet — same pattern as Wallet); the active level lives in the
-// store (buyVip) and is saved on the device.
+// dollar packs to buy. Buying is REAL now (2026-11-22): buyVip
+// opens the Google Play sheet and the purchase listener sets
+// vip_until + vip_level on the signed-in user's profiles row.
+// Until the VIP products exist in Play Console the Buy buttons
+// explain that instead of charging anything.
 import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { COLORS } from '../config';
@@ -27,11 +29,15 @@ const PRIVILEGES = [
 ];
 
 export default function VIPScreen() {
-  const { vipLevel, buyVip, vipPacks } = useApp();
+  const { vipLevel, vipUntil, buyVip, vipPacks, signedIn, iapStatus } = useApp();
   return (
     <ScrollView style={styles.bg} contentContainerStyle={styles.wrap}>
       <Text style={styles.title}>👑 Premium</Text>
       <Text style={styles.sub}>VIP titles, frames, gifts and effects — 30 days.</Text>
+
+      {!signedIn ? (
+        <Text style={styles.signinNote}>Please sign in to buy Premium — your VIP stays on your account.</Text>
+      ) : null}
 
       <Text style={styles.sectionTitle}>Privilege Effects</Text>
       <View style={styles.perkGrid}>
@@ -67,16 +73,28 @@ export default function VIPScreen() {
       <Text style={styles.sectionTitle}>Buy Premium</Text>
       {/* [Live] Buy packs come from the store (live Supabase rows
           when the setup SQL is pasted, config.js demo packs otherwise). */}
-      {vipPacks.map((p) => (
-        <View key={p.id} style={styles.card}>
-          <Text style={styles.name}>{p.name} · {p.days} days</Text>
-          <Text style={styles.price}>{p.price}</Text>
-          <TouchableOpacity style={styles.btn} onPress={() => buyVip(p)}>
-            <Text style={styles.btnText}>{vipLevel === p.id ? '✓ Active' : 'Buy Premium'}</Text>
-          </TouchableOpacity>
-        </View>
-      ))}
-      <Text style={styles.note}>VIP packages and prices are set by the admin panel. Purchase is demo — no real payment yet.</Text>
+      {vipPacks.map((p) => {
+        const active = vipLevel === p.id;
+        return (
+          <View key={p.id} style={styles.card}>
+            <Text style={styles.name}>{p.name} · {p.days} days</Text>
+            <Text style={styles.price}>{p.price}</Text>
+            {active && vipUntil ? (
+              <Text style={styles.activeUntil}>Active until {new Date(vipUntil).toLocaleDateString()}</Text>
+            ) : null}
+            <TouchableOpacity style={styles.btn} onPress={() => buyVip(p)}>
+              <Text style={styles.btnText}>{active ? '✓ Active' : 'Buy Premium'}</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      })}
+      <Text style={styles.note}>
+        {iapStatus === 'no-products'
+          ? 'Premium purchases open in Google Play once the VIP products are created in Play Console.'
+          : iapStatus === 'ready'
+            ? 'Secure purchase via Google Play — Premium activates on your account for 30 days.'
+            : 'VIP packages and prices are set by the admin panel.'}
+      </Text>
     </ScrollView>
   );
 }
@@ -98,6 +116,8 @@ const styles = StyleSheet.create({
   perkGrid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 8 },
   perkText: { color: '#fff', fontSize: 13, fontWeight: 'bold' },
   // [Vero] VIP frame preview.
+  activeUntil: { color: '#a7f3d0', fontSize: 12, marginTop: 4 },
+  signinNote: { color: '#fbbf24', fontSize: 13, marginTop: 12 },
   framePreview: { alignItems: 'center', backgroundColor: '#14532d', borderRadius: 14, marginTop: 8, padding: 16 },
   frameAvatar: { alignItems: 'center', backgroundColor: COLORS.purple, borderRadius: 44, height: 88, justifyContent: 'center', width: 88 },
   frameAvatarText: { color: '#fff', fontSize: 40, fontWeight: 'bold' },
