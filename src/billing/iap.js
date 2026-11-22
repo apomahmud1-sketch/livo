@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────
-// Livo — Google Play billing via react-native-iap v17 (OpenIAP).
+// Livo — Google Play billing via react-native-iap v12 (classic API).
 //
 // Play product IDs are derived from the Supabase catalog ids, so the
 // admin panel stays the source of truth for WHAT is sold; Play
@@ -15,15 +15,23 @@
 // credits the wallet (store.js) and only then is the transaction
 // finished as consumable, so a failed credit is never consumed and
 // is recovered on the next start via getAvailablePurchases().
-// Until the products are created in Play Console, fetchProducts
+// Until the products are created in Play Console, getProducts
 // returns [] and every buy shows the "not set up yet" message —
 // nothing crashes, nothing is charged.
+//
+// NOTE 2026-11-22: v17 (OpenIAP/Nitro) was tried first and REVERTED —
+// it needs a Kotlin 2.2 compiler, which needs Gradle 8.12+, which
+// needs AGP 8.9+, a chain Expo SDK 52 cannot follow. v12 is the
+// classic API (getProducts/requestPurchase with productId) and the
+// store's purchase handler already uses purchase.productId, which
+// is the v12 shape. Do not upgrade to v13+ without checking the
+// Kotlin/Gradle chain first.
 // ─────────────────────────────────────────────────────────────────
 import { Platform } from 'react-native';
 import {
   initConnection,
   endConnection,
-  fetchProducts,
+  getProducts,
   requestPurchase,
   finishTransaction,
   purchaseUpdatedListener,
@@ -64,12 +72,13 @@ let connected = false;
 let listenersAttached = false;
 let purchaseHandler = null; // { onPurchase(purchase) => Promise<bool>, onError(error) }
 let errorHandler = null;
-let foundProducts = []; // Product[] returned by fetchProducts
+let foundProducts = []; // normalised Product[]: { id, productId, price, ... }
 const processedTokens = new Set();
 
 function isUserCancelled(error) {
   if (!error) return false;
-  if (error.code === ErrorCode.UserCancelled) return true;
+  // v12: ErrorCode.E_USER_CANCELLED ('E_USER_CANCELLED').
+  if (error.code === ErrorCode.E_USER_CANCELLED) return true;
   const msg = String(error.message || error.code || '').toLowerCase();
   return msg.includes('cancel');
 }
@@ -135,14 +144,19 @@ export async function initIap(skus) {
     }
     let products = [];
     try {
-      products = await fetchProducts({ skus: wanted, type: 'in-app' });
+      // v12: getProducts({ skus }) — products carry productId.
+      products = await getProducts({ skus: wanted });
     } catch (e) {
       products = [];
     }
-    const foundIds = new Set((products || []).map((p) => p.id));
+    const normalised = (products || []).map((p) => ({
+      ...p,
+      id: p.productId,
+    }));
+    const foundIds = new Set(normalised.map((p) => p.id));
     foundProducts = [
       ...foundProducts.filter((p) => !foundIds.has(p.id)),
-      ...(products || []),
+      ...normalised,
     ];
     return {
       ok: true,
@@ -189,10 +203,11 @@ export async function buySku(sku) {
   if (!connected) return { ok: false, error: 'not-connected' };
   if (!isSkuAvailable(sku)) return { ok: false, error: 'product-not-found' };
   try {
+    // v12: Android takes { skus: [] }, iOS takes { sku }.
     if (Platform.OS === 'ios') {
-      await requestPurchase({ request: { apple: { sku } }, type: 'in-app' });
+      await requestPurchase({ sku });
     } else {
-      await requestPurchase({ request: { google: { skus: [sku] } }, type: 'in-app' });
+      await requestPurchase({ skus: [sku] });
     }
     return { ok: true };
   } catch (e) {
