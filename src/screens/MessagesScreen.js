@@ -1,17 +1,30 @@
-// Livo MessagesScreen — v3 (2026-11-21)
+// Livo MessagesScreen — v4 (2026-11-22)
 // Restyled to the v0 Home design (~/workspace/v0-design/SPEC.md):
 // mint #f0fdf4 background, Stream/Follow-style top tabs (18px,
 // selected #111713 + green #72d679 underline, inactive #959b97),
 // sub-tabs in the same style, red #f04f4b badges, green online dots
 // (#31bc63 + glow) on real host photos, lucide icons everywhere
-// (no emoji). All behaviour, demo data and wording unchanged.
+// (no emoji).
 // ── ANDROID BACK (2026-11-21) ────────────────────────────────────
 // The Customer Service view is rendered by state (csOpen), not by a
 // route, so the native stack cannot pop it: a focus-effect
 // BackHandler closes it first when it is open.
+// ── REAL CHAT (2026-11-22) ───────────────────────────────────────
+// The Chat list is now the real conversation list from the
+// messages table (latest message per counterpart, newest first) —
+// the hardcoded CHATS and the fake Say-hi entry every 30s are
+// gone. Say Hi is a real action: it sends a real first message
+// ('Hi!') into the messages table, then opens the chat. The Call
+// tab shows an empty state: calls are not recorded in Supabase
+// yet (chargeCall is local store only), so there is no real call
+// history to list. No unread counts exist (no read receipts), so
+// no unread badges are shown on real chats. When there is no
+// Supabase session the Chat list prompts login instead of
+// showing fake chats.
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   BackHandler,
   FlatList,
   Image,
@@ -23,46 +36,21 @@ import {
   View,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { Bell, ChevronLeft, Headphones, RotateCw, Send, Video } from 'lucide-react-native';
+import { Bell, ChevronLeft, Headphones, Send, Video } from 'lucide-react-native';
 import { COLORS } from '../config';
 import { useApp } from '../store';
-
-// ── Demo chat list (preview #msgSection) ───────────────────────────
-const CHATS = [
-  { id: 'c1', name: 'Sadiya Moni', color: '#f472b6', last: 'Hello! আজ লাইভে এসো', time: '2m', unread: 2 },
-  { id: 'c2', name: 'bvG8K', color: '#e021c8', last: 'Thank you so much!', time: '18m', unread: 1 },
-  { id: 'c3', name: 'qSOgr', color: '#38bdf8', last: 'ok, see you in live', time: '1h', unread: 3 },
-  { id: 'c4', name: 'Em Em', color: '#a78bfa', last: 'Hi, কেমন আছো?', time: '2h', unread: 0 },
-  { id: 'c5', name: 'LULA', color: '#fb7185', last: 'Gift পাঠানোর জন্য ধন্যবাদ', time: '3h', unread: 1 },
-  { id: 'c6', name: 'Rifda', color: '#34d399', last: 'Assalamu alaikum', time: '5h', unread: 0 },
-];
-
-// Profile shown inside ChatDetail for each demo chat (preview data).
-export const CHAT_PROFILES = {
-  'Sadiya Moni': { country: 'Pakistan', age: 22, lv: 7, lang: 'English', firstMsg: 'Hello! আজ লাইভে এসো' },
-  bvG8K: { country: 'Bangladesh', age: 19, lv: 2, lang: 'English', firstMsg: 'Are you single?' },
-  qSOgr: { country: 'India', age: 21, lv: 3, lang: 'English', firstMsg: 'ok, see you in live' },
-  'Em Em': { country: 'India', age: 20, lv: 4, lang: 'English', firstMsg: 'Hi, কেমন আছো?' },
-  LULA: { country: 'India', age: 23, lv: 5, lang: 'English', firstMsg: 'Gift পাঠানোর জন্য ধন্যবাদ' },
-  Rifda: { country: 'Bangladesh', age: 21, lv: 6, lang: 'Bengali', firstMsg: 'Assalamu alaikum' },
-};
+// [Live] Real conversations + real first message.
+import {
+  fetchConversations,
+  getCurrentUserId,
+  resolveRecipientProfileId,
+  sendMessage,
+} from '../supabase/chat';
 
 // Fixed row height: 44 avatar + 10 + 10 padding + 1 border = 65.
 // Lets FlatList skip measuring every row while scrolling.
 const ROW_H = 65;
 const msgLayout = (data, index) => ({ length: ROW_H, offset: ROW_H * index, index });
-
-const CALLS = [
-  { id: 'k1', name: 'Sadiya Moni', color: '#f472b6', last: 'Video call · 12 মিনিট', time: '11:20' },
-  { id: 'k2', name: 'bvG8K', color: '#e021c8', last: 'Missed call', time: 'গতকাল' },
-  { id: 'k3', name: 'LULA', color: '#fb7185', last: 'Video call · 5 মিনিট', time: 'গতকাল' },
-];
-
-const HI_TEXTS = [
-  'Hi!', 'Hello!', 'কেমন আছো?', 'আসসালামু আলাইকুম', 'Hey! কেমন আছো?',
-  'হাই! আমার লাইভে এসো', 'Hello! আজ লাইভে আছি', 'Hi, ভালো আছো তো?',
-  'হ্যালো! কথা হবে?', 'Hey there!', 'কেমন আছো? লাইভে এসো',
-];
 
 const CS_TOPICS = [
   'Payment Issue', 'Video Problem', 'Account Issue', 'Report User',
@@ -71,17 +59,34 @@ const CS_TOPICS = [
 
 const COUNTRY_NAMES = { BGD: 'Bangladesh', IND: 'India', PAK: 'Pakistan' };
 
-function profileForChat(chat) {
-  const p = CHAT_PROFILES[chat.name] || {};
+// Relative time for a message timestamp ("2m", "1h", "গতকাল").
+function formatTime(iso) {
+  if (!iso) return '';
+  const t = new Date(iso).getTime();
+  if (!t) return '';
+  const mins = Math.max(0, Math.floor((Date.now() - t) / 60000));
+  if (mins < 1) return 'এখনই';
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'গতকাল';
+  return `${days}d`;
+}
+
+// Profile for ChatDetail from a real conversation row.
+function profileForConversation(conv) {
   return {
-    name: chat.name,
-    country: p.country || 'Bangladesh',
-    age: p.age || 20,
-    lv: p.lv || 1,
-    lang: p.lang || 'English',
-    firstMsg: p.firstMsg || chat.last,
-    unread: chat.unread || 0,
-    color: chat.color,
+    profileId: conv.counterpartId,
+    name: conv.name,
+    country: COUNTRY_NAMES[conv.country] || conv.country || 'Bangladesh',
+    age: '',
+    lv: '',
+    lang: conv.lang || 'English',
+    firstMsg: conv.lastBody,
+    unread: 0,
+    color: '#7c3aed',
+    avatarUrl: conv.avatarUrl,
   };
 }
 
@@ -115,10 +120,41 @@ export default function MessagesScreen({ navigation }) {
   const { hosts, showToast } = useApp();
   const [topTab, setTopTab] = useState('message'); // message | notice | contacts
   const [subTab, setSubTab] = useState('chat'); // chat | sayhi | call
-  const [chats, setChats] = useState(CHATS);
   const [csOpen, setCsOpen] = useState(false);
   const [csMsgs, setCsMsgs] = useState([{ id: 'cs0', me: false, text: 'hello, what can i help you' }]);
   const [csText, setCsText] = useState('');
+
+  // [Live] Real conversation list (messages table). `meId` null +
+  // authChecked means "no session — prompt login, show no chats".
+  const [conversations, setConversations] = useState([]);
+  const [meId, setMeId] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [loadingChats, setLoadingChats] = useState(true);
+  const [sendingHi, setSendingHi] = useState(false);
+
+  const loadConversations = useCallback(async () => {
+    const uid = await getCurrentUserId();
+    setMeId(uid);
+    setAuthChecked(true);
+    if (!uid) {
+      setConversations([]);
+      setLoadingChats(false);
+      return;
+    }
+    const list = await fetchConversations(uid);
+    setConversations(list);
+    setLoadingChats(false);
+  }, []);
+
+  // Reload every time the Messages tab is focused (a chat opened
+  // from here may have added a conversation).
+  useFocusEffect(
+    useCallback(() => {
+      setLoadingChats(true);
+      loadConversations();
+      return undefined;
+    }, [loadConversations]),
+  );
 
   // ── Android back: the Customer Service view is state, not a
   // route — close it first instead of leaving the Messages tab.
@@ -133,52 +169,34 @@ export default function MessagesScreen({ navigation }) {
     }, [csOpen]),
   );
 
-  // ── Say hi feed: seeded from online hosts, badge = feed length ──
-  const [sayhiFeed, setSayhiFeed] = useState(() => {
-    const online = hosts.filter((h) => h.online);
-    const times = ['10m', '32m', '1h', '2h'];
-    return online.slice(0, 4).map((h, i) => ({
-      id: `hi-seed-${h.id}`,
-      host: h,
-      text: HI_TEXTS[Math.floor(Math.random() * HI_TEXTS.length)],
-      time: times[i] || '2h',
-      fresh: false,
-    }));
-  });
-  const feedRef = useRef(sayhiFeed);
-  feedRef.current = sayhiFeed;
-
-  const addSayHi = (auto) => {
-    const online = hosts.filter((h) => h.online);
-    if (!online.length) return null;
-    const h = online[Math.floor(Math.random() * online.length)];
-    const entry = {
-      id: `hi-${Date.now()}`,
-      host: h,
-      text: HI_TEXTS[Math.floor(Math.random() * HI_TEXTS.length)],
-      time: 'এখনই',
-      fresh: true,
-    };
-    setSayhiFeed((f) =>
-      [{ ...entry }, ...f.map((e) => ({ ...e, fresh: false, time: e.time === 'এখনই' ? '1m' : e.time }))].slice(0, 12),
-    );
-    if (auto) showToast(`${h.name} অনলাইনে এসেছে — নতুন Say hi পাঠিয়েছে`);
-    return h;
+  const openChat = (profile) => {
+    navigation.navigate('ChatDetail', { profile });
   };
 
-  // Preview behaviour: a host coming online sends a fresh Say hi
-  // every so often (30s in the preview). Demo only.
-  useEffect(() => {
-    const t = setInterval(() => addSayHi(true), 30000);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const openChat = (profile) => {
-    if (profile.unread) {
-      setChats((cs) => cs.map((c) => (c.name === profile.name ? { ...c, unread: 0 } : c)));
+  // [Live] Say Hi is a real first message in the messages table,
+  // then the chat opens. Needs a signed-in user and a real host
+  // account (resolved via the hosts table).
+  const sendSayHi = async (host) => {
+    if (sendingHi) return;
+    if (!meId) {
+      showToast('Please sign in to say hi');
+      navigation.navigate('Login');
+      return;
     }
-    navigation.navigate('ChatDetail', { profile });
+    setSendingHi(true);
+    const recipientId = await resolveRecipientProfileId({ storeId: host.id });
+    if (!recipientId) {
+      setSendingHi(false);
+      showToast(`${host.name} has no real account yet`);
+      return;
+    }
+    const saved = await sendMessage({ senderId: meId, recipientId, body: 'Hi!' });
+    setSendingHi(false);
+    if (!saved) {
+      showToast('Say hi could not be sent — please try again');
+      return;
+    }
+    openChat({ ...profileForHost(host, 'Hi!'), profileId: recipientId });
   };
 
   const csAsk = (topic) => {
@@ -195,36 +213,14 @@ export default function MessagesScreen({ navigation }) {
   const onlineHosts = hosts.filter((h) => h.online);
 
   const renderChatRow = ({ item }) => (
-    <TouchableOpacity style={styles.row} onPress={() => openChat(profileForChat(item))}>
-      <Avatar name={item.name} color={item.color} photo={item.photo} />
+    <TouchableOpacity style={styles.row} onPress={() => openChat(profileForConversation(item))}>
+      <Avatar name={item.name} color="#7c3aed" photo={item.avatarUrl ? { uri: item.avatarUrl } : null} />
       <View style={styles.msgBody}>
         <Text style={styles.name}>{item.name}</Text>
-        <Text style={styles.text} numberOfLines={1}>{item.last}</Text>
+        <Text style={styles.text} numberOfLines={1}>{item.lastBody}</Text>
       </View>
       <View style={styles.rowRight}>
-        <Text style={styles.time}>{item.time}</Text>
-        {item.unread > 0 ? (
-          <View style={styles.unreadBadge}>
-            <Text style={styles.unreadText}>{item.unread}</Text>
-          </View>
-        ) : null}
-      </View>
-    </TouchableOpacity>
-  );
-
-  const renderCallRow = ({ item }) => (
-    <TouchableOpacity
-      style={styles.row}
-      onPress={() => showToast(`${item.name}-এর কল হিস্ট্রি (প্রিভিউ)`)}
-    >
-      <Avatar name={item.name} color={item.color} photo={item.photo} />
-      <View style={styles.msgBody}>
-        <Text style={styles.name}>{item.name}</Text>
-        <Text style={styles.text} numberOfLines={1}>{item.last}</Text>
-      </View>
-      <View style={styles.rowRight}>
-        <Text style={styles.time}>{item.time}</Text>
-        <Video size={18} color="#9aa39c" style={styles.callIcon} />
+        <Text style={styles.time}>{formatTime(item.lastAt)}</Text>
       </View>
     </TouchableOpacity>
   );
@@ -232,24 +228,22 @@ export default function MessagesScreen({ navigation }) {
   const renderSayHiRow = ({ item }) => (
     <TouchableOpacity
       style={styles.row}
-      onPress={() => openChat(profileForHost(item.host, item.text))}
+      onPress={() => openChat(profileForHost(item, 'Hi!'))}
     >
       <View>
-        <Avatar name={item.host.name} color={item.host.color || '#7c3aed'} photo={item.host.photo} />
+        <Avatar name={item.name} color={item.color || '#7c3aed'} photo={item.photo} />
         <View style={styles.onlineDot} />
       </View>
       <View style={styles.msgBody}>
         <Text style={styles.name}>
-          {item.host.name} <Text style={styles.idChip}>ID: {item.host.id}</Text>
-          {item.fresh ? <Text style={styles.newChip}> নতুন</Text> : null}
+          {item.name} <Text style={styles.idChip}>ID: {item.id}</Text>
         </Text>
-        <Text style={styles.text} numberOfLines={1}>“{item.text}”</Text>
+        <Text style={styles.text} numberOfLines={1}>Say hi to {item.name}</Text>
       </View>
       <View style={styles.rowRight}>
-        <Text style={styles.time}>{item.time}</Text>
         <TouchableOpacity
           style={styles.sayHiBtn}
-          onPress={() => showToast(`${item.host.name}-কে Say hi পাঠানো হয়েছে`)}
+          onPress={() => sendSayHi(item)}
         >
           <Text style={styles.sayHiBtnText}>Say hi</Text>
         </TouchableOpacity>
@@ -335,7 +329,7 @@ export default function MessagesScreen({ navigation }) {
       </View>
 
       {topTab === 'message' && (
-        <>
+        <View style={{ flex: 1 }}>
           {/* Online hosts row — live from the store */}
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.onlineRow}>
             {onlineHosts.map((h) => (
@@ -357,7 +351,7 @@ export default function MessagesScreen({ navigation }) {
           <View style={styles.subTabs}>
             {[
               { id: 'chat', label: 'Chat' },
-              { id: 'sayhi', label: 'Say hi', badge: sayhiFeed.length },
+              { id: 'sayhi', label: 'Say hi' },
               { id: 'call', label: 'Call' },
             ].map((t) => (
               <TouchableOpacity
@@ -367,7 +361,6 @@ export default function MessagesScreen({ navigation }) {
               >
                 <Text style={[styles.subTabText, subTab === t.id && styles.subTabTextActive]}>
                   {t.label}
-                  {t.badge ? <Text style={styles.sayhiBadge}> {t.badge}</Text> : null}
                 </Text>
                 {subTab === t.id ? <View style={styles.tabUnderline} /> : null}
               </TouchableOpacity>
@@ -375,27 +368,38 @@ export default function MessagesScreen({ navigation }) {
           </View>
 
           {subTab === 'chat' && (
-            <FlatList data={chats} keyExtractor={(m) => m.id} renderItem={renderChatRow} removeClippedSubviews maxToRenderPerBatch={10} windowSize={8} initialNumToRender={10} updateCellsBatchingPeriod={50} getItemLayout={msgLayout} />
+            loadingChats ? (
+              <ActivityIndicator color="#20a64b" style={{ marginTop: 32 }} />
+            ) : !authChecked ? null : !meId ? (
+              <View style={styles.emptyWrap}>
+                <Text style={styles.emptyText}>Please sign in to see your chats.</Text>
+                <TouchableOpacity style={styles.loginBtn} onPress={() => navigation.navigate('Login')}>
+                  <Text style={styles.loginBtnText}>Sign in</Text>
+                </TouchableOpacity>
+              </View>
+            ) : conversations.length === 0 ? (
+              <View style={styles.emptyWrap}>
+                <Text style={styles.emptyText}>No chats yet — say hi to a host!</Text>
+              </View>
+            ) : (
+              <FlatList data={conversations} keyExtractor={(m) => m.counterpartId} renderItem={renderChatRow} removeClippedSubviews maxToRenderPerBatch={10} windowSize={8} initialNumToRender={10} updateCellsBatchingPeriod={50} getItemLayout={msgLayout} />
+            )
           )}
           {subTab === 'call' && (
-            <FlatList data={CALLS} keyExtractor={(m) => m.id} renderItem={renderCallRow} removeClippedSubviews maxToRenderPerBatch={10} windowSize={8} initialNumToRender={10} updateCellsBatchingPeriod={50} getItemLayout={msgLayout} />
+            <View style={styles.emptyWrap}>
+              <Text style={styles.emptyText}>No call history yet — calls are not saved yet.</Text>
+            </View>
           )}
           {subTab === 'sayhi' && (
-            <>
-              <TouchableOpacity
-                style={styles.newHiBtn}
-                onPress={() => {
-                  const h = addSayHi(false);
-                  if (h) showToast(`${h.name}-এর কাছ থেকে নতুন Say hi এসেছে`);
-                }}
-              >
-                <RotateCw size={14} color="#20a64b" />
-                <Text style={styles.newHiBtnText}> নতুন Say hi দেখো</Text>
-              </TouchableOpacity>
-              <FlatList data={sayhiFeed} keyExtractor={(m) => m.id} renderItem={renderSayHiRow} removeClippedSubviews maxToRenderPerBatch={10} windowSize={8} initialNumToRender={10} updateCellsBatchingPeriod={50} getItemLayout={msgLayout} />
-            </>
+            onlineHosts.length === 0 ? (
+              <View style={styles.emptyWrap}>
+                <Text style={styles.emptyText}>No hosts online right now.</Text>
+              </View>
+            ) : (
+              <FlatList data={onlineHosts} keyExtractor={(h) => String(h.id)} renderItem={renderSayHiRow} removeClippedSubviews maxToRenderPerBatch={10} windowSize={8} initialNumToRender={10} updateCellsBatchingPeriod={50} getItemLayout={msgLayout} />
+            )
           )}
-        </>
+        </View>
       )}
 
       {topTab === 'notice' && (
@@ -472,20 +476,21 @@ const styles = StyleSheet.create({
   csMsgs: { flex: 1, paddingTop: 10 },
   csSub: { color: '#818b84', fontSize: 12 },
   csTitle: { color: '#111713', fontSize: 17, fontWeight: '800' },
+  // [Live] Empty / sign-in states for the real chat list.
+  emptyText: { color: '#818b84', fontSize: 15, textAlign: 'center' },
+  emptyWrap: { alignItems: 'center', marginTop: 40, paddingHorizontal: 24 },
   idChip: { color: '#818b84', fontSize: 12, fontWeight: 'normal' },
   input: { backgroundColor: '#fff', borderColor: '#e9eeea', borderRadius: 20, borderWidth: 1, flex: 1, paddingHorizontal: 14, paddingVertical: 10 },
+  loginBtn: { backgroundColor: '#20a64b', borderRadius: 18, marginTop: 16, paddingHorizontal: 20, paddingVertical: 10 },
+  loginBtnText: { color: '#fff', fontWeight: 'bold' },
   msgBody: { flex: 1, marginLeft: 10 },
   name: { color: '#1a211c', fontSize: 15, fontWeight: '800' },
-  newChip: { backgroundColor: '#20a64b', borderRadius: 8, color: '#fff', fontSize: 11, fontWeight: 'bold', overflow: 'hidden', paddingHorizontal: 6 },
-  newHiBtn: { alignItems: 'center', alignSelf: 'center', backgroundColor: '#fff', borderColor: '#e9eeea', borderRadius: 20, borderWidth: 1, flexDirection: 'row', marginVertical: 8, paddingHorizontal: 16, paddingVertical: 9 },
-  newHiBtnText: { color: '#20a64b', fontWeight: 'bold' },
   onlineDot: { backgroundColor: '#31bc63', borderColor: '#fff', borderRadius: 6, borderWidth: 2, bottom: 2, elevation: 3, height: 12, position: 'absolute', right: 2, shadowColor: '#31bc63', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 4, width: 12 },
   onlineItem: { alignItems: 'center', marginHorizontal: 6, width: 52 },
   onlineName: { color: '#273029', fontSize: 11, marginTop: 4 },
   onlineRow: { flexGrow: 0, paddingVertical: 8 },
   row: { alignItems: 'center', borderBottomColor: '#e9eeea', borderBottomWidth: 1, flexDirection: 'row', paddingHorizontal: 14, paddingVertical: 10 },
   rowRight: { alignItems: 'flex-end' },
-  sayhiBadge: { backgroundColor: '#f04f4b', borderRadius: 9, color: '#fff', fontSize: 8, fontWeight: '800', overflow: 'hidden', paddingHorizontal: 6 },
   sayHiBtn: { backgroundColor: '#20a64b', borderRadius: 14, marginTop: 4, paddingHorizontal: 10, paddingVertical: 3 },
   sayHiBtnText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
   send: { alignItems: 'center', backgroundColor: '#20a64b', borderRadius: 20, justifyContent: 'center', marginLeft: 8, paddingHorizontal: 14, paddingVertical: 10 },
