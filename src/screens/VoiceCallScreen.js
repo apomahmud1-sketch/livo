@@ -12,8 +12,14 @@
 // video call (`livo-call-<hostId>`) with audio only — no camera
 // track published, no video subscribed, no video surface rendered.
 // The caller publishes mic only (role "host", same as the video
-// call screen). Token rules are identical to video (Temp Token for
-// testing, token server for production — see src/agora/LiveVideo.js).
+// call screen). Token: LiveVideo fetches a fresh token from the
+// token server before joining (EXPO_PUBLIC_AGORA_TOKEN_SERVER_URL,
+// dev fallback EXPO_PUBLIC_AGORA_TOKEN) — see src/agora/LiveVideo.js.
+// Signalling: same calls row as video — VideoCallScreen places the
+// row on Accept (placeCall) and this screen closes it on End
+// (endCallRecord) with the voice rate; a real voice invite arrives
+// with { callId, isCallee } in route.params and Accept already
+// happened on the incoming screen in VideoCallScreen.
 //
 // BILLING: voice rate = HALF the host's video tier, derived via
 // getLiveVoiceCallRate() from the store (live Supabase tiers when
@@ -33,8 +39,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { COLORS } from '../config';
+import { COLORS, PLATFORM_COMMISSION_PERCENT } from '../config';
 import { useApp } from '../store';
+import { buildChannelName, endCallRecord } from '../calls/signalling';
 import LiveVideo, {
   leaveAgoraChannel,
   setAgoraMuted,
@@ -42,7 +49,9 @@ import LiveVideo, {
 } from '../agora/LiveVideo';
 
 export default function VoiceCallScreen({ route, navigation }) {
-  const { host, asHost } = route.params || {};
+  const { host, asHost, callId } = route.params || {};
+  // callId comes from VideoCallScreen (placed on Accept, or the
+  // real invite row when answering). Null = local-only call.
   const { coins, chargeVoiceCall, showToast, getLiveVoiceCallRate } = useApp();
   // [Live] Voice rate from the store (live Supabase tiers when the
   // setup SQL is pasted, config.js demo tiers otherwise).
@@ -106,7 +115,19 @@ export default function VoiceCallScreen({ route, navigation }) {
     clearInterval(timerRef.current);
     leaveAgoraChannel();
     const minutes = Math.max(1, Math.ceil(seconds / 60));
-    chargeVoiceCall(host, minutes);
+    const cost = chargeVoiceCall(host, minutes);
+    // Close the signalling row with the voice billing (half the
+    // video tier rate — chargeVoiceCall already used it). Host
+    // share = cost after the platform commission, in diamonds.
+    if (callId && typeof cost === 'number') {
+      const hostShare = Math.round((cost * (100 - PLATFORM_COMMISSION_PERCENT)) / 100);
+      endCallRecord(callId, {
+        durationSeconds: seconds,
+        billedMinutes: minutes,
+        costCoins: cost,
+        hostEarningsDiamonds: hostShare,
+      }).catch(() => {});
+    }
     // No call summary for anyone (same rule as video calls): the
     // host sees the earnings in the Host Dashboard. Just go back.
     showToast('কল শেষ হয়েছে');
@@ -135,7 +156,7 @@ export default function VoiceCallScreen({ route, navigation }) {
       <Text style={styles.timer}>{mm}:{ss} · 🪙 {liveCost} coins</Text>
 
       <LiveVideo
-        channel={`livo-call-${host.id}`}
+        channel={buildChannelName(host.id)}
         role="host"
         audioOnly
         style={styles.audioStatus}
