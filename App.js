@@ -1,11 +1,14 @@
 import React, { useEffect, useRef } from 'react';
-import { BackHandler, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, BackHandler, StyleSheet, Text, View } from 'react-native';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
 import { House, MessageCircle, Play, UserRound, Video } from 'lucide-react-native';
 import { AppProvider, useApp } from './src/store';
+import { supabase } from './src/supabase/client';
+import { ensureProfile } from './src/supabase/auth';
+import { useIncomingCallListener } from './src/calls/signalling';
 import LoginScreen from './src/screens/LoginScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import VideoCallScreen from './src/screens/VideoCallScreen';
@@ -145,19 +148,75 @@ function useHardwareBack() {
 
 function Root() {
   useHardwareBack();
+
+  // ── Auth gate (real Google login, 2026-11-22) ───────────────────
+  // session === undefined → still restoring the saved session from
+  // AsyncStorage. null → no session, show Login only. A session →
+  // Main + the rest of the app. Sign-out flips it back to Login.
+  const [session, setSession] = React.useState(undefined);
+  useEffect(() => {
+    if (!supabase) {
+      setSession(null);
+      return undefined;
+    }
+    let mounted = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (mounted) setSession(data && data.session ? data.session : null);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange(async (event, newSession) => {
+      if (!mounted) return;
+      setSession(newSession || null);
+      if (event === 'SIGNED_IN' && newSession && newSession.user) {
+        // First sign-in: create the profiles row if it does not exist.
+        // Best-effort — login must not fail if the row can't be written
+        // (e.g. a missing RLS policy); see src/supabase/auth.js.
+        try {
+          await ensureProfile(newSession.user);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.log('[Livo] ensureProfile on SIGNED_IN failed:', e && e.message);
+        }
+      }
+    });
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  // ── Incoming-call listener (real Realtime signalling, 2026-11-22) ──
+  // Subscribes to ringing calls rows for the signed-in user and
+  // navigates to the incoming-call screen. Re-runs when the session
+  // changes so a fresh sign-in starts listening; with no session the
+  // helper returns early and does nothing.
+  useEffect(() => useIncomingCallListener(navigationRef), [session]);
+
+  if (session === undefined) {
+    return (
+      <View style={styles.loading}>
+        <ActivityIndicator size="large" color="#fff" />
+      </View>
+    );
+  }
+
   return (
     <NavigationContainer ref={navigationRef}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="Login" component={LoginScreen} />
-        <Stack.Screen name="Main" component={MainTabs} />
-        <Stack.Screen name="VideoCall" component={VideoCallScreen} />
-        <Stack.Screen name="ChatDetail" component={ChatDetailScreen} />
-        <Stack.Screen name="WalletTab" component={WalletScreen} />
-        <Stack.Screen name="HostDashboard" component={HostDashboardScreen} />
-        <Stack.Screen name="Ranking" component={RankingScreen} />
-        <Stack.Screen name="VIP" component={VIPScreen} />
-        <Stack.Screen name="Rewards" component={RewardsScreen} />
-        <Stack.Screen name="Tasks" component={TasksScreen} />
+        {session ? (
+          <>
+            <Stack.Screen name="Main" component={MainTabs} />
+            <Stack.Screen name="VideoCall" component={VideoCallScreen} />
+            <Stack.Screen name="ChatDetail" component={ChatDetailScreen} />
+            <Stack.Screen name="WalletTab" component={WalletScreen} />
+            <Stack.Screen name="HostDashboard" component={HostDashboardScreen} />
+            <Stack.Screen name="Ranking" component={RankingScreen} />
+            <Stack.Screen name="VIP" component={VIPScreen} />
+            <Stack.Screen name="Rewards" component={RewardsScreen} />
+            <Stack.Screen name="Tasks" component={TasksScreen} />
+          </>
+        ) : (
+          <Stack.Screen name="Login" component={LoginScreen} />
+        )}
       </Stack.Navigator>
       <Toast />
       <StatusBar style="auto" />
@@ -174,6 +233,8 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  // Auth gate loading screen (while the saved session is restored).
+  loading: { alignItems: 'center', backgroundColor: '#7c3aed', flex: 1, justifyContent: 'center' },
   // Bottom nav — v0 design: mint-white bar, 70px total (8 + 50 + 12).
   tabBar: {
     backgroundColor: '#f9fffaf7',
