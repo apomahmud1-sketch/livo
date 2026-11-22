@@ -1,20 +1,24 @@
 // Livo MomentsScreen — Vero "Share your moment" short-video feed.
-// A vertical feed of moment cards built from the demo host list, plus
-// the user's own posted moments at the top (newest first).
+// The feed reads the moments table (newest first, paginated), each
+// post attributed to its real author (profiles join for username /
+// avatar / country). No hardcoded captions or like counts.
 //
-// Upload (2026-11-21): green "+" button in the header opens a bottom
+// Upload (2026-11-22): green "+" button in the header opens a bottom
 // sheet — Take Photo / Choose from Gallery / Record Video / Choose
-// Video (expo-image-picker) → preview → caption → Post. Posts are
-// saved on the device first (AsyncStorage key LIVO_MOMENTS_KEY) so
-// posting always works, then a best-effort Supabase sync runs in the
-// background (moments bucket + moments table); any Supabase failure
-// is swallowed — the post stays local-only, never blocks, never
-// shows an error. Own moments have no Call button (no calling
-// yourself) and no Live pill. Videos play with expo-video (tap to
-// play/pause). Restyled to the v0 Home design language (see
-// ~/workspace/v0-design/SPEC.md): mint background #f0fdf4, Home-style
-// dark Live pill with 3 green bars, flagcdn flag images, and
-// lucide-react-native icons (no emoji) in the actions row.
+// Video (expo-image-picker) → preview → caption → Post. Posting
+// needs a signed-in user: the media goes to the moments bucket and
+// a row is inserted into the moments table with host_id = the
+// user's id, and the new row appears at the top of the feed at
+// once. If the upload fails, the post is kept on-device only
+// (AsyncStorage key LIVO_MOMENTS_KEY), as before. There is no likes
+// table: the number shown is the real moments.likes column (0 for
+// new posts) and the heart toggle is local-only. Own moments have
+// no Call button (no calling yourself) and no Live pill. Videos
+// play with expo-video (tap to play/pause). Restyled to the v0 Home
+// design language (see ~/workspace/v0-design/SPEC.md): mint
+// background #f0fdf4, Home-style dark Live pill with 3 green bars,
+// flagcdn flag images, and lucide-react-native icons (no emoji) in
+// the actions row.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Dimensions, FlatList, Image, Modal, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -25,6 +29,10 @@ import { Camera, Film, Heart, Image as ImageIcon, MessageCircle, Phone, Play, Pl
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { useApp } from '../store';
 import { supabase } from '../supabase/client';
+// [Live] Real Moments feed + upload (moments table). No hardcoded
+// captions/likes: the feed reads the table, newest first.
+import { fetchMoments, uploadMoment } from '../supabase/moments';
+import { getCurrentUserId } from '../supabase/chat';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const CARD_W = SCREEN_W - 32;
@@ -43,47 +51,6 @@ const FLAG_URL = {
   IND: 'https://flagcdn.com/w40/in.png',
   PAK: 'https://flagcdn.com/w40/pk.png',
 };
-
-const CAPTIONS = [
-  'Live now — come say hi! 💬',
-  'New look, same me ✨',
-  'Good vibes only 🌸',
-  'Call me tonight? 📞',
-  'Dancing in the rain 💃',
-  'Fresh moment, fresh energy 🔥',
-];
-const LIKES = [1284, 862, 2401, 519, 3107, 764];
-const COMMENTS = [96, 41, 188, 23, 254, 57];
-
-// Best-effort Supabase sync for a posted moment. NEVER throws and
-// never shows UI — the caller keeps the post local-only on failure.
-// Returns { ok, reason } for the build report / logs.
-async function trySyncMomentToSupabase(moment) {
-  try {
-    if (!supabase) return { ok: false, reason: 'Supabase client not configured' };
-    const ext = moment.mediaType === 'video' ? 'mp4' : 'jpg';
-    const fileName = `moment-${moment.id}.${ext}`;
-    const res = await fetch(moment.mediaUri);
-    const blob = await res.blob();
-    const { error: upErr } = await supabase.storage.from('moments').upload(fileName, blob, {
-      contentType: moment.mediaType === 'video' ? 'video/mp4' : 'image/jpeg',
-      upsert: true,
-    });
-    if (upErr) return { ok: false, reason: `storage upload failed: ${upErr.message}` };
-    const { data: urlData } = supabase.storage.from('moments').getPublicUrl(fileName);
-    const { error: insErr } = await supabase.from('moments').insert({
-      host_id: 'me',
-      host_name: 'You',
-      caption: moment.caption,
-      video_url: (urlData && urlData.publicUrl) || '',
-      likes: 0,
-    });
-    if (insErr) return { ok: false, reason: `table insert failed: ${insErr.message}` };
-    return { ok: true, reason: '' };
-  } catch (e) {
-    return { ok: false, reason: String((e && e.message) || e) };
-  }
-}
 
 // Video card media: tap to play/pause, play overlay when paused.
 function MomentVideo({ uri }) {
@@ -120,15 +87,22 @@ function MomentVideo({ uri }) {
   );
 }
 
+// [Live] There is NO likes table: the number shown is the real
+// stored moments.likes column (0 for new posts). The heart toggle
+// is local-only — it is not persisted anywhere.
 const MomentCard = React.memo(function MomentCard({ moment, liked, onLike, onCall, onShare }) {
   const likes = moment.likes + (liked ? 1 : 0);
   const flagUri = moment.host && moment.host.country ? FLAG_URL[moment.host.country] : null;
   const isOwn = !!moment.isOwn;
+  // Server rows carry no mediaType — detect video from the URL.
+  const isVideo =
+    moment.mediaType === 'video' ||
+    (typeof moment.mediaUri === 'string' && /\.mp4($|\?)/i.test(moment.mediaUri));
   return (
     <View style={styles.card}>
       <LinearGradient colors={[moment.host.color, '#111827']} style={[styles.photo, { height: PHOTO_H }]}>
         {moment.mediaUri ? (
-          moment.mediaType === 'video' ? (
+          isVideo ? (
             <MomentVideo uri={moment.mediaUri} />
           ) : (
             <Image source={{ uri: moment.mediaUri }} style={styles.photoImg} />
@@ -256,6 +230,10 @@ function UploadSheet({ visible, onClose, onPosted, showToast }) {
     }
   };
 
+  // [Live] Post uploads to the moments bucket + moments table
+  // (attributed to the signed-in user) and waits for the result:
+  // on success the server row goes straight into the feed; on
+  // failure the post is kept on-device only, as before.
   const post = async () => {
     if (!picked || postingRef.current) return;
     postingRef.current = true;
@@ -269,12 +247,7 @@ function UploadSheet({ visible, onClose, onPosted, showToast }) {
       likes: 0,
       comments: 0,
     };
-    onPosted(moment);
-    // Best-effort Supabase sync in the background — never blocks.
-    trySyncMomentToSupabase(moment).then((r) => {
-      if (!r.ok) console.log('[Livo] Moments Supabase sync skipped:', r.reason);
-      else console.log('[Livo] Moments Supabase sync OK');
-    });
+    await onPosted(moment);
     close();
   };
 
@@ -346,11 +319,59 @@ function UploadSheet({ visible, onClose, onPosted, showToast }) {
 }
 
 export default function MomentsScreen({ navigation }) {
-  const { showToast, hosts } = useApp();
+  const { showToast } = useApp();
   const [likedIds, setLikedIds] = useState({});
   const [ownMoments, setOwnMoments] = useState([]);
   const [momentsLoaded, setMomentsLoaded] = useState(false);
   const [sheetVisible, setSheetVisible] = useState(false);
+  // [Live] Real feed from the moments table, newest first.
+  const [feed, setFeed] = useState([]);
+  const [feedLoading, setFeedLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  // Signed-in user (null = no session; posting then prompts login).
+  const [meId, setMeId] = useState(null);
+  const [myUsername, setMyUsername] = useState('Livo user');
+  const feedRef = useRef(feed);
+  feedRef.current = feed;
+
+  // Signed-in user + their display name (for new post attribution).
+  useEffect(() => {
+    (async () => {
+      const uid = await getCurrentUserId();
+      if (!uid) return;
+      setMeId(uid);
+      try {
+        const { data } = await supabase
+          .from('profiles')
+          .select('username')
+          .eq('id', uid)
+          .maybeSingle();
+        if (data && data.username) setMyUsername(data.username);
+      } catch (e) { /* name stays generic */ }
+    })();
+  }, []);
+
+  // First page of the real feed.
+  useEffect(() => {
+    (async () => {
+      const page = await fetchMoments({ limit: 10 });
+      setFeed(page);
+      setHasMore(page.length === 10);
+      setFeedLoading(false);
+    })();
+  }, []);
+
+  // Next older page, when the user scrolls to the bottom.
+  const loadMore = async () => {
+    if (feedLoading || loadingMore || !hasMore || feedRef.current.length === 0) return;
+    setLoadingMore(true);
+    const last = feedRef.current[feedRef.current.length - 1];
+    const page = await fetchMoments({ limit: 10, before: last.createdAt });
+    setFeed((prev) => [...prev, ...page]);
+    setHasMore(page.length === 10);
+    setLoadingMore(false);
+  };
 
   // Load the user's own posted moments once, on start.
   useEffect(() => {
@@ -372,17 +393,9 @@ export default function MomentsScreen({ navigation }) {
     AsyncStorage.setItem(LIVO_MOMENTS_KEY, JSON.stringify(ownMoments)).catch(() => {});
   }, [momentsLoaded, ownMoments]);
 
-  // [Live] Host moments come from the store hosts (live Supabase
-  // rows when the setup SQL is pasted, demo HOSTS otherwise).
-  const hostMoments = useMemo(() => hosts.map((host, i) => ({
-    id: host.id,
-    host,
-    caption: CAPTIONS[i % CAPTIONS.length],
-    likes: LIKES[i % LIKES.length],
-    comments: COMMENTS[i % COMMENTS.length],
-  })), [hosts]);
-
-  // Own posts first (newest first), then the host moments.
+  // [Live] The feed is the moments table (newest first), with
+  // local-only posts that failed to upload kept at the top. Own
+  // rows are marked so they show no Call button.
   const moments = useMemo(() => {
     const own = ownMoments.map((m) => ({
       id: m.id,
@@ -394,14 +407,46 @@ export default function MomentsScreen({ navigation }) {
       mediaUri: m.mediaUri,
       mediaType: m.mediaType,
     }));
-    return [...own, ...hostMoments];
-  }, [ownMoments, hostMoments]);
+    const live = feed.map((m) => ({ ...m, isOwn: meId ? m.host.id === meId : false }));
+    return [...own, ...live];
+  }, [ownMoments, feed, meId]);
 
   const toggleLike = (id) => setLikedIds((prev) => ({ ...prev, [id]: !prev[id] }));
 
-  const handlePosted = (moment) => {
-    setOwnMoments((prev) => [moment, ...prev]);
-    showToast('Moment posted');
+  // [Live] Upload (bucket + moments table, attributed to the
+  // signed-in user). On success the new server row goes straight
+  // to the top of the feed; on failure the post stays on-device
+  // only, as before.
+  const handlePosted = async (moment) => {
+    if (!meId) {
+      showToast('Please sign in to post a moment');
+      return;
+    }
+    const item = await uploadMoment({
+      userId: meId,
+      username: myUsername,
+      mediaUri: moment.mediaUri,
+      mediaType: moment.mediaType,
+      caption: moment.caption,
+    });
+    if (item) {
+      setFeed((prev) => [{ ...item, isOwn: true }, ...prev]);
+      showToast('Moment posted');
+    } else {
+      setOwnMoments((prev) => [moment, ...prev]);
+      showToast('Moment saved on this device — it will appear online once the connection works');
+    }
+  };
+
+  // Feed authors are profiles, not store hosts — VideoCall needs a
+  // store host, so calling straight from a moment is not possible
+  // yet (say so instead of passing a wrong host object).
+  const handleCall = (item) => {
+    if (item.host && item.host.storeId) {
+      navigation.navigate('VideoCall', { host: item.host });
+    } else {
+      showToast('Video call is not available from Moments yet — open the host from Home');
+    }
   };
 
   const renderMoment = ({ item }) => (
@@ -409,7 +454,7 @@ export default function MomentsScreen({ navigation }) {
       moment={item}
       liked={!!likedIds[item.id]}
       onLike={() => toggleLike(item.id)}
-      onCall={() => navigation.navigate('VideoCall', { host: item.host })}
+      onCall={() => handleCall(item)}
       onShare={() => showToast('Moment link copied')}
     />
   );
@@ -419,7 +464,14 @@ export default function MomentsScreen({ navigation }) {
         <Text style={styles.title}>Moments</Text>
         <TouchableOpacity
           style={styles.addBtn}
-          onPress={() => setSheetVisible(true)}
+          onPress={() => {
+            if (!meId) {
+              showToast('Please sign in to post a moment');
+              navigation.navigate('Login');
+              return;
+            }
+            setSheetVisible(true);
+          }}
           activeOpacity={0.85}
           accessibilityLabel="Post a moment"
         >
@@ -427,14 +479,22 @@ export default function MomentsScreen({ navigation }) {
         </TouchableOpacity>
       </View>
       <Text style={styles.sub}>Share your moment — you make the feed.</Text>
-      <FlatList
-        data={moments}
-        keyExtractor={(m) => m.id}
-        renderItem={renderMoment}
-        contentContainerStyle={styles.list}
-        showsVerticalScrollIndicator={false}
-        removeClippedSubviews maxToRenderPerBatch={5} windowSize={5} initialNumToRender={4}
-      />
+      {feedLoading ? (
+        <ActivityIndicator color="#20a64b" style={{ marginTop: 32 }} />
+      ) : (
+        <FlatList
+          data={moments}
+          keyExtractor={(m) => m.id}
+          renderItem={renderMoment}
+          contentContainerStyle={styles.list}
+          showsVerticalScrollIndicator={false}
+          removeClippedSubviews maxToRenderPerBatch={5} windowSize={5} initialNumToRender={4}
+          onEndReached={loadMore}
+          onEndReachedThreshold={0.5}
+          ListEmptyComponent={<Text style={styles.emptyText}>No moments yet — be the first to post!</Text>}
+          ListFooterComponent={loadingMore ? <ActivityIndicator color="#20a64b" style={{ marginVertical: 16 }} /> : null}
+        />
+      )}
       <UploadSheet
         visible={sheetVisible}
         onClose={() => setSheetVisible(false)}
@@ -453,6 +513,7 @@ const styles = StyleSheet.create({
   bg: { backgroundColor: '#f0fdf4', flex: 1, paddingTop: 48 },
   bigAvatar: { color: '#fff', fontSize: 84, fontWeight: 'bold' },
   bottomShade: { bottom: 0, left: 0, padding: 12, position: 'absolute', right: 0 },
+  emptyText: { color: '#818b84', fontSize: 15, marginTop: 32, textAlign: 'center' },
   callBtn: { alignItems: 'center', backgroundColor: '#20a64b', borderRadius: 18, flexDirection: 'row', gap: 5, paddingHorizontal: 14, paddingVertical: 7 },
   callBtnText: { color: '#fff', fontSize: 13, fontWeight: 'bold' },
   caption: { color: '#fff', fontSize: 14, marginTop: 2 },
