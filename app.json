@@ -5,6 +5,20 @@
       "foregroundImage": "./assets/icon.png"
     },
     "package": "com.livo.app",
+    "intentFilters": [
+      {
+        "action": "VIEW",
+        "category": [
+          "BROWSABLE",
+          "DEFAULT"
+        ],
+        "data": [
+          {
+            "scheme": "livo"
+          }
+        ]
+      }
+    ],
     "permissions": [
       "CAMERA",
       "RECORD_AUDIO",
@@ -22,6 +36,11 @@
     "AGORA_APP_ID": "ac11cdc3f22b4f86bb2fceab3820b8d7",
     "eas": {
       "projectId": "f856b1d6-e464-47ff-a6a8-98322772f8dd"
+    },
+    "googleOAuth": {
+      "androidClientId": "REPLACE_WITH_ANDROID_CLIENT_ID.apps.googleusercontent.com",
+      "iosClientId": "REPLACE_WITH_IOS_CLIENT_ID.apps.googleusercontent.com",
+      "webClientId": "REPLACE_WITH_WEB_CLIENT_ID.apps.googleusercontent.com"
     }
   },
   "icon": "./assets/icon.png",
