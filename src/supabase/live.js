@@ -149,11 +149,24 @@ function isListableStatus(status) {
 }
 
 export async function fetchLiveHosts() {
-  const rows = await safeSelect(
+  // Presence columns first (migration host-presence.sql); if the
+  // select fails (columns not added yet on this project), retry
+  // with the old column list and demo presence instead of losing
+  // the whole live host list.
+  let rows = await safeSelect(
     'hosts',
-    'host_id,profile_id,rate_tier,status,total_minutes,total_gifts,earnings_diamonds',
+    'host_id,profile_id,rate_tier,status,total_minutes,total_gifts,earnings_diamonds,is_online,last_seen',
     (q) => q.order('created_at', { ascending: true })
   );
+  let withPresence = true;
+  if (!rows) {
+    withPresence = false;
+    rows = await safeSelect(
+      'hosts',
+      'host_id,profile_id,rate_tier,status,total_minutes,total_gifts,earnings_diamonds',
+      (q) => q.order('created_at', { ascending: true })
+    );
+  }
   if (!rows || rows.length === 0) return null;
 
   const listable = rows.filter((r) => r && r.host_id && isListableStatus(r.status));
@@ -177,6 +190,15 @@ export async function fetchLiveHosts() {
     const demo = demoById.get(String(row.host_id));
     const prof = profilesById.get(row.profile_id) || {};
     const country = String(prof.country || (demo && demo.country) || 'BGD').toUpperCase();
+    // Real presence (heartbeat): online only when the host's app
+    // says is_online AND its last_seen is fresh — a killed app
+    // stops heartbeating, so a stale flag ages out on its own.
+    // Without the presence columns, demo presence is kept.
+    const online = withPresence
+      ? isHostOnlineNow(row.is_online, row.last_seen)
+      : demo
+        ? !!demo.online
+        : true;
     return {
       id: String(row.host_id),
       name: prof.username || (demo && demo.name) || `Host ${row.host_id}`,
@@ -189,9 +211,14 @@ export async function fetchLiveHosts() {
       // Demo photos are require() numbers; remote avatars are {uri}.
       // Screens already render null photos as initials.
       photo: (demo && demo.photo) || (prof.avatar_url ? { uri: prof.avatar_url } : null),
-      // Demo hosts keep their simulated presence; new panel hosts
-      // show online once approved (no presence system exists yet).
-      online: demo ? !!demo.online : true,
+      // Real presence from the host heartbeat (see isHostOnlineNow).
+      online,
+      // Viewer counts are NOT live yet: no screen joins a room
+      // presence channel (see src/supabase/presence.js), and
+      // HomeScreen still reads its local VIEWERS map. null means
+      // "unknown", never a made-up number.
+      viewerCount: null,
+      lastSeen: row.last_seen || null,
       status:
         (demo && demo.status) ||
         'Online now — video call 💬',
@@ -203,6 +230,20 @@ export async function fetchLiveHosts() {
   });
 
   return mapped.length > 0 ? mapped : null;
+}
+
+// ── Presence ─────────────────────────────────────────────────────
+// A host is really online only when their app flagged is_online
+// AND heartbeated recently. The window (2 min) is generous over
+// the 30s heartbeat so one slow tick never drops a live host.
+const ONLINE_FRESH_MS = 120 * 1000;
+
+export function isHostOnlineNow(isOnline, lastSeen) {
+  if (!isOnline) return false;
+  if (!lastSeen) return false;
+  const seen = new Date(lastSeen).getTime();
+  if (Number.isNaN(seen)) return false;
+  return Date.now() - seen <= ONLINE_FRESH_MS;
 }
 
 // Demo fallbacks, re-exported so the store has one place to look.
