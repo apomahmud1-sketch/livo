@@ -27,17 +27,25 @@
 //
 // ── TOKEN — READ THIS ──────────────────────────────────────────
 // The Agora project is in Secure Mode, so a TOKEN IS REQUIRED to
-// join any channel. The token comes from ONE of these places:
+// join any channel. The token comes from ONE of these places, in
+// this order (see resolveAgoraToken below):
 //   1. The `token` prop passed to <LiveVideo> (preferred), or
-//   2. The AGORA_TOKEN constant below, which reads the
-//      EXPO_PUBLIC_AGORA_TOKEN env var (set it in .env or in the
-//      EAS build environment — NEVER commit a real token to GitHub).
+//   2. The token server: GET {EXPO_PUBLIC_AGORA_TOKEN_SERVER_URL}
+//      /token?channel=&uid=&role= — fetched fresh for EVERY call
+//      (fetchAgoraToken). Set the URL in .env or the EAS build
+//      environment after deploying livo-token-server (see
+//      ~/workspace/livo-token-server/README.md). No secret is ever
+//      in the app — the App Certificate lives only on the server.
+//   3. EXPO_PUBLIC_AGORA_TOKEN (dev only): a Temp Token from the
+//      Agora Console, 24 hours, one channel. NEVER commit a real
+//      token to GitHub.
+// If NONE of these is configured, joining fails with a clear
+// in-app message instead of joining without a token (which Secure
+// Mode would reject anyway).
 //
 // FOR TESTING ONLY: generate a Temp Token in the Agora Console
 // (console.agora.io -> your project -> Generate temp token).
-// A Temp Token lasts 24 hours and is tied to ONE channel name.
-// FOR PRODUCTION you MUST run a token server (your backend
-// generates a fresh token per user per channel). NEVER embed the
+// FOR PRODUCTION you MUST run the token server. NEVER embed the
 // Primary Certificate in the app — anyone who has it can join
 // any channel as anyone.
 //
@@ -49,12 +57,86 @@ import { StyleSheet, Text, View } from 'react-native';
 import { AGORA_APP_ID, AGORA_APP_ID_IS_PLACEHOLDER, COLORS } from '../config';
 
 // ── Token ──────────────────────────────────────────────────────
+// Token server base URL (no trailing slash). Empty = not deployed
+// yet. Example: https://livo-token-server.onrender.com
+export const AGORA_TOKEN_SERVER_URL = (
+  process.env.EXPO_PUBLIC_AGORA_TOKEN_SERVER_URL || ''
+).trim().replace(/\/+$/, '');
 // Set EXPO_PUBLIC_AGORA_TOKEN in .env (testing: paste a Temp Token
 // from the Agora Console; production: leave empty — the token must
-// come from your token server, passed as the `token` prop).
+// come from your token server, passed as the `token` prop or
+// fetched from AGORA_TOKEN_SERVER_URL below).
 // This file NEVER contains a real token value.
 export const AGORA_TOKEN = process.env.EXPO_PUBLIC_AGORA_TOKEN || '';
-export const AGORA_TOKEN_IS_MISSING = !AGORA_TOKEN;
+export const AGORA_TOKEN_IS_MISSING = !AGORA_TOKEN && !AGORA_TOKEN_SERVER_URL;
+
+// Fetch a fresh RTC token from the token server for one channel.
+// Throws a plain Error with a readable message on any failure
+// (server not deployed, not configured, network error, bad channel).
+// The server answers { token, channel, uid, role, expiresAt }.
+export async function fetchAgoraToken(channelName, uid = 0, role = 'publisher') {
+  if (!AGORA_TOKEN_SERVER_URL) {
+    throw new Error(
+      'Token server is not set up yet (EXPO_PUBLIC_AGORA_TOKEN_SERVER_URL is empty). ' +
+        'Deploy the token server first — see livo-token-server/README.md.',
+    );
+  }
+  if (!channelName) {
+    throw new Error('Agora channel name is missing.');
+  }
+  const url =
+    `${AGORA_TOKEN_SERVER_URL}/token?channel=${encodeURIComponent(channelName)}` +
+    `&uid=${encodeURIComponent(String(uid))}&role=${role === 'subscriber' ? 'subscriber' : 'publisher'}`;
+  let res;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      res = await fetch(url, { signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (e) {
+    throw new Error(
+      'Could not reach the token server. Check your connection and that the token server is deployed and awake.',
+    );
+  }
+  let body = null;
+  try {
+    body = await res.json();
+  } catch (e) {
+    // Non-JSON answer — handled by the status check below.
+  }
+  if (!res.ok) {
+    throw new Error(
+      (body && body.error) ||
+        `Token server error ${res.status}. The server may not be configured yet (its App Certificate is missing).`,
+    );
+  }
+  if (!body || !body.token) {
+    throw new Error('Token server answered without a token. Try again.');
+  }
+  return body.token;
+}
+
+// Resolve the token to join with: explicit prop token first, then
+// a fresh token from the token server, then the dev-only env token.
+// Throws when nothing is configured — the caller shows the message
+// instead of joining without a token.
+export async function resolveAgoraToken({ token, channelName, uid = 0, role = 'publisher' }) {
+  if (token) return token;
+  if (AGORA_TOKEN_SERVER_URL) {
+    return fetchAgoraToken(channelName, uid, role);
+  }
+  if (AGORA_TOKEN) return AGORA_TOKEN;
+  throw new Error(
+    'Agora token is missing. The token server is not set up yet ' +
+      '(EXPO_PUBLIC_AGORA_TOKEN_SERVER_URL is empty) and no dev token ' +
+      'is set. Deploy the token server (see livo-token-server/README.md), ' +
+      'or for testing set EXPO_PUBLIC_AGORA_TOKEN to a 24-hour Temp Token ' +
+      'from the Agora Console.',
+  );
+}
 
 // RenderModeType.RenderModeHidden = 1 (verified in v4.4.0 typings).
 const RENDER_MODE_HIDDEN = 1;
@@ -83,6 +165,9 @@ function loadAgora() {
 // ── Engine (one shared instance for the whole app) ─────────────
 let engine = null;
 let engineChannel = null;
+// Last token request, so onTokenPrivilegeWillExpire can fetch a
+// fresh token from the token server and renew it (no re-join).
+let lastTokenRequest = null;
 const remoteListeners = new Set();
 
 function emitRemote(event) {
@@ -124,10 +209,23 @@ function registerEngineEvents(lib) {
       engineChannel = null;
     },
     onTokenPrivilegeWillExpire: () => {
-      // Temp Tokens expire after 24h. In production, fetch a fresh
-      // token from the token server here and call renewToken().
-      // eslint-disable-next-line no-console
-      console.warn('[Agora] Token will expire soon — fetch a new token from the token server.');
+      // Token is about to expire: fetch a fresh one from the token
+      // server and renew it in place (no re-join). Dev-only env
+      // tokens cannot be renewed — the call just ends when they
+      // expire (Temp Tokens last 24h).
+      if (!lastTokenRequest || !AGORA_TOKEN_SERVER_URL || !engine) {
+        // eslint-disable-next-line no-console
+        console.warn('[Agora] Token will expire soon — fetch a new token from the token server.');
+        return;
+      }
+      fetchAgoraToken(lastTokenRequest.channelName, lastTokenRequest.uid, lastTokenRequest.role)
+        .then((freshToken) => {
+          if (engine && engine.renewToken) engine.renewToken(freshToken);
+        })
+        .catch((e) => {
+          // eslint-disable-next-line no-console
+          console.warn('[Agora] Token renewal failed:', e && e.message);
+        });
     },
     onError: (err, msg) => {
       // eslint-disable-next-line no-console
@@ -223,6 +321,7 @@ export function joinAgoraChannel({ token, channelName, uid = 0, role = 'audience
     );
   }
   engineChannel = channelName;
+  lastTokenRequest = { channelName, uid, role: isHost ? 'publisher' : 'subscriber' };
   return engine;
 }
 
@@ -308,7 +407,11 @@ export function setAgoraBeauty(enabled) {
 // ── <LiveVideo> component ──────────────────────────────────────
 // Props:
 //   channel  — channel name to join (required)
-//   token    — RTC token (defaults to AGORA_TOKEN / EXPO_PUBLIC_AGORA_TOKEN)
+//   token    — RTC token. When omitted, LiveVideo fetches a fresh
+//              token from the token server (EXPO_PUBLIC_AGORA_TOKEN_
+//              SERVER_URL) and falls back to the dev-only
+//              EXPO_PUBLIC_AGORA_TOKEN. With neither configured it
+//              shows a clear error instead of joining token-less.
 //   role     — 'host' (goes live, publishes camera+mic) or
 //              'audience' (watches, publishes nothing). Default 'audience'.
 //   audioOnly — [F2] true = voice call: joins the channel with audio
@@ -357,17 +460,10 @@ export default function LiveVideo({
       return undefined;
     }
 
-    const effectiveToken = token || AGORA_TOKEN;
-    if (!effectiveToken) {
-      setStatus('error');
-      setError(
-        'Agora token is missing. Generate a Temp Token in the Agora Console ' +
-          '(24 hours, testing only) and set EXPO_PUBLIC_AGORA_TOKEN, ' +
-          'or pass a token-server token as the token prop.',
-      );
-      return undefined;
-    }
-
+    // Token: explicit prop first, else a fresh token fetched from
+    // the token server, else the dev-only env token. When nothing
+    // is configured, resolveAgoraToken throws and the error view
+    // below shows the message — never join without a token.
     setStatus('joining');
     const unsubscribe = onAgoraRemoteUser((event) => {
       if (event.type === 'joined') {
@@ -386,24 +482,36 @@ export default function LiveVideo({
     });
 
     let cancelled = false;
-    try {
-      // [F2] audioOnly is passed through: voice calls join the same
-      // channel with audio only, no video tracks.
-      joinAgoraChannel({ token: effectiveToken, channelName: channel, uid, role, audioOnly });
-      // [/F2]
-      joinedChannelRef.current = channel;
-      // If this uid was assigned by Agora (uid 0), the local canvas
-      // still uses uid 0, which the SDK treats as "local user".
-      setLocalUid(uid);
-      // onJoinChannelSuccess flips the status to 'joined'; if the
-      // callback is delayed, 'joining' still shows the video surface.
-      setStatus('joined');
-    } catch (e) {
-      if (!cancelled) {
-        setError(e.message || 'Could not join the live channel.');
-        setStatus('error');
+    (async () => {
+      try {
+        // Token fetch happens BEFORE joinChannel: a token is
+        // minted per call, per channel (role publisher for the
+        // host side, subscriber for the audience side).
+        const effectiveToken = await resolveAgoraToken({
+          token,
+          channelName: channel,
+          uid,
+          role: role === 'host' ? 'publisher' : 'subscriber',
+        });
+        if (cancelled) return;
+        // [F2] audioOnly is passed through: voice calls join the same
+        // channel with audio only, no video tracks.
+        joinAgoraChannel({ token: effectiveToken, channelName: channel, uid, role, audioOnly });
+        // [/F2]
+        joinedChannelRef.current = channel;
+        // If this uid was assigned by Agora (uid 0), the local canvas
+        // still uses uid 0, which the SDK treats as "local user".
+        setLocalUid(uid);
+        // onJoinChannelSuccess flips the status to 'joined'; if the
+        // callback is delayed, 'joining' still shows the video surface.
+        setStatus('joined');
+      } catch (e) {
+        if (!cancelled) {
+          setError(e.message || 'Could not join the live channel.');
+          setStatus('error');
+        }
       }
-    }
+    })();
 
     return () => {
       cancelled = true;
