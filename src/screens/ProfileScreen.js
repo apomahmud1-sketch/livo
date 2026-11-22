@@ -1,10 +1,12 @@
 // Livo — Profile (Me) screen, rebuilt from the web preview (livo-home-preview).
-// Me top (Mr.lee, ID 9065858, Singapore, male 30, English, check-in, dark mode,
-// 1 Friend / 1 Follow / 2 Fans, gold My Wallet banner, My Level + VIP dark cards,
-// My Income in the menu) and every
-// sub-view: Earn beans, Exchange, Withdraw, My chat Price, My Profile detail,
-// Badge, Gift received, Edit Profile, Second Language, My Invitation,
-// My Tasks, Settings, My Level and VIP Member Centre.
+// Me top shows the REAL signed-in user now (name / ID / country /
+// language from the Supabase profiles row + Google account); the old
+// hardcoded demo profile (Mr.lee, ID 9065858) survives only as a
+// fallback inside DEMO_PROFILE for fields the account has not set
+// yet (friends / fans / level / signature / age).
+// Sub-views: Earn beans, Exchange, Withdraw, My chat Price, My Profile
+// detail, Badge, Gift received, Edit Profile, Second Language,
+// My Invitation, My Tasks, Settings, My Level and VIP Member Centre.
 //
 // Balances: the Wallet card shows the LIVE store Diamonds balance (shared
 // with WalletScreen via useApp), not a fixed number — the preview's 65 was
@@ -19,12 +21,15 @@ import * as Clipboard from 'expo-clipboard';
 import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { COLORS } from '../config';
 import { useApp } from '../store';
+import { supabase } from '../supabase/client';
+import { fetchMyProfile, signOut } from '../supabase/auth';
+import { stopHostHeartbeat } from '../supabase/host';
 import LevelView from './profile/LevelView';
 import VipView from './profile/VipView';
 import VipFrame from '../components/VipFrame'; // [Vero] animated VIP avatar frame
 import {
   BADGES_ACH, BADGES_ACTIVITY, BEANS_PER_USD, EX_OPTS, HIGHEST_CALL_PRICE,
-  LANGUAGES, PRICE_OPTS, PROFILE, PROFILE_MEDALS, TASKS, WD_OPTS,
+  LANGUAGES, PRICE_OPTS, PROFILE as DEMO_PROFILE, PROFILE_MEDALS, TASKS, WD_OPTS,
 } from './profile/levelData';
 
 const AVATAR = require('../../assets/host-arif.jpg');
@@ -37,6 +42,65 @@ function themeFor(dark) {
 
 export default function ProfileScreen({ navigation }) {
   const { diamonds, buyDiamonds, recharge, showToast, vipLevel } = useApp();
+
+  // ── Real signed-in user (replaces the hardcoded Mr.lee / 9065858) ──
+  // user = Supabase auth user (Google account); profile = the user's
+  // row in the profiles table (created on first sign-in, see auth.js).
+  const [user, setUser] = React.useState(null);
+  const [profile, setProfile] = React.useState(null);
+  React.useEffect(() => {
+    let mounted = true;
+    if (supabase) {
+      supabase.auth.getUser().then(({ data }) => {
+        if (mounted) setUser(data && data.user ? data.user : null);
+      });
+      const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+        if (mounted) setUser(session && session.user ? session.user : null);
+      });
+      return () => {
+        mounted = false;
+        listener.subscription.unsubscribe();
+      };
+    }
+    return undefined;
+  }, []);
+  React.useEffect(() => {
+    if (!user) return undefined;
+    let mounted = true;
+    fetchMyProfile(user.id).then(({ profile: row }) => {
+      if (mounted && row) setProfile(row);
+    });
+    return () => { mounted = false; };
+  }, [user]);
+
+  // The profile shown on screen: real user first, demo values only
+  // as fallbacks for fields the account has not set yet. Age and
+  // gender are never guessed — they stay null when unknown.
+  const PROFILE = React.useMemo(() => {
+    const meta = (user && user.user_metadata) || {};
+    const displayName =
+      (profile && profile.username)
+      || meta.full_name
+      || meta.name
+      || (user && user.email ? user.email.split('@')[0] : DEMO_PROFILE.name);
+    const displayId = (profile && profile.user_id) || (user && user.id) || DEMO_PROFILE.id;
+    return {
+      ...DEMO_PROFILE,
+      name: displayName,
+      id: displayId,
+      country: (profile && profile.country) || DEMO_PROFILE.country,
+      language: (profile && profile.language) || DEMO_PROFILE.language,
+      age: profile && profile.age ? profile.age : null,
+      gender: profile && profile.gender ? profile.gender : null,
+      signature: (profile && profile.bio) || DEMO_PROFILE.signature,
+    };
+  }, [user, profile]);
+
+  // Google profile photo when Google gave one, else the local avatar.
+  const googleAvatar = user && user.user_metadata ? user.user_metadata.avatar_url : null;
+  const profileAvatar = profile ? profile.avatar_url : null;
+  const avatarSource = googleAvatar || profileAvatar ? { uri: googleAvatar || profileAvatar } : AVATAR;
+
   const [view, setView] = React.useState('main');
   const [dark, setDark] = React.useState(false);
   const [checkedIn, setCheckedIn] = React.useState(false);
@@ -81,6 +145,19 @@ export default function ProfileScreen({ navigation }) {
   };
 
   const goWallet = () => navigation.navigate('WalletTab');
+
+  // Real sign-out: clears the Supabase session; the App.js auth gate
+  // then shows LoginScreen.
+  const doLogout = async () => {
+    try {
+      // Stop the host heartbeat and mark offline, so the host does
+      // not stay listed as online after signing out.
+      await stopHostHeartbeat(true);
+    } catch (e) {
+      // Heartbeat stop must never block sign-out.
+    }
+    await signOut();
+  };
 
   const parentOf = { badge: 'profile', gift: 'profile', edit: 'profile', lang: 'edit', chatprice: 'earn', exchange: 'earn', withdraw: 'earn' };
   const goBack = () => setView(parentOf[view] || 'main');
@@ -170,10 +247,10 @@ export default function ProfileScreen({ navigation }) {
               <TouchableOpacity onPress={() => setView('profile')} activeOpacity={0.8} accessibilityLabel="ছবিতে চাপ দিয়ে My Profile পেজ খোলো">
                 {vipLevel ? (
                   <VipFrame frame="gold" size={78}>
-                    <Image source={AVATAR} style={styles.avatar} />
+                    <Image source={avatarSource} style={styles.avatar} />
                   </VipFrame>
                 ) : (
-                  <Image source={AVATAR} style={styles.avatar} />
+                  <Image source={avatarSource} style={styles.avatar} />
                 )}
               </TouchableOpacity>
               <View style={styles.idMain}>
@@ -193,7 +270,7 @@ export default function ProfileScreen({ navigation }) {
                 </View>
                 <View style={styles.chips}>
                   <Text style={styles.flagChip}>🇸🇬</Text>
-                  <Text style={styles.chipMale}>♂ {PROFILE.age}</Text>
+                  <Text style={styles.chipMale}>{PROFILE.age ? `♂ ${PROFILE.age}` : '♂'}</Text>
                   <Text style={styles.chipLang}>{PROFILE.language}</Text>
                 </View>
               </View>
@@ -299,7 +376,7 @@ export default function ProfileScreen({ navigation }) {
         <View>
           {subHead('Exchange', 'earn')}
           <View style={[styles.goldUser, { backgroundColor: t.surface }]}>
-            <Image source={AVATAR} style={styles.goldAva} />
+            <Image source={avatarSource} style={styles.goldAva} />
             <View>
               <Text style={[styles.goldName, { color: t.text }]}>{PROFILE.name}</Text>
               <Text style={[styles.goldId, { color: t.muted }]}>{PROFILE.id}</Text>
@@ -344,7 +421,7 @@ export default function ProfileScreen({ navigation }) {
             style={[styles.wdBanner, { backgroundColor: '#fb923c' }]}
             onPress={() => showToast('পরিচয় যাচাই (Authentication) — আসল অ্যাপে যাচাইয়ের পেজ খুলবে')}
           >
-            <Image source={AVATAR} style={styles.wdAva} />
+            <Image source={avatarSource} style={styles.wdAva} />
             <Text style={styles.wdBannerTxt}>Verify identity</Text>
             <Text style={styles.wdBannerChev}>›</Text>
           </TouchableOpacity>
@@ -430,7 +507,7 @@ export default function ProfileScreen({ navigation }) {
       {view === 'profile' && (
         <View>
           <View style={styles.heroWrap}>
-            <Image source={AVATAR} style={styles.heroImg} />
+            <Image source={avatarSource} style={styles.heroImg} />
             <TouchableOpacity onPress={() => setView('main')} style={styles.heroBack}>
               <Text style={styles.heroBackTxt}>‹</Text>
             </TouchableOpacity>
@@ -440,7 +517,7 @@ export default function ProfileScreen({ navigation }) {
           </View>
           <View style={[styles.pfMain, { backgroundColor: t.surface }]}>
             <View style={styles.pfIdRow}>
-              <Image source={AVATAR} style={styles.pfAva} />
+              <Image source={avatarSource} style={styles.pfAva} />
               <View style={{ flex: 1 }}>
                 <View style={styles.pfNameRow}>
                   <Text style={[styles.pfName, { color: t.text }]}>{PROFILE.name}</Text>
@@ -452,7 +529,7 @@ export default function ProfileScreen({ navigation }) {
             </View>
             <Text style={[styles.pfSig, { color: t.muted }]}>{PROFILE.signature}</Text>
             <View style={styles.chips}>
-              <Text style={styles.chipMale}>♂ {PROFILE.age}</Text>
+              <Text style={styles.chipMale}>{PROFILE.age ? `♂ ${PROFILE.age}` : '♂'}</Text>
               <Text style={styles.flagChipTxt}>🇸🇬 Singapore</Text>
             </View>
             <Text style={styles.infoTab}>Information</Text>
@@ -544,19 +621,19 @@ export default function ProfileScreen({ navigation }) {
             {[
               { label: 'My Avatar', value: '🖼️', onPress: () => showToast('My Avatar এডিট পেজ খুলবে') },
               { label: 'ID', value: PROFILE.id, copy: true },
-              { label: 'Nickname', value: 'Williams', onPress: () => showToast('Nickname এডিট পেজ খুলবে') },
-              { label: 'Gender', value: 'Male', onPress: () => showToast('Gender এডিট পেজ খুলবে') },
-              { label: 'Age', value: '30', onPress: () => showToast('Age এডিট পেজ খুলবে') },
-              { label: 'Regions', value: 'Singapore', onPress: () => showToast('Regions এডিট পেজ খুলবে') },
-              { label: 'Location', value: 'SGP-Singapore', onPress: () => showToast('Location এডিট পেজ খুলবে') },
-              { label: 'Language', value: 'English', onPress: () => showToast('Language এডিট পেজ খুলবে') },
+              { label: 'Nickname', value: PROFILE.name, onPress: () => showToast('Nickname এডিট পেজ খুলবে') },
+              { label: 'Gender', value: PROFILE.gender ? PROFILE.gender.charAt(0).toUpperCase() + PROFILE.gender.slice(1) : 'Not set', onPress: () => showToast('Gender এডিট পেজ খুলবে') },
+              { label: 'Age', value: PROFILE.age ? String(PROFILE.age) : 'Not set', onPress: () => showToast('Age এডিট পেজ খুলবে') },
+              { label: 'Regions', value: PROFILE.country, onPress: () => showToast('Regions এডিট পেজ খুলবে') },
+              { label: 'Location', value: PROFILE.country, onPress: () => showToast('Location এডিট পেজ খুলবে') },
+              { label: 'Language', value: PROFILE.language, onPress: () => showToast('Language এডিট পেজ খুলবে') },
               { label: 'Second Language', value: secondLang, onPress: () => setView('lang') },
               { label: 'Tags', value: 'Designer, Leo, Cricket…', onPress: () => showToast('Tags এডিট পেজ খুলবে') },
-              { label: 'Self-introduction', value: 'Hello, I am Williams.', onPress: () => showToast('Self-introduction এডিট পেজ খুলবে') },
+              { label: 'Self-introduction', value: profile && profile.bio ? profile.bio : `Hello, I am ${PROFILE.name}.`, onPress: () => showToast('Self-introduction এডিট পেজ খুলবে') },
               { label: 'Cosmetics', value: 'Default', onPress: () => showToast('Cosmetics এডিট পেজ খুলবে') },
               { label: 'Google', value: 'Linked', onPress: () => showToast('Google এডিট পেজ খুলবে') },
               { label: 'Phone', value: '+65 •••• ••••', onPress: () => showToast('Phone এডিট পেজ খুলবে') },
-              { label: 'Gmail', value: 'Linked', onPress: () => showToast('Gmail এডিট পেজ খুলবে') },
+              { label: 'Gmail', value: user && user.email ? user.email : 'Linked', onPress: () => showToast('Gmail এডিট পেজ খুলবে') },
               { label: 'Password', value: '••••••••', onPress: () => showToast('Password এডিট পেজ খুলবে') },
               { label: 'Login Device', value: 'This device', onPress: () => showToast('Login Device এডিট পেজ খুলবে') },
             ].map((r) => (
@@ -567,7 +644,7 @@ export default function ProfileScreen({ navigation }) {
               >
                 <Text style={[styles.editLabel, { color: t.text }]}>{r.label}</Text>
                 {r.label === 'My Avatar'
-                  ? <Image source={AVATAR} style={styles.editAva} />
+                  ? <Image source={avatarSource} style={styles.editAva} />
                   : <Text style={[styles.editValue, { color: t.muted }]}>{r.value}</Text>}
                 {r.copy
                   ? <TouchableOpacity onPress={copyId} style={styles.copyBtn}><Text style={styles.copyBtnTxt}>Copy</Text></TouchableOpacity>
@@ -673,7 +750,7 @@ export default function ProfileScreen({ navigation }) {
               </TouchableOpacity>
             ))}
           </View>
-          <TouchableOpacity style={styles.logoutBtn} onPress={() => navigation.navigate('Login')}>
+          <TouchableOpacity style={styles.logoutBtn} onPress={doLogout}>
             <Text style={styles.logoutTxt}>Log Out</Text>
           </TouchableOpacity>
         </View>
