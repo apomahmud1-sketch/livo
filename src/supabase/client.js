@@ -8,7 +8,13 @@
 // The secret/service_role key must NEVER be put in this file.
 // You can still override these with .env:
 //   EXPO_PUBLIC_SUPABASE_URL, EXPO_PUBLIC_SUPABASE_ANON_KEY
+//
+// Auth sessions PERSIST across restarts: the client stores the
+// session in AsyncStorage (auth.storage below), so a signed-in user
+// stays signed in — and the PKCE code verifier used by Google
+// sign-in survives the browser round-trip too.
 // ─────────────────────────────────────────────────────────────────
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
 
 export const SUPABASE_URL =
@@ -24,8 +30,17 @@ export const isSupabaseConfigured = Boolean(
 
 // Connected: screens can call supabase now (RLS policies decide
 // what the anon key may read/write — see the policies step).
+// auth.storage = AsyncStorage so the session (and the PKCE verifier
+// for Google sign-in) survives app restarts.
 export const supabase = isSupabaseConfigured
-  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: {
+        storage: AsyncStorage,
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: false,
+      },
+    })
   : null;
 
 if (!isSupabaseConfigured && typeof __DEV__ !== 'undefined' && __DEV__) {
