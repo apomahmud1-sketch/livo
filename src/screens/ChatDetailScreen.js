@@ -8,9 +8,10 @@
 // Ticket icon (same words).
 //
 // ── BEHAVIOUR (from the preview) ───────────────────────────────────
-// The first message sent spends ticket x1 and unlocks the chat (the
-// unlock line disappears); the host auto-replies ~1s later from a
-// demo reply list. Follow toggles locally.
+// The first message sent unlocks the chat (the unlock line
+// disappears). Messages are real: sent into the messages table and
+// delivered live via a Realtime subscription — there is no canned
+// auto-reply. Follow toggles locally.
 // ── DEMO (Supabase / payments replace this later) ──────────────────
 // No real ticket is spent and no real payment happens yet — the x1
 // unlock is a demo state, like the preview. Photos are coloured
@@ -32,6 +33,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   ScrollView,
   StyleSheet,
   Text,
@@ -60,16 +62,15 @@ import { useApp } from '../store';
 // (PROFILE.language, 'English' -> 'en'; falls back to 'en').
 import { resolveTargetLanguage, translateText } from '../utils/translate';
 import { PROFILE } from './profile/levelData';
+// [Live] Real chat over the messages table (no canned replies).
+import {
+  fetchConversation,
+  getCurrentUserId,
+  resolveRecipientProfileId,
+  sendMessage,
+  subscribeToConversation,
+} from '../supabase/chat';
 // [/F4]
-
-const HOST_REPLIES = [
-  'Thank you!',
-  'তুমি কেমন আছো?',
-  'আজ লাইভে এসো, আড্ডা হবে',
-  'Nice to meet you!',
-  'হ্যালো! তুমি কোথা থেকে?',
-  'Ok, live-এ দেখা হবে',
-];
 
 // [F4] Incoming-message bubble with auto-translation.
 // When a translation exists, the translated text is the main line and
@@ -129,11 +130,80 @@ export default function ChatDetailScreen({ navigation, route }) {
   const [localFollowing, setLocalFollowing] = useState(
     profile && profile.storeId ? following.includes(profile.storeId) : false,
   );
-  const [msgs, setMsgs] = useState([
-    { id: 'm0', me: false, text: (profile && profile.firstMsg) || 'Hi!', translate: true },
-  ]);
-  const idRef = useRef(1);
+  // [Live] Real conversation from the messages table — no seeded
+  // demo message, no canned replies. `meId` is the signed-in user;
+  // null + authChecked means "no session — prompt login".
+  const [msgs, setMsgs] = useState([]);
+  const [meId, setMeId] = useState(null);
+  const [otherId, setOtherId] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [sending, setSending] = useState(false);
   const scrollRef = useRef(null);
+
+  // Load history (newest 30) + subscribe to new messages in this
+  // conversation. Runs once per chat open.
+  useEffect(() => {
+    let cancelled = false;
+    let unsubscribe = () => {};
+    (async () => {
+      const uid = await getCurrentUserId();
+      if (cancelled) return;
+      setMeId(uid);
+      setAuthChecked(true);
+      if (!uid) {
+        setLoadingHistory(false);
+        return;
+      }
+      const oid = await resolveRecipientProfileId(profile);
+      if (cancelled) return;
+      setOtherId(oid);
+      if (!oid) {
+        setLoadingHistory(false);
+        return;
+      }
+      const page = await fetchConversation({ meId: uid, otherId: oid, limit: 30 });
+      if (cancelled) return;
+      setMsgs(page);
+      setHasMore(page.length === 30);
+      setUnlocked(page.some((m) => m.me));
+      setLoadingHistory(false);
+      unsubscribe = subscribeToConversation({
+        meId: uid,
+        otherId: oid,
+        onMessage: (m) => {
+          setMsgs((prev) => {
+            if (prev.some((x) => x.id === m.id)) return prev;
+            return [...prev, m];
+          });
+          if (m.me) setUnlocked(true);
+        },
+      });
+    })();
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Load the next older page (30) before the oldest loaded message.
+  const loadEarlier = async () => {
+    if (!meId || !otherId || msgs.length === 0 || loadingMore) return;
+    setLoadingMore(true);
+    const page = await fetchConversation({
+      meId,
+      otherId,
+      limit: 30,
+      before: msgs[0].created_at,
+    });
+    setMsgs((prev) => [...page, ...prev]);
+    setHasMore(page.length === 30);
+    setLoadingMore(false);
+  };
+  // [/Live]
 
   // [F4] Auto-translation state.
   // Target language: the user's profile language when one is set
@@ -197,6 +267,33 @@ export default function ChatDetailScreen({ navigation, route }) {
     );
   }
 
+  // [Live] No Supabase session — prompt login instead of showing
+  // fake messages. (The Login screen still needs real Google
+  // sign-in wired to Supabase Auth — see the build report.)
+  if (authChecked && !meId) {
+    return (
+      <View style={[styles.bg, styles.promptWrap]}>
+        <Text style={styles.promptText}>Please sign in to chat.</Text>
+        <TouchableOpacity style={styles.promptBtn} onPress={() => navigation.navigate('Login')}>
+          <Text style={styles.promptBtnText}>Sign in</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // [Live] The other person has no real account (no profiles.id to
+  // send to) — e.g. an old demo-only chat. Nothing fake is shown.
+  if (authChecked && meId && !otherId && !loadingHistory) {
+    return (
+      <View style={[styles.bg, styles.promptWrap]}>
+        <Text style={styles.promptText}>{profile.name} has no real account yet — chat is not available.</Text>
+        <TouchableOpacity style={styles.promptBtn} onPress={() => navigation.goBack()}>
+          <Text style={styles.promptBtnText}>Go back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   const isFollowing = profile.storeId ? following.includes(profile.storeId) : localFollowing;
 
   const onFollow = () => {
@@ -214,22 +311,25 @@ export default function ChatDetailScreen({ navigation, route }) {
     }
   };
 
-  const send = () => {
+  // [Live] Real send: insert into the messages table. The
+  // Realtime subscription above delivers the other person's
+  // replies — no canned auto-reply. On failure the text is put
+  // back in the composer so nothing is silently lost.
+  const send = async () => {
     const txt = text.trim();
-    if (!txt) return;
+    if (!txt || !meId || !otherId || sending) return;
     setText('');
-    const myId = `m${idRef.current++}`;
-    setMsgs((m) => [...m, { id: myId, me: true, text: txt }]);
-    if (!unlocked) {
-      setUnlocked(true);
-      showToast('টিকিট x1 দিয়ে চ্যাট আনলক হয়েছে');
+    setSending(true);
+    const saved = await sendMessage({ senderId: meId, recipientId: otherId, body: txt });
+    setSending(false);
+    if (!saved) {
+      setText(txt);
+      showToast('Message could not be sent — please try again');
+      return;
     }
-    const prof = profile;
-    setTimeout(() => {
-      const reply = HOST_REPLIES[Math.floor(Math.random() * HOST_REPLIES.length)];
-      setMsgs((m) => [...m, { id: `r${idRef.current++}`, me: false, text: reply }]);
-      if (scrollRef.current) scrollRef.current.scrollToEnd({ animated: true });
-    }, 1100);
+    setMsgs((m) => [...m, saved]);
+    setUnlocked(true);
+    if (scrollRef.current) scrollRef.current.scrollToEnd({ animated: true });
   };
 
   // [F4] Auto-translate toggle. Turning it off keeps the cached
@@ -309,7 +409,18 @@ export default function ChatDetailScreen({ navigation, route }) {
         <Text style={styles.time}>20:41</Text>
 
         {/* Messages */}
-        {msgs.map((m) =>
+        {loadingHistory ? (
+          <ActivityIndicator color="#20a64b" style={{ marginTop: 32 }} />
+        ) : msgs.length === 0 ? (
+          <Text style={styles.empty}>No messages yet — say hi!</Text>
+        ) : (
+          <View>
+            {hasMore ? (
+              <TouchableOpacity style={styles.loadMoreBtn} onPress={loadEarlier} disabled={loadingMore}>
+                <Text style={styles.loadMoreText}>{loadingMore ? 'Loading…' : 'Load earlier messages'}</Text>
+              </TouchableOpacity>
+            ) : null}
+            {msgs.map((m) =>
           m.me ? (
             <View key={m.id} style={styles.msgRowMe}>
               <View style={[styles.bubble, styles.bubbleMe]}>
@@ -335,18 +446,11 @@ export default function ChatDetailScreen({ navigation, route }) {
                   }
                 />
                 {/* [/F4] */}
-                {m.translate ? (
-                  <TouchableOpacity
-                    onPress={toggleTranslate}
-                  >
-                    <Text style={styles.translateLink}>
-                      {translateOn ? `Auto-translate: ON (${targetLangLabel})` : 'Translation settings'}
-                    </Text>
-                  </TouchableOpacity>
-                ) : null}
               </View>
             </View>
           ),
+            )}
+          </View>
         )}
       </ScrollView>
 
@@ -441,6 +545,13 @@ const styles = StyleSheet.create({
   cardName: { color: '#111713', fontSize: 18, fontWeight: '800' },
   cardTop: { alignItems: 'center', flexDirection: 'row' },
   empty: { color: '#818b84', marginTop: 40, textAlign: 'center' },
+  loadMoreBtn: { alignSelf: 'center', backgroundColor: '#fff', borderColor: '#e9eeea', borderRadius: 16, borderWidth: 1, marginVertical: 8, paddingHorizontal: 14, paddingVertical: 7 },
+  loadMoreText: { color: '#20a64b', fontSize: 13, fontWeight: 'bold' },
+  // [Live] Sign-in prompt (shown instead of fake messages).
+  promptBtn: { backgroundColor: '#20a64b', borderRadius: 18, marginTop: 16, paddingHorizontal: 20, paddingVertical: 10 },
+  promptBtnText: { color: '#fff', fontWeight: 'bold' },
+  promptText: { color: '#111713', fontSize: 16, fontWeight: '600', textAlign: 'center' },
+  promptWrap: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
   followBtn: { backgroundColor: '#20a64b', borderRadius: 14, marginLeft: 'auto', paddingHorizontal: 14, paddingVertical: 6 },
   followBtnOn: { backgroundColor: '#e9eeea' },
   followText: { color: '#fff', fontWeight: 'bold' },
