@@ -10,34 +10,39 @@
 // a row is inserted into the moments table with host_id = the
 // user's id, and the new row appears at the top of the feed at
 // once. If the upload fails, the post is kept on-device only
-// (AsyncStorage key LIVO_MOMENTS_KEY), as before. There is no likes
-// table: the number shown is the real moments.likes column (0 for
-// new posts) and the heart toggle is local-only. Own moments have
-// no Call button (no calling yourself) and no Live pill. Videos
-// play with expo-video (tap to play/pause). Restyled to the v0 Home
-// design language (see ~/workspace/v0-design/SPEC.md): mint
-// background #f0fdf4, Home-style dark Live pill with 3 green bars,
-// flagcdn flag images, and lucide-react-native icons (no emoji) in
-// the actions row.
+// (AsyncStorage key LIVO_MOMENTS_KEY), as before. Likes PERSIST:
+// a newly-liked moment calls the increment_moment_likes RPC once
+// (signed-in users only — the RPC is granted to `authenticated`);
+// the liked-ids set is persisted in AsyncStorage so a re-like
+// across sessions cannot double-count. Signed out, the heart is a
+// local-only toggle. There is no comments table, so no comment
+// count is shown. Own moments have no Call button (no calling
+// yourself) and no Live pill. Videos play with expo-video (tap to
+// play/pause). Restyled to the v0 Home design language (see
+// ~/workspace/v0-design/SPEC.md): mint background #f0fdf4,
+// Home-style dark Live pill with 3 green bars, flagcdn flag images,
+// and lucide-react-native icons (no emoji) in the actions row.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Dimensions, FlatList, Image, Modal, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Dimensions, FlatList, Image, Modal, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Camera, Film, Heart, Image as ImageIcon, MessageCircle, Phone, Play, Plus, Share2, Video, X } from 'lucide-react-native';
+import { Camera, Film, Heart, Image as ImageIcon, Phone, Play, Plus, Share2, Video, X } from 'lucide-react-native';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { useApp } from '../store';
 import { supabase } from '../supabase/client';
 // [Live] Real Moments feed + upload (moments table). No hardcoded
 // captions/likes: the feed reads the table, newest first.
-import { fetchMoments, uploadMoment } from '../supabase/moments';
+import { fetchMoments, likeMoment, uploadMoment } from '../supabase/moments';
 import { getCurrentUserId } from '../supabase/chat';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const CARD_W = SCREEN_W - 32;
 const PHOTO_H = Math.round(CARD_W * 1.05);
 
+// AsyncStorage key for the persisted liked-ids sets.
+const LIKED_KEY = 'livo-moment-likes-v1';
 // AsyncStorage key for the user's own posted moments.
 const LIVO_MOMENTS_KEY = 'livo-moments-v1';
 // Folder (inside the app's document directory) where picked media is
@@ -87,11 +92,12 @@ function MomentVideo({ uri }) {
   );
 }
 
-// [Live] There is NO likes table: the number shown is the real
-// stored moments.likes column (0 for new posts). The heart toggle
-// is local-only — it is not persisted anywhere.
-const MomentCard = React.memo(function MomentCard({ moment, liked, onLike, onCall, onShare }) {
-  const likes = moment.likes + (liked ? 1 : 0);
+// [Live] The number shown is the real stored moments.likes column.
+// `liked` fills the heart; `counted` means the server total already
+// includes this user's like (persisted RPC) — the +1 is then NOT
+// added again, so a re-render or a fresh fetch never double-counts.
+const MomentCard = React.memo(function MomentCard({ moment, liked, counted, onLike, onCall, onShare }) {
+  const likes = moment.likes + (liked && !counted ? 1 : 0);
   const flagUri = moment.host && moment.host.country ? FLAG_URL[moment.host.country] : null;
   const isOwn = !!moment.isOwn;
   // Server rows carry no mediaType — detect video from the URL.
@@ -135,10 +141,8 @@ const MomentCard = React.memo(function MomentCard({ moment, liked, onLike, onCal
           <Heart size={20} color={liked ? '#ef4444' : '#818b84'} fill={liked ? '#ef4444' : 'none'} strokeWidth={2} />
           <Text style={styles.actionText}>{likes.toLocaleString()}</Text>
         </TouchableOpacity>
-        <View style={styles.action}>
-          <MessageCircle size={20} color="#818b84" strokeWidth={2} />
-          <Text style={styles.actionText}>{moment.comments}</Text>
-        </View>
+        {/* No comments count: no comments table exists — never show
+            a fake 0. */}
         <TouchableOpacity style={styles.action} onPress={onShare} activeOpacity={0.8}>
           <Share2 size={20} color="#818b84" strokeWidth={2} />
           <Text style={styles.actionText}>Share</Text>
@@ -245,7 +249,6 @@ function UploadSheet({ visible, onClose, onPosted, showToast }) {
       mediaType: picked.type,
       createdAt: Date.now(),
       likes: 0,
-      comments: 0,
     };
     await onPosted(moment);
     close();
@@ -320,7 +323,13 @@ function UploadSheet({ visible, onClose, onPosted, showToast }) {
 
 export default function MomentsScreen({ navigation }) {
   const { showToast } = useApp();
+  // Persisted like state (AsyncStorage key LIKED_KEY): `likedIds`
+  // is the heart state, `countedIds` is the set of moments whose
+  // like already landed on the server via the RPC — a re-like
+  // across sessions can never double-count.
   const [likedIds, setLikedIds] = useState({});
+  const [countedIds, setCountedIds] = useState({});
+  const [likesLoaded, setLikesLoaded] = useState(false);
   const [ownMoments, setOwnMoments] = useState([]);
   const [momentsLoaded, setMomentsLoaded] = useState(false);
   const [sheetVisible, setSheetVisible] = useState(false);
@@ -387,6 +396,35 @@ export default function MomentsScreen({ navigation }) {
     })();
   }, []);
 
+  // Load the persisted liked-ids sets once, on start.
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(LIKED_KEY);
+        if (raw) {
+          const saved = JSON.parse(raw);
+          if (Array.isArray(saved.liked)) {
+            setLikedIds(Object.fromEntries(saved.liked.map((id) => [id, true])));
+          }
+          if (Array.isArray(saved.counted)) {
+            setCountedIds(Object.fromEntries(saved.counted.map((id) => [id, true])));
+          }
+        }
+      } catch (e) { /* storage unavailable — likes stay in-memory */ }
+      setLikesLoaded(true);
+    })();
+  }, []);
+
+  // Save the liked-ids sets whenever they change (only after the
+  // load above, so saved values are never overwritten by defaults).
+  useEffect(() => {
+    if (!likesLoaded) return;
+    AsyncStorage.setItem(
+      LIKED_KEY,
+      JSON.stringify({ liked: Object.keys(likedIds), counted: Object.keys(countedIds) }),
+    ).catch(() => {});
+  }, [likesLoaded, likedIds, countedIds]);
+
   // Save own moments whenever they change (only after the load above).
   useEffect(() => {
     if (!momentsLoaded) return;
@@ -402,7 +440,6 @@ export default function MomentsScreen({ navigation }) {
       host: { id: 'me', name: 'You', color: '#20a64b', photo: null, online: false },
       caption: m.caption || 'My moment',
       likes: m.likes || 0,
-      comments: m.comments || 0,
       isOwn: true,
       mediaUri: m.mediaUri,
       mediaType: m.mediaType,
@@ -411,7 +448,31 @@ export default function MomentsScreen({ navigation }) {
     return [...own, ...live];
   }, [ownMoments, feed, meId]);
 
-  const toggleLike = (id) => setLikedIds((prev) => ({ ...prev, [id]: !prev[id] }));
+  // Like: the heart fills at once (optimistic +1). The RPC that
+  // persists the like runs ONCE per newly-liked moment — only when
+  // signed in (the function is granted to `authenticated` only),
+  // never for local-only posts, and never again for an id already
+  // in the persisted counted set. Signed out, the heart stays a
+  // local-only toggle: no RPC, no error toast. A failed RPC leaves
+  // the id uncounted, so a later unlike + re-like retries it.
+  const toggleLike = async (id) => {
+    if (likedIds[id]) {
+      setLikedIds((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      return;
+    }
+    setLikedIds((prev) => ({ ...prev, [id]: true }));
+    if (typeof id === 'string' && id.startsWith('own-')) return;
+    if (countedIds[id]) return;
+    if (!meId) return; // signed out — local-only heart, no RPC
+    const ok = await likeMoment(id);
+    if (!ok) return;
+    setCountedIds((prev) => ({ ...prev, [id]: true }));
+    setFeed((prev) => prev.map((m) => (m.id === id ? { ...m, likes: m.likes + 1 } : m)));
+  };
 
   // [Live] Upload (bucket + moments table, attributed to the
   // signed-in user). On success the new server row goes straight
@@ -438,14 +499,30 @@ export default function MomentsScreen({ navigation }) {
     }
   };
 
-  // Feed authors are profiles, not store hosts — VideoCall needs a
-  // store host, so calling straight from a moment is not possible
-  // yet (say so instead of passing a wrong host object).
+  // Call from a moment: the feed lookup (moments.js) sets the
+  // author's real store host id (host.storeId). VideoCall needs a
+  // store host (id = hosts.host_id), so the id is swapped in and
+  // the profile id stays on host.id for the isOwn check. When the
+  // author is not a host, the honest toast stays.
   const handleCall = (item) => {
     if (item.host && item.host.storeId) {
-      navigation.navigate('VideoCall', { host: item.host });
+      navigation.navigate('VideoCall', {
+        host: { ...item.host, id: item.host.storeId },
+      });
     } else {
       showToast('Video call is not available from Moments yet — open the host from Home');
+    }
+  };
+
+  // Real system share sheet with the moment's real caption text —
+  // never a fake URL.
+  const handleShare = async (item) => {
+    try {
+      await Share.share({
+        message: item.caption ? item.caption : 'Check out this moment on Livo',
+      });
+    } catch (e) {
+      showToast('Could not open the share sheet — please try again');
     }
   };
 
@@ -453,9 +530,10 @@ export default function MomentsScreen({ navigation }) {
     <MomentCard
       moment={item}
       liked={!!likedIds[item.id]}
+      counted={!!countedIds[item.id]}
       onLike={() => toggleLike(item.id)}
       onCall={() => handleCall(item)}
-      onShare={() => showToast('Moment link copied')}
+      onShare={() => handleShare(item)}
     />
   );
   return (
