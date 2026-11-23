@@ -11,23 +11,14 @@
 // no APK update needed for content changes.
 // ─────────────────────────────────────────────────────────────────
 import { supabase } from './client';
+import { withTimeout } from './timeout';
 import { HOSTS } from '../data';
 import { CALL_RATES, COIN_PACKS, GIFTS, VIP_PACKS } from '../config';
 
-// How long a live read may take before we give up and use demo data.
-const LIVE_TIMEOUT_MS = 5000;
-
-// Race a promise against a timeout that resolves to null.
-// The timeout clears itself when the promise settles first.
-function withTimeout(promise, ms = LIVE_TIMEOUT_MS) {
-  let timer = null;
-  const timeout = new Promise((resolve) => {
-    timer = setTimeout(() => resolve(null), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer) clearTimeout(timer);
-  });
-}
+// Live reads use the shared timeout guard (src/supabase/timeout.js,
+// 8s): a stalled query resolves to null and the store keeps demo
+// data instead of spinning forever.
+const LIVE_TIMEOUT_MS = 8000;
 
 // One guarded select. Returns the rows array, or null on any failure
 // (including RLS/permission errors and missing tables). A rejected
@@ -38,7 +29,7 @@ async function safeSelect(table, columns, buildQuery) {
   try {
     let query = supabase.from(table).select(columns);
     if (buildQuery) query = buildQuery(query);
-    const res = await withTimeout(Promise.resolve(query).catch(() => null));
+    const res = await withTimeout(Promise.resolve(query).catch(() => null), LIVE_TIMEOUT_MS);
     if (!res || res.error || !Array.isArray(res.data)) return null;
     return res.data;
   } catch (e) {
@@ -55,7 +46,7 @@ function isFiniteNumber(v) {
 // the table is unreadable or has no usable rows (demo stays).
 
 export async function fetchLiveCatalog() {
-  const [rateRows, packRows, giftRows, vipRows] = await Promise.all([
+  const [rateRows, packRows, giftRows, vipRows, diamondRows] = await Promise.all([
     safeSelect('call_rates', 'id,name,coins_per_minute,is_active', (q) =>
       q.eq('is_active', true).order('coins_per_minute', { ascending: true })),
     safeSelect('coin_packs', 'id,coins,bonus,price_usd,is_active', (q) =>
@@ -64,6 +55,8 @@ export async function fetchLiveCatalog() {
       q.eq('is_active', true).order('price_coins', { ascending: true })),
     safeSelect('vip_packages', 'id,name,days,price_usd,is_active', (q) =>
       q.eq('is_active', true).order('price_usd', { ascending: true })),
+    safeSelect('diamond_packs', 'id,diamonds,bonus,price_usd,is_active', (q) =>
+      q.eq('is_active', true).order('diamonds', { ascending: true })),
   ]);
 
   const callRates =
@@ -115,9 +108,22 @@ export async function fetchLiveCatalog() {
           }))
       : null;
 
-  // All four missing/unreadable → nothing live to use.
-  if (!callRates && !coinPacks && !gifts && !vipPacks) return null;
-  return { callRates, coinPacks, gifts, vipPacks };
+  const diamondPacks =
+    diamondRows && diamondRows.length > 0
+      ? diamondRows
+          .filter((p) => p && typeof p.id === 'string' && p.id && isFiniteNumber(p.diamonds) && p.diamonds > 0)
+          .map((p) => ({
+            id: p.id,
+            diamonds: p.diamonds,
+            bonus: isFiniteNumber(p.bonus) ? p.bonus : 0,
+            price: `$${Number(p.price_usd || 0).toFixed(2)}`,
+            priceUsd: Number(p.price_usd || 0),
+          }))
+      : null;
+
+  // All five missing/unreadable → nothing live to use.
+  if (!callRates && !coinPacks && !gifts && !vipPacks && !diamondPacks) return null;
+  return { callRates, coinPacks, gifts, vipPacks, diamondPacks };
 }
 
 // ── Hosts ────────────────────────────────────────────────────────────
@@ -177,7 +183,7 @@ export async function fetchLiveHosts() {
   const profileIds = [...new Set(listable.map((r) => r.profile_id).filter(Boolean))];
   let profilesById = new Map();
   if (profileIds.length > 0) {
-    const profRows = await safeSelect('profiles', 'id,username,country,language,gender,avatar_url', (q) =>
+    const profRows = await safeSelect('profiles', 'id,user_id,username,country,language,gender,avatar_url', (q) =>
       q.in('id', profileIds)
     );
     if (profRows) {
@@ -201,6 +207,7 @@ export async function fetchLiveHosts() {
         : true;
     return {
       id: String(row.host_id),
+      userId: prof.user_id || null,
       name: prof.username || (demo && demo.name) || `Host ${row.host_id}`,
       country,
       flag: FLAG_FOR_COUNTRY[country] || '🌍',
@@ -230,6 +237,26 @@ export async function fetchLiveHosts() {
   });
 
   return mapped.length > 0 ? mapped : null;
+}
+
+// ── Frames ─────────────────────────────────────────────────────
+// Active frames from the panel (id, name, kind, color,
+// min_vip_level, file_name). Empty array when unreadable —
+// screens render no frame instead of a fake one.
+export async function fetchFrames() {
+  const rows = await safeSelect('frames', 'id,name,kind,color,min_vip_level,file_name', (q) =>
+    q.eq('is_active', true).order('min_vip_level', { ascending: true }));
+  if (!rows) return [];
+  return rows
+    .filter((f) => f && typeof f.id === 'string' && f.id)
+    .map((f) => ({
+      id: f.id,
+      name: f.name || f.id,
+      kind: f.kind || null,
+      color: f.color || null,
+      minVipLevel: typeof f.min_vip_level === 'number' ? f.min_vip_level : 0,
+      fileName: f.file_name || null,
+    }));
 }
 
 // ── Presence ─────────────────────────────────────────────────────
