@@ -52,7 +52,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, PLATFORM_COMMISSION_PERCENT } from '../config';
 import { useApp } from '../store';
 import { supabase } from '../supabase/client';
-import { fetchMyProfile } from '../supabase/auth';
+import { fetchMyProfile, getSessionUser } from '../supabase/auth';
 import { leaveLiveRoom } from '../supabase/presence';
 import { buildChannelName, endCallRecord, markCallMissed } from '../calls/signalling';
 import LiveVideo, {
@@ -108,8 +108,10 @@ export default function VoiceCallScreen({ route, navigation, callId: callIdProp,
     let cancelled = false;
     (async () => {
       try {
-        const { data } = await supabase.auth.getUser();
-        const uid = data && data.user && data.user.id;
+        // Identity from the local session (see getSessionUser):
+        // the network getUser() call can fail on a phone right after login.
+        const sessionUser = await getSessionUser();
+        const uid = sessionUser && sessionUser.id;
         if (!uid) return;
         const { profile } = await fetchMyProfile(uid);
         if (!cancelled && profile && profile.username) setSenderName(profile.username);
@@ -269,7 +271,7 @@ export default function VoiceCallScreen({ route, navigation, callId: callIdProp,
     finishCall();
     // No call summary for anyone (same rule as video calls): the
     // host sees the earnings in the Host Dashboard. Just go back.
-    showToast('কল শেষ হয়েছে');
+    showToast('Call ended');
     navigation.goBack();
   };
   endCallRef.current = endCall;
