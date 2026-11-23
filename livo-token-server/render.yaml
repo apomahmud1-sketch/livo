@@ -1,0 +1,23 @@
+# Livo — Agora token server (Render Blueprint)
+# Deploy with: connect this repo/folder to Render and Render will
+# read this file (Blueprint), or: Render Dashboard → New → Blueprint
+# → pick the repo containing livo-token-server.
+# NOTE: this only creates the service. You MUST still set the two
+# secret env vars in the Render Dashboard (see README.md) — the
+# AGORA_APP_CERTIFICATE is missing and only the project owner can
+# copy it from the Agora Console. Until then /token answers 500.
+services:
+  - type: web
+    name: livo-token-server
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: AGORA_APP_ID
+        sync: false
+      - key: AGORA_APP_CERTIFICATE
+        sync: false
+      - key: TOKEN_TTL_SECONDS
+        value: 3600
