@@ -59,18 +59,18 @@ const CS_TOPICS = [
 
 const COUNTRY_NAMES = { BGD: 'Bangladesh', IND: 'India', PAK: 'Pakistan' };
 
-// Relative time for a message timestamp ("2m", "1h", "গতকাল").
+// Relative time for a message timestamp ("2m", "1h", "Yesterday").
 function formatTime(iso) {
   if (!iso) return '';
   const t = new Date(iso).getTime();
   if (!t) return '';
   const mins = Math.max(0, Math.floor((Date.now() - t) / 60000));
-  if (mins < 1) return 'এখনই';
+  if (mins < 1) return 'Just now';
   if (mins < 60) return `${mins}m`;
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h`;
   const days = Math.floor(hours / 24);
-  if (days === 1) return 'গতকাল';
+  if (days === 1) return 'Yesterday';
   return `${days}d`;
 }
 
@@ -233,7 +233,7 @@ export default function MessagesScreen({ navigation }) {
     setTimeout(() => {
       setCsMsgs((m) => [
         ...m,
-        { id: `r${id}`, me: false, text: `ধন্যবাদ! তোমার “${topic}” বিষয়টা আমরা পেয়েছি — Customer service টিম শীঘ্রই সাহায্য করবে।` },
+        { id: `r${id}`, me: false, text: `Thanks! We received your message about “${topic}” — our Customer Service team will help you soon.` },
       ]);
     }, 450);
   };
@@ -316,7 +316,7 @@ export default function MessagesScreen({ navigation }) {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.csTitle}>Customer service</Text>
-            <Text style={styles.csSub}>Online · সাধারণত দ্রুত উত্তর দেয়</Text>
+            <Text style={styles.csSub}>Online · Usually replies quickly</Text>
           </View>
         </View>
         <ScrollView style={styles.csMsgs}>
@@ -336,7 +336,7 @@ export default function MessagesScreen({ navigation }) {
         <View style={styles.composer}>
           <TextInput
             style={styles.input}
-            placeholder="মেসেজ লেখো…"
+            placeholder="Write a message…"
             value={csText}
             onChangeText={setCsText}
             onSubmitEditing={() => {
