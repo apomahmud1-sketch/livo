@@ -24,13 +24,13 @@
 // call requests need a requests backend (not built yet).
 import React, { useEffect, useRef, useState } from 'react';
 import { Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { COLORS } from '../config';
+import { COLORS, MIN_WITHDRAW_DIAMONDS, WITHDRAW_METHODS } from '../config';
 import { useApp } from '../store';
+import { fetchMyProfile } from '../supabase/auth';
 import {
   ensureHostRow,
   fetchHostEarnings,
   fetchMyWithdrawals,
-  fetchWithdrawnDiamonds,
   getCurrentUser,
   getMyProfile,
   requestWithdrawal,
@@ -41,37 +41,46 @@ import {
 } from '../supabase/host';
 
 const CHART_H = 120;
-const WITHDRAW_METHODS = ['Bkash', 'Nagad', 'Bank'];
 
 function fmt(n) {
   return Number(n || 0).toLocaleString('en-US');
 }
 
 export default function HostDashboardScreen({ navigation }) {
-  const { showToast, hosts, setHostOnline: setStoreHostOnline, setHostRate: setStoreHostRate, callRates, getLiveCallRate } = useApp();
+  const { showToast, hosts, setHostOnline: setStoreHostOnline, setHostRate: setStoreHostRate, callRates, getLiveCallRate, diamonds } = useApp();
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [hostRow, setHostRow] = useState(null);
   const [earnings, setEarnings] = useState(null);
   const [withdrawals, setWithdrawals] = useState([]);
-  const [withdrawnTotal, setWithdrawnTotal] = useState(0);
   const [online, setOnline] = useState(false);
   const [myTier, setMyTier] = useState('tier2');
   // Withdraw form.
   const [amount, setAmount] = useState('');
-  const [method, setMethod] = useState('Bkash');
+  const [method, setMethod] = useState(WITHDRAW_METHODS[0]);
   const [account, setAccount] = useState('');
   const [withdrawing, setWithdrawing] = useState(false);
   const hostRowRef = useRef(null);
   hostRowRef.current = hostRow;
 
   const approved = hostRow && hostRow.status === 'approved';
+  // Go Live is for female hosts only (profiles.gender). A missing
+  // or non-female gender hides/disables it — never guessed.
+  const isFemale = String((profile && profile.gender) || '').toLowerCase() === 'female';
   // Store host with the same host_id, so Home updates at once when
   // this host toggles online / changes rate in this session.
   const storeHost = hostRow ? hosts.find((h) => String(h.id) === String(hostRow.host_id)) : null;
   const rate = getLiveCallRate(myTier);
-  const availableDiamonds = Math.max(0, (earnings ? earnings.totalDiamonds : 0) - withdrawnTotal);
+  // Available balance: the signed-in user's real profiles.diamonds
+  // (store) MINUS pending withdrawals — paid-out ones already left
+  // the balance, rejected/cancelled ones are free again.
+  const pendingWithdrawals = withdrawals.reduce((sum, w) => (
+    String(w.status || '').toLowerCase() === 'pending'
+      ? sum + (Number(w.amount_diamonds) || 0)
+      : sum
+  ), 0);
+  const availableDiamonds = Math.max(0, (diamonds || 0) - pendingWithdrawals);
   const weekMax = earnings ? Math.max(1, ...earnings.week.map((d) => d.coins)) : 1;
 
   // Load the signed-in host's real data once, on mount.
@@ -86,23 +95,28 @@ export default function HostDashboardScreen({ navigation }) {
         return;
       }
       setUser(u);
-      const [prof, row] = await Promise.all([getMyProfile(u.id), ensureHostRow(u)]);
+      // getMyProfile (host.js) does not select gender/country, so
+      // merge the auth.js profile row (which does) for the Go Live
+      // gender gate and any other real profile values.
+      const [prof, row, authProf] = await Promise.all([
+        getMyProfile(u.id),
+        ensureHostRow(u),
+        fetchMyProfile(u.id),
+      ]);
       if (cancelled) return;
-      setProfile(prof);
+      setProfile({ ...(prof || {}), ...((authProf && authProf.profile) || {}) });
       setHostRow(row);
       if (row) {
         setOnline(!!row.is_online);
         setMyTier(row.rate_tier || 'tier2');
         if (row.is_online && row.status === 'approved') startHostHeartbeat(row.id);
-        const [earn, wds, withdrawn] = await Promise.all([
+        const [earn, wds] = await Promise.all([
           fetchHostEarnings(row.id, u.id),
           fetchMyWithdrawals(row.id),
-          fetchWithdrawnDiamonds(row.id),
         ]);
         if (cancelled) return;
         setEarnings(earn);
         setWithdrawals(wds);
-        setWithdrawnTotal(withdrawn);
       } else {
         setEarnings({
           todayCoins: 0, todayDiamonds: 0, todayCalls: 0, todayMinutes: 0,
@@ -122,14 +136,12 @@ export default function HostDashboardScreen({ navigation }) {
   const refreshMoney = async () => {
     const row = hostRowRef.current;
     if (!row || !user) return;
-    const [earn, wds, withdrawn] = await Promise.all([
+    const [earn, wds] = await Promise.all([
       fetchHostEarnings(row.id, user.id),
       fetchMyWithdrawals(row.id),
-      fetchWithdrawnDiamonds(row.id),
     ]);
     setEarnings(earn);
     setWithdrawals(wds);
-    setWithdrawnTotal(withdrawn);
   };
 
   const toggleOnline = async () => {
@@ -174,20 +186,16 @@ export default function HostDashboardScreen({ navigation }) {
       showToast('এখনো approve হয়নি — প্যানেল থেকে approve হলে লাইভে যেতে পারবে');
       return;
     }
+    if (!isFemale) {
+      showToast('Go Live শুধু female হোস্টদের জন্য');
+      return;
+    }
+    if (!storeHost) {
+      showToast('তোমার হোস্ট প্রোফাইল এখনো লোড হয়নি — একটু পরে আবার চেষ্টা করো');
+      return;
+    }
     showToast('তুমি লাইভে আছো — এখান থেকে মাইক, ক্যামেরা আর বিউটি কন্ট্রোল করো');
-    const host = storeHost || {
-      id: hostRow.host_id,
-      name: (profile && profile.username) || 'Host',
-      rateTier: myTier,
-      online: true,
-      color: '#f472b6',
-      country: 'BGD',
-      flag: '🇧🇩',
-      lang: 'English',
-      level: 1,
-      gender: 'female',
-    };
-    navigation.navigate('VideoCall', { host, asHost: true });
+    navigation.navigate('VideoCall', { host: storeHost, asHost: true });
   };
 
   const doWithdraw = async () => {
@@ -195,6 +203,10 @@ export default function HostDashboardScreen({ navigation }) {
     const diamonds = Math.floor(Number(amount) || 0);
     if (diamonds <= 0) {
       showToast('কত Diamond তুলবে সেটা লেখো');
+      return;
+    }
+    if (diamonds < MIN_WITHDRAW_DIAMONDS) {
+      showToast(`কমপক্ষে ${fmt(MIN_WITHDRAW_DIAMONDS)} Diamond তুলতে হবে`);
       return;
     }
     if (diamonds > availableDiamonds) {
@@ -357,13 +369,17 @@ export default function HostDashboardScreen({ navigation }) {
         </Text>
       </View>
 
-      {/* go live */}
+      {/* go live — female hosts only; hidden/disabled otherwise */}
       <TouchableOpacity
-        style={[styles.goLiveBtn, !approved && styles.goLiveDisabled]}
+        style={[styles.goLiveBtn, (!approved || !isFemale) && styles.goLiveDisabled]}
         onPress={goLive}
+        disabled={!approved || !isFemale}
       >
         <Text style={styles.goLiveText}>🎥  Go Live</Text>
       </TouchableOpacity>
+      {approved && !isFemale ? (
+        <Text style={styles.goLiveNote}>Go Live শুধু female হোস্টদের জন্য — প্রোফাইলে gender সেট করা নেই বা female নয়।</Text>
+      ) : null}
 
       {/* weekly earnings chart — real calls rows, last 7 days */}
       <View style={styles.card}>
@@ -437,7 +453,7 @@ export default function HostDashboardScreen({ navigation }) {
           <Text style={styles.withdrawText}>{withdrawing ? 'জমা হচ্ছে…' : '🪙  Withdraw জমা দাও'}</Text>
         </TouchableOpacity>
         <Text style={styles.withdrawNote}>
-          জমা দিলে স্ট্যাটাস Pending থাকবে — অ্যাডমিন টাকা পাঠিয়ে approve করবে।
+          জমা দিলে স্ট্যাটাস Pending থাকবে — অ্যাডমিন টাকা পাঠিয়ে approve করবে। কমপক্ষে {fmt(MIN_WITHDRAW_DIAMONDS)} Diamond তুলতে হবে।
         </Text>
         {withdrawals.length > 0 && (
           <View style={styles.historyWrap}>
@@ -482,6 +498,7 @@ const styles = StyleSheet.create({
   fieldLabel: { color: COLORS.dark, fontSize: 13, fontWeight: 'bold', marginBottom: 6, marginTop: 10 },
   goLiveBtn: { alignItems: 'center', backgroundColor: COLORS.pink, borderRadius: 16, elevation: 2, marginTop: 16, paddingVertical: 16 },
   goLiveDisabled: { opacity: 0.5 },
+  goLiveNote: { color: COLORS.grey, fontSize: 12, lineHeight: 17, marginTop: 8, textAlign: 'center' },
   goLiveText: { color: '#fff', fontSize: 19, fontWeight: 'bold' },
   head: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
   headSpacer: { width: 28 },
