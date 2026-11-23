@@ -14,7 +14,7 @@
 // store path (no profiles.frame_id wear state in the store).
 import React from 'react';
 import { Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { useApp } from '../store';
+import { useApp } from '../../store';
 import { BADGES_ACTIVITY, BADGES_ACH, VIP_IDENT, VIP_PRIV, VIP_TIERS } from './levelData';
 
 // store vipLevel is a pack id such as 'vip1' — the matching tier
