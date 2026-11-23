@@ -12,12 +12,11 @@
 //      Supabase session, which is persisted in AsyncStorage by the
 //      client (see client.js) and survives app restarts.
 //
-// PENDING INSTALL (not in package.json / node_modules yet — do NOT
-// run this file before installing):
-//   npx expo install expo-auth-session expo-web-browser
+// expo-auth-session and expo-web-browser ARE installed and
+// Google sign-in works (verified on device 2026-11-23) — the old
+// "PENDING INSTALL" note below was stale and is removed.
 //
-// CONSOLE SETUP STILL NEEDED (see the worker report for the exact
-// values and where to get them):
+// CONSOLE SETUP (done 2026-11-23):
 //   • Google Cloud Console → OAuth client (Android + iOS + Web) →
 //     Client ID + Client Secret into Supabase Dashboard →
 //     Authentication → Providers → Google.
@@ -27,6 +26,7 @@
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { supabase } from './client';
+import { withTimeout } from './timeout';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -191,5 +191,29 @@ export async function fetchMyProfile(userId) {
     return { profile: data || null, error: null };
   } catch (e) {
     return { profile: null, error: e };
+  }
+}
+
+// Update the signed-in user's own profiles row (username, bio,
+// country, language, second_language, tags, frame_id, ...).
+// withTimeout-guarded; never throws — returns the updated row on
+// success, null on any failure (no session, timeout, RLS error).
+export async function updateMyProfile(patch) {
+  if (!supabase || !patch || typeof patch !== 'object') return null;
+  try {
+    const { data: { user } = {} } = await supabase.auth.getUser();
+    if (!user) return null;
+    const res = await withTimeout(
+      supabase
+        .from('profiles')
+        .update(patch)
+        .eq('id', user.id)
+        .select('id, user_id, username, country, language, gender, age, bio, avatar_url, coins, diamonds')
+        .maybeSingle(),
+    );
+    if (!res || res.error || !res.data) return null;
+    return res.data;
+  } catch (e) {
+    return null;
   }
 }
