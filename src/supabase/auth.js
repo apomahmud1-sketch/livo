@@ -115,6 +115,30 @@ export async function getSession() {
   return { session: data ? data.session : null, error };
 }
 
+// ── The signed-in user: LOCAL session is the source of truth ─────
+// getUser() is a NETWORK call (it validates the token against the
+// Auth server). On a phone that call can fail or stall even when a
+// perfectly valid session sits in local storage — and every screen
+// that decided "signed in" from getUser() then showed the signed-out
+// state right after a successful Google login (Me showed "Not set",
+// Wallet asked to sign in, Edit Profile refused to save), while the
+// App.js gate (getSession, local) correctly showed Main.
+// So: identity comes from getSession() (local, no network).
+// getUser() is only a fallback when there is NO local session at
+// all, and it is timeout-guarded so a stall can never hang the app.
+export async function getSessionUser() {
+  if (!supabase) return null;
+  try {
+    const { data } = await supabase.auth.getSession();
+    if (data && data.session && data.session.user) return data.session.user;
+  } catch (e) { /* fall through to the network fallback */ }
+  try {
+    const res = await withTimeout(supabase.auth.getUser());
+    if (res && res.data && res.data.user) return res.data.user;
+  } catch (e) { /* no user */ }
+  return null;
+}
+
 export function onAuthStateChange(callback) {
   if (!supabase) {
     return { data: { subscription: { unsubscribe() {} } } };
@@ -201,7 +225,9 @@ export async function fetchMyProfile(userId) {
 export async function updateMyProfile(patch) {
   if (!supabase || !patch || typeof patch !== 'object') return null;
   try {
-    const { data: { user } = {} } = await supabase.auth.getUser();
+    // Identity from the local session (see getSessionUser): the
+    // network getUser() call can fail on a phone right after login.
+    const user = await getSessionUser();
     if (!user) return null;
     const res = await withTimeout(
       supabase
