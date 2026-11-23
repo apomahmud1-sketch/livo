@@ -10,12 +10,16 @@
 // throwing, so a screen can fall back to its "sign in" prompt.
 // There is no fake data anywhere in this module.
 import { supabase } from './client';
+import { withTimeout } from './timeout';
 
 // Signed-in user id, or null when there is no session.
 export async function getCurrentUserId() {
   try {
     if (!supabase) return null;
-    const { data } = await supabase.auth.getUser();
+    // Fail-fast: a stalled auth check must not hang the Messages
+    // spinner forever (see timeout.js).
+    const res = await withTimeout(supabase.auth.getUser());
+    const data = res && res.data;
     return (data && data.user && data.user.id) || null;
   } catch (e) {
     return null;
@@ -59,7 +63,7 @@ export async function fetchConversation({ meId, otherId, limit = 30, before = nu
       .order('created_at', { ascending: false })
       .limit(limit);
     if (before) q = q.lt('created_at', before);
-    const { data, error } = await q;
+    const { data, error } = (await withTimeout(q)) || {};
     if (error || !Array.isArray(data)) return [];
     return data.reverse().map((r) => ({
       id: r.id,
@@ -135,12 +139,14 @@ export function subscribeToConversation({ meId, otherId, onMessage }) {
 export async function fetchConversations(meId) {
   if (!supabase || !meId) return [];
   try {
-    const { data, error } = await supabase
-      .from('messages')
-      .select('id,sender_id,recipient_id,body,created_at')
-      .or(`sender_id.eq.${meId},recipient_id.eq.${meId}`)
-      .order('created_at', { ascending: false })
-      .limit(200);
+    const { data, error } = (await withTimeout(
+      supabase
+        .from('messages')
+        .select('id,sender_id,recipient_id,body,created_at')
+        .or(`sender_id.eq.${meId},recipient_id.eq.${meId}`)
+        .order('created_at', { ascending: false })
+        .limit(200),
+    )) || {};
     if (error || !Array.isArray(data) || data.length === 0) return [];
 
     // Latest message per counterpart (rows are newest first, so the
@@ -154,10 +160,13 @@ export async function fetchConversations(meId) {
     const otherIds = [...latestByOther.keys()];
 
     let profilesById = new Map();
-    const { data: profRows } = await supabase
-      .from('profiles')
-      .select('id,username,country,language,gender,avatar_url')
-      .in('id', otherIds);
+    const { data: profRows } =
+      (await withTimeout(
+        supabase
+          .from('profiles')
+          .select('id,username,country,language,gender,avatar_url')
+          .in('id', otherIds),
+      )) || {};
     if (Array.isArray(profRows)) {
       profilesById = new Map(profRows.filter((p) => p && p.id).map((p) => [p.id, p]));
     }
