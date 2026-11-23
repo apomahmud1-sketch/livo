@@ -174,7 +174,7 @@ export default function VipView({
         <View style={styles.grid}>{VIP_PRIV.map((bn) => renderBenefit(bn, vipSel + 1))}</View>
 
         <Text style={styles.note}>
-          যেকোনো সুবিধায় চাপ দিলে সেটা কেমন দেখায়, পপআপে দেখা যাবে। VIP কিনলে সেটা তোমার ID-র সাথে বাঁধা থাকবে — যেকোনো ডিভাইসে লগইন করলেই কাজ করবে। Tier prices below are preview values — Premium is bought with real money from the Premium packs, not with Diamonds.
+          Tap any perk to see what it looks like in a popup. When you buy VIP it is tied to your ID — it works on any device you sign in on. Tier prices below are preview values — Premium is bought with real money from the Premium packs, not with Diamonds.
         </Text>
 
         <View style={styles.buyRow}>
