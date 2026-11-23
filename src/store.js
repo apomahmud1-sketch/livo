@@ -1,8 +1,11 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CALL_RATES, COIN_PACKS, COIN_TO_DIAMOND_RATE, GIFTS, PLATFORM_COMMISSION_PERCENT, VIP_PACKS, VOICE_RATE_DIVISOR, getVoiceCallRate } from './config';
-import { fetchLiveCatalog, fetchLiveHosts } from './supabase/live';
+import { fetchLiveCatalog, fetchLiveHosts, fetchFrames } from './supabase/live';
 import { supabase } from './supabase/client';
+import { withTimeout } from './supabase/timeout';
+import { updateMyProfile } from './supabase/auth';
+import { LV_ROWS } from './screens/profile/levelData';
 import {
   adjustWallet,
   clearWalletCache,
@@ -45,15 +48,27 @@ const AppCtx = createContext(null);
 // AsyncStorage key for Lucky Spin + Daily Reward state.
 const LIVO_REWARDS_KEY = 'livo-rewards-v1';
 
-// Diamond pack ids sold in WalletScreen (must match its list) —
-// needed here so IAP can fetch their Play products at startup.
+// Diamond pack ids sold in WalletScreen — fallback for IAP init
+// before the live catalog arrives. These are the ids seeded in the
+// diamond_packs table; once the catalog loads, the live ids win.
 const DIAMOND_PACK_IDS = ['d4000', 'd13200', 'd48000', 'd150000', 'd520000', 'd57000'];
+
+// Level thresholds from the LV_ROWS ladder (strings with commas).
+const LV_THRESHOLDS = LV_ROWS.map(([level, label]) => ({
+  level,
+  threshold: Number(String(label).replace(/,/g, '')) || 0,
+}));
+
+// Transaction kinds that count toward the level points: top-up
+// (purchase_*) vs consumption (call_charge, gift_sent). Points =
+// the larger of the two totals (see LEVEL_RULE_MALE).
+const LEVEL_TOPUP_KINDS = ['purchase_coins', 'purchase_diamonds', 'purchase_vip'];
+const LEVEL_SPEND_KINDS = ['call_charge', 'gift_sent'];
 
 export function AppProvider({ children }) {
   const [coins, setCoins] = useState(0);
   const [diamonds, setDiamonds] = useState(0);
-  const [earnings, setEarnings] = useState(0);
-  const [following, setFollowing] = useState(['2']);
+  const [following, setFollowing] = useState([]);
   const [toast, setToast] = useState('');
   const [callHistory, setCallHistory] = useState([]);
   // [Wallet] 'loading' | 'signed-in' | 'signed-out' | 'error'.
@@ -122,7 +137,18 @@ export function AppProvider({ children }) {
   const [liveCoinPacks, setLiveCoinPacks] = useState(null);
   const [liveGifts, setLiveGifts] = useState(null);
   const [liveVipPacks, setLiveVipPacks] = useState(null);
+  const [liveDiamondPacks, setLiveDiamondPacks] = useState(null);
   const [liveSource, setLiveSource] = useState('demo');
+  // Frames from the frames table (panel) — [] until loaded.
+  const [frames, setFrames] = useState([]);
+  // The user's home country, from their profiles.country ('SGP'
+  // only when the profile has none set yet).
+  const [userCountry, setUserCountry] = useState('SGP');
+  // Unread messages: messages where I am the recipient and
+  // read_at is still null.
+  const [unreadTotal, setUnreadTotal] = useState(0);
+  // Level points from real transactions (see levelInfo below).
+  const [levelPoints, setLevelPoints] = useState(0);
   // [Live] Load live data once, on start. fetchLive* never throws
   // and never hangs (5s timeout each, demo fallback inside), so a
   // dead network or an unpasted setup SQL can never block startup.
@@ -130,9 +156,10 @@ export function AppProvider({ children }) {
     let cancelled = false;
     (async () => {
       try {
-        const [hostsLive, catalog] = await Promise.all([
+        const [hostsLive, catalog, framesLive] = await Promise.all([
           fetchLiveHosts(),
           fetchLiveCatalog(),
+          fetchFrames(),
         ]);
         if (cancelled) return;
         let usedLive = false;
@@ -145,7 +172,9 @@ export function AppProvider({ children }) {
           if (catalog.coinPacks) { setLiveCoinPacks(catalog.coinPacks); usedLive = true; }
           if (catalog.gifts) { setLiveGifts(catalog.gifts); usedLive = true; }
           if (catalog.vipPacks) { setLiveVipPacks(catalog.vipPacks); usedLive = true; }
+          if (catalog.diamondPacks) { setLiveDiamondPacks(catalog.diamondPacks); usedLive = true; }
         }
+        if (framesLive && framesLive.length > 0) setFrames(framesLive);
         if (usedLive) setLiveSource('supabase');
       } catch (e) { /* never break startup — demo data stays */ }
     })();
@@ -157,6 +186,18 @@ export function AppProvider({ children }) {
   const coinPacks = liveCoinPacks || COIN_PACKS;
   const gifts = liveGifts || GIFTS;
   const vipPacks = liveVipPacks || VIP_PACKS;
+  // Diamond packs come ONLY from the live catalog (no demo list):
+  // [] until the catalog loads, so WalletScreen shows an honest
+  // empty state instead of invented packs.
+  const diamondPacks = liveDiamondPacks || [];
+  // Play SKUs to fetch: live ids once loaded, the seeded ids
+  // before that (same ids — the catalog load only confirms them).
+  const diamondPackIds = useMemo(
+    () => (liveDiamondPacks && liveDiamondPacks.length > 0
+      ? liveDiamondPacks.map((p) => p.id)
+      : DIAMOND_PACK_IDS),
+    [liveDiamondPacks],
+  );
   // [Live] Rate lookups against the resolved (live or demo) tiers.
   // Same shapes as config.js getCallRate / getVoiceCallRate.
   const getLiveCallRate = (tierId) =>
@@ -171,12 +212,9 @@ export function AppProvider({ children }) {
       label: `${coinsPerMinute} coins/min (voice)`,
     };
   };
-  // [F3] The user's home country, used by the Nearby tab for
-  // country-based proximity (same-country hosts first). Grounded in
-  // ProfileScreen.js Location 'SGP-Singapore' for Mr.lee. This is a
-  // context value for now — it should come from the real profile /
-  // backend later. [/F3]
-  const userCountry = 'SGP';
+  // [F3] The user's home country — set from profiles.country when
+  // the wallet loads (see applyWallet); 'SGP' only until then.
+  // Nearby sorts same-country hosts first (see utils/nearby.js).
 
   const setHostOnline = (hostId, online) => {
     setHosts((hs) => hs.map((h) => (h.id === hostId ? { ...h, online } : h)));
@@ -197,6 +235,9 @@ export function AppProvider({ children }) {
     setDiamonds(w.diamonds || 0);
     setVipLevel(w.vipLevel || null);
     setVipUntil(w.vipUntil || null);
+    if (typeof w.country === 'string' && w.country) {
+      setUserCountry(w.country.toUpperCase());
+    }
   };
 
   const clearWalletState = () => {
@@ -206,7 +247,92 @@ export function AppProvider({ children }) {
     setVipLevel(null);
     setVipUntil(null);
     setTransactions([]);
+    setFollowing([]);
+    setUnreadTotal(0);
+    setLevelPoints(0);
     setWalletStatus('signed-out');
+  };
+
+  // Unread message count: messages addressed to me with read_at
+  // still null. withTimeout-guarded; a failure keeps the old count.
+  const refreshUnreadTotal = async () => {
+    const user = await getSignedInUser();
+    if (!user || !supabase) return;
+    try {
+      const res = await withTimeout(
+        supabase
+          .from('messages')
+          .select('id', { count: 'exact', head: true })
+          .eq('recipient_id', user.id)
+          .is('read_at', null),
+      );
+      if (res && typeof res.count === 'number') setUnreadTotal(res.count);
+    } catch (e) { /* keep the previous count */ }
+  };
+
+  // Level points from the user's real transactions rows: the
+  // larger of total top-up (purchase kinds) and total consumption
+  // (call_charge + gift_sent). No transactions → 0 points (Lv0).
+  const refreshLevelInfo = async () => {
+    const user = await getSignedInUser();
+    if (!user || !supabase) return;
+    try {
+      const res = await withTimeout(
+        supabase
+          .from('transactions')
+          .select('kind,amount_coins,amount_diamonds')
+          .eq('profile_id', user.id)
+          .limit(1000),
+      );
+      if (!res || res.error || !Array.isArray(res.data)) return;
+      let topUp = 0;
+      let spend = 0;
+      for (const r of res.data) {
+        const kind = String(r.kind || '');
+        const coins = Math.abs(typeof r.amount_coins === 'number' ? r.amount_coins : 0);
+        const diamonds = Math.abs(typeof r.amount_diamonds === 'number' ? r.amount_diamonds : 0);
+        if (LEVEL_TOPUP_KINDS.includes(kind)) topUp += coins + diamonds;
+        else if (LEVEL_SPEND_KINDS.includes(kind)) spend += coins + diamonds;
+      }
+      setLevelPoints(Math.max(topUp, spend));
+    } catch (e) { /* keep the previous points */ }
+  };
+
+  // Level from real points on the LV_ROWS ladder. Lv0 rule: a
+  // balance of 2,000 diamonds or less is always Lv0, whatever the
+  // history says. No transactions → Lv0 with 0 points.
+  const levelInfo = useMemo(() => {
+    const points = levelPoints || 0;
+    let level = 0;
+    if (diamonds > 2000) {
+      for (const row of LV_THRESHOLDS) {
+        if (points >= row.threshold) level = row.level;
+      }
+    }
+    const current = LV_THRESHOLDS[level] || { threshold: 0 };
+    const next = LV_THRESHOLDS[level + 1];
+    const progress = !next
+      ? 100
+      : Math.max(0, Math.min(100, Math.round(((points - current.threshold) / (next.threshold - current.threshold)) * 100)));
+    return { level, points, progress };
+  }, [levelPoints, diamonds]);
+
+  // Follows from the follows table (follower_id = me). [] when not
+  // signed in or on any failure — never a hardcoded list.
+  const loadFollows = async () => {
+    const user = await getSignedInUser();
+    if (!user || !supabase) {
+      setFollowing([]);
+      return;
+    }
+    try {
+      const res = await withTimeout(
+        supabase.from('follows').select('host_id').eq('follower_id', user.id),
+      );
+      if (res && !res.error && Array.isArray(res.data)) {
+        setFollowing(res.data.map((r) => String(r.host_id)).filter(Boolean));
+      }
+    } catch (e) { /* keep the current list */ }
   };
 
   // Reads the profiles row for the signed-in user (creates it with
@@ -225,6 +351,9 @@ export function AppProvider({ children }) {
     setSignedIn(true);
     applyWallet(res);
     setWalletStatus('signed-in');
+    loadFollows();
+    refreshUnreadTotal();
+    refreshLevelInfo();
   };
 
   const refreshWallet = () => loadWalletIntoStore();
@@ -232,6 +361,7 @@ export function AppProvider({ children }) {
   const refreshTransactions = async () => {
     const rows = await fetchRecentTransactions(20);
     setTransactions(rows);
+    refreshLevelInfo();
   };
 
   // [Wallet] Load balances on start: the offline cache first (only
@@ -281,22 +411,34 @@ export function AppProvider({ children }) {
   // re-read. syncDiamonds=false for calls/gifts: the caller's
   // server diamonds never include the host's share (that lands in
   // the host's own profile via creditHostEarnings).
+  // Persist an optimistic balance change and settle it against the
+  // server result. Returns a promise resolving to true when the
+  // server write landed (or when there was nothing to persist),
+  // false when it failed (local balance rolled back). Callers that
+  // bill (chargeCall) await this before writing the calls row, so
+  // the row never claims a cost that was never deducted.
   const settlePersist = (prevCoins, prevDiamonds, promise, syncDiamonds = true) => {
-    if (!promise || typeof promise.then !== 'function') return;
-    promise.then((res) => {
-      if (!res) return;
+    if (!promise || typeof promise.then !== 'function') return Promise.resolve(false);
+    return promise.then((res) => {
+      if (!res) return false;
       if (res.error) {
         setCoins(prevCoins);
         setDiamonds(prevDiamonds);
         showToast("Couldn't save — check your connection and try again.");
         loadWalletIntoStore();
-      } else {
-        setCoins(res.coins);
-        if (syncDiamonds) setDiamonds(res.diamonds);
-        if (res.txError) {
-          showToast('Saved, but the receipt could not be written — contact support if the balance looks wrong.');
-        }
+        return false;
       }
+      setCoins(res.coins);
+      if (syncDiamonds) setDiamonds(res.diamonds);
+      if (res.txError) {
+        showToast('Saved, but the receipt could not be written — contact support if the balance looks wrong.');
+      }
+      return true;
+    }).catch(() => {
+      setCoins(prevCoins);
+      setDiamonds(prevDiamonds);
+      showToast("Couldn't save — check your connection and try again.");
+      return false;
     });
   };
 
@@ -306,15 +448,45 @@ export function AppProvider({ children }) {
   // landed — iap.js then finishes the transaction as consumable.
   // A false return leaves the purchase unfinished so it is
   // recovered on the next start.
+  // Has this Play purchase already been credited? The purchase
+  // token is stored as the transactions reference, so a replay
+  // after the app was killed before finishTransaction is skipped
+  // instead of crediting twice. withTimeout-guarded; on any
+  // failure we assume "not credited" so a real purchase is never
+  // silently dropped (the in-memory set in iap.js is the second
+  // guard for the same session).
+  const hasCreditedPurchase = async (token) => {
+    if (!token || !supabase) return false;
+    try {
+      const res = await withTimeout(
+        supabase
+          .from('transactions')
+          .select('id')
+          .eq('reference', token)
+          .limit(1),
+      );
+      return !!(res && !res.error && Array.isArray(res.data) && res.data.length > 0);
+    } catch (e) {
+      return false;
+    }
+  };
+
   const iapHandlerRef = useRef(null);
   iapHandlerRef.current = async (purchase) => {
     const parsed = parseSku(purchase.productId);
     if (!parsed) return false;
+    // The purchase token is the idempotency key AND the
+    // transactions reference (see billing/iap.js).
+    const purchaseToken = purchase.purchaseToken || purchase.transactionId || null;
+    if (purchaseToken && (await hasCreditedPurchase(purchaseToken))) {
+      return true; // already credited — finish it, don't pay twice
+    }
+    const reference = purchaseToken || purchase.productId;
     if (parsed.type === 'coins') {
       const pack = coinPacks.find((p) => p.id === parsed.id);
       if (!pack) return false;
       const total = pack.coins + (pack.bonus || 0);
-      const res = await adjustWallet({ coinsDelta: total, kind: 'purchase_coins', reference: purchase.productId });
+      const res = await adjustWallet({ coinsDelta: total, kind: 'purchase_coins', reference });
       if (res.error) {
         showToast('Payment went through but the coins could not be added — contact support.');
         return false;
@@ -328,7 +500,7 @@ export function AppProvider({ children }) {
     if (parsed.type === 'vip') {
       const pack = vipPacks.find((p) => p.id === parsed.id);
       if (!pack) return false;
-      const res = await setVip({ vipLevel: pack.id, days: pack.days, reference: purchase.productId });
+      const res = await setVip({ vipLevel: pack.id, days: pack.days, reference });
       if (res.error) {
         showToast('Payment went through but Premium could not be activated — contact support.');
         return false;
@@ -342,7 +514,7 @@ export function AppProvider({ children }) {
     if (parsed.type === 'diamonds') {
       const amount = diamondsForDiamondPack(parsed.id);
       if (!amount) return false;
-      const res = await adjustWallet({ diamondsDelta: amount, kind: 'purchase_diamonds', reference: purchase.productId });
+      const res = await adjustWallet({ diamondsDelta: amount, kind: 'purchase_diamonds', reference });
       if (res.error) {
         showToast('Payment went through but the Diamonds could not be added — contact support.');
         return false;
@@ -374,7 +546,7 @@ export function AppProvider({ children }) {
       const skus = [
         ...coinPacks.map((p) => skuForCoinPack(p.id)),
         ...vipPacks.map((p) => skuForVipPack(p.id)),
-        ...DIAMOND_PACK_IDS.map((id) => skuForDiamondPack(id)),
+        ...diamondPackIds.map((id) => skuForDiamondPack(id)),
       ];
       const res = await initIap(skus);
       if (cancelled) return;
@@ -389,7 +561,7 @@ export function AppProvider({ children }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [coinPacks, vipPacks]);
+  }, [coinPacks, vipPacks, diamondPackIds]);
 
   // Opens the Play sheet for one SKU. Returns true when the sheet
   // opened (the credit arrives later via the purchase listener),
@@ -426,15 +598,20 @@ export function AppProvider({ children }) {
   // or there is no session. The caller's coins are deducted from
   // their profiles row (+ transactions row); the host's share is
   // credited to the HOST's own profile, never to the caller.
+  // Charge a finished call. Async: resolves to { cost } once the
+  // wallet write has SETTLED on the server, or false when refused
+  // (not signed in / insufficient coins) or the write failed.
+  // Callers must await this before writing the calls row, so the
+  // row never claims a cost that was never deducted.
   const chargeCall = (host, minutes, ratePerMinute) => {
     const cost = minutes * ratePerMinute;
     if (!signedIn) {
       showToast('Please sign in first.');
-      return false;
+      return Promise.resolve(false);
     }
     if (coins < cost) {
       showToast('Not enough coins — please recharge first.');
-      return false;
+      return Promise.resolve(false);
     }
     const prevCoins = coins;
     const prevDiamonds = diamonds;
@@ -443,7 +620,7 @@ export function AppProvider({ children }) {
       { id: String(Date.now()), name: host.name, duration: `${minutes} min`, cost, time: 'Just now' },
       ...h,
     ]);
-    settlePersist(prevCoins, prevDiamonds, adjustWallet({
+    const settled = settlePersist(prevCoins, prevDiamonds, adjustWallet({
       coinsDelta: -cost,
       kind: 'call_charge',
       reference: host ? host.name : null,
@@ -452,7 +629,7 @@ export function AppProvider({ children }) {
     if (host && host.id) {
       creditHostEarnings(host.id, hostShare * COIN_TO_DIAMOND_RATE, 'call_earnings', host.name);
     }
-    return cost;
+    return settled.then((ok) => (ok ? { cost } : false));
   };
 
   // [F2] Charge a finished audio-only (voice) call. The voice rate
@@ -492,30 +669,22 @@ export function AppProvider({ children }) {
     }), false);
     if (host && host.id) {
       creditHostEarnings(host.id, gift.price * COIN_TO_DIAMOND_RATE, 'gift_received', gift.id || gift.name);
+      // Best-effort: bump the host row's total_gifts. Never blocks
+      // the gift and never throws — a failure just leaves the
+      // counter one behind until the next gift.
+      (async () => {
+        try {
+          const res = await withTimeout(
+            supabase.from('hosts').select('total_gifts').eq('host_id', String(host.id)).maybeSingle(),
+          );
+          const current = res && res.data ? (res.data.total_gifts || 0) : 0;
+          await supabase
+            .from('hosts')
+            .update({ total_gifts: current + 1 })
+            .eq('host_id', String(host.id));
+        } catch (e) { /* best-effort only */ }
+      })();
     }
-    return true;
-  };
-
-  // Credit coins to the signed-in user and persist them. This is the
-  // credit step AFTER a real payment (buyCoinPack) and the path
-  // ProfileScreen's task claims use — it never opens Play itself.
-  // `meta` may carry { kind, reference } for the transactions row.
-  const recharge = (pack, meta) => {
-    if (!signedIn) {
-      showToast('Please sign in first.');
-      return false;
-    }
-    const total = (pack.coins || 0) + (pack.bonus || 0);
-    if (!total || total <= 0) return false;
-    const prevCoins = coins;
-    const prevDiamonds = diamonds;
-    setCoins((c) => c + total);
-    showToast(`Recharged ${total.toLocaleString()} coins`);
-    settlePersist(prevCoins, prevDiamonds, adjustWallet({
-      coinsDelta: total,
-      kind: (meta && meta.kind) || 'recharge',
-      reference: (meta && meta.reference) || pack.id || null,
-    }));
     return true;
   };
 
@@ -523,30 +692,30 @@ export function AppProvider({ children }) {
   // The coins land via the purchase listener, not here.
   const buyCoinPack = (pack) => buyWithIap(skuForCoinPack(pack.id));
 
-  // Credit/debit Diamonds on the signed-in user's profiles row.
-  // Positive = a credit (after a real payment via buyDiamondPack);
-  // negative = a spend (ProfileScreen Exchange passes
-  // { diamonds: -amount }). Never opens Play itself. Returns false
-  // when the balance is too low or there is no session.
-  const buyDiamonds = (pack, meta) => {
+  // Spend Diamonds from the signed-in user's profiles row
+  // (negative-only). Positive credits NEVER happen here: Diamonds
+  // only arrive through a real Play purchase, credited by the
+  // purchase listener. ProfileScreen Exchange passes a positive
+  // amount to spend. Returns false when the balance is too low or
+  // there is no session.
+  const spendDiamonds = (amount, meta) => {
     if (!signedIn) {
       showToast('Please sign in first.');
       return false;
     }
-    const amount = pack.diamonds || 0;
-    if (!amount) return false;
-    if (amount < 0 && diamonds < -amount) {
+    const spend = Math.floor(Number(amount) || 0);
+    if (!spend || spend <= 0) return false;
+    if (diamonds < spend) {
       showToast('Not enough Diamonds.');
       return false;
     }
     const prevCoins = coins;
     const prevDiamonds = diamonds;
-    setDiamonds((d) => d + amount);
-    if (amount > 0) showToast(`+${amount.toLocaleString()} Diamonds`);
+    setDiamonds((d) => d - spend);
     settlePersist(prevCoins, prevDiamonds, adjustWallet({
-      diamondsDelta: amount,
-      kind: amount < 0 ? ((meta && meta.kind) || 'diamond_spend') : 'purchase_diamonds',
-      reference: (meta && meta.reference) || pack.id || null,
+      diamondsDelta: -spend,
+      kind: (meta && meta.kind) || 'diamond_spend',
+      reference: (meta && meta.reference) || null,
     }));
     return true;
   };
@@ -582,22 +751,138 @@ export function AppProvider({ children }) {
     return true;
   };
 
-  // Record that a spin was used today (dateKey 'YYYY-MM-DD').
-  const recordSpin = (dateKeyStr) => {
-    if (dateKeyStr !== lastSpinDate) {
-      setLastSpinDate(dateKeyStr);
-      setSpinsUsedToday(1);
-    } else {
-      setSpinsUsedToday((n) => n + 1);
+  // [F1] Lucky Spin + Daily Reward — server-gated (reward_claims).
+  // One claim per account per day: the insert below is the gate —
+  // the UNIQUE(profile_id, kind, claim_date) constraint rejects a
+  // second claim the same day even from another device or after a
+  // reinstall. Local dates/streaks are display cache only.
+  // `todayKey` is the local calendar date (YYYY-MM-DD); the
+  // claim_date column stores it as a plain date, so no timezone
+  // shift applies.
+  const todayKey = () => {
+    const d = new Date();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${d.getFullYear()}-${m}-${day}`;
+  };
+
+  // Start of the local day as an ISO instant, for "today" queries
+  // over timestamptz columns (transactions / calls created_at).
+  const todayStartIso = () => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.toISOString();
+  };
+
+  // Insert a reward_claims gate row. Returns 'ok', 'claimed'
+  // (unique-violation = already claimed today) or 'error'.
+  const insertClaim = async (userId, kind, amount) => {
+    if (!supabase) return 'error';
+    try {
+      const res = await withTimeout(
+        supabase.from('reward_claims').insert({
+          profile_id: userId,
+          kind,
+          claim_date: todayKey(),
+          amount_coins: amount || 0,
+        }),
+      );
+      if (!res) return 'error';
+      if (res.error) {
+        if (String(res.error.code) === '23505') return 'claimed';
+        return 'error';
+      }
+      return 'ok';
+    } catch (e) {
+      return 'error';
+    }
+  };
+
+  // Record that a spin was used today. Returns { ok, alreadyClaimed }.
+  // The prize itself is credited separately by the screen via
+  // addRewardCoins after the wheel stops.
+  const recordSpin = async () => {
+    const user = await getSignedInUser();
+    if (!user || !supabase) return { ok: false, alreadyClaimed: false };
+    const result = await insertClaim(user.id, 'spin', 0);
+    if (result === 'claimed') return { ok: false, alreadyClaimed: true };
+    if (result === 'error') return { ok: false, alreadyClaimed: false };
+    setLastSpinDate(todayKey());
+    setSpinsUsedToday((n) => n + 1);
+    return { ok: true, alreadyClaimed: false };
+  };
+
+  // What kind of task is this, from its seeded title?
+  const taskKind = (task) => {
+    const t = String((task && task.title) || '').toLowerCase();
+    if (t.includes('check-in') || t.includes('checkin')) return 'checkin';
+    if (t.includes('spin')) return 'spin';
+    if (t.includes('gift')) return 'gift';
+    if (t.includes('call')) return 'call';
+    if (t.includes('follow')) return 'follow';
+    return 'other';
+  };
+
+  // Has the signed-in user finished this task today, checked
+  // against the server (never local / memory state)?
+  const isTaskDone = async (userId, task) => {
+    if (!supabase) return false;
+    const kind = taskKind(task);
+    const since = todayStartIso();
+    try {
+      if (kind === 'checkin' || kind === 'spin') {
+        const res = await withTimeout(
+          supabase.from('reward_claims').select('id').eq('profile_id', userId).eq('kind', kind).eq('claim_date', todayKey()).limit(1),
+        );
+        return !!(res && Array.isArray(res.data) && res.data.length > 0);
+      }
+      if (kind === 'gift') {
+        const res = await withTimeout(
+          supabase.from('transactions').select('id').eq('profile_id', userId).eq('kind', 'gift_sent').gte('created_at', since).limit(1),
+        );
+        return !!(res && Array.isArray(res.data) && res.data.length > 0);
+      }
+      if (kind === 'call') {
+        const res = await withTimeout(
+          supabase.from('calls').select('id').eq('caller_id', userId).gte('created_at', since).limit(1),
+        );
+        return !!(res && Array.isArray(res.data) && res.data.length > 0);
+      }
+      if (kind === 'follow') {
+        const target = (task && task.target_count) || 2;
+        const res = await withTimeout(
+          supabase.from('follows').select('host_id').eq('follower_id', userId),
+        );
+        return !!(res && Array.isArray(res.data) && res.data.length >= target);
+      }
+      return false;
+    } catch (e) {
+      return false;
     }
   };
 
   // [Vero] Daily Tasks — claim a finished task's coin reward once
-  // per day. claimedTasks is { 'YYYY-MM-DD': ['task-checkin', ...] }.
-  const claimTask = (taskId, dateKeyStr, reward) => {
-    const claimedToday = claimedTasks[dateKeyStr] || [];
-    if (claimedToday.includes(taskId)) return false;
-    setClaimedTasks((prev) => ({ ...prev, [dateKeyStr]: [...(prev[dateKeyStr] || []), taskId] }));
+  // per day per account. Server-gated: the reward_claims row
+  // (kind 'task:<id>') is the claim record; completion is verified
+  // against the server (transactions / calls / follows /
+  // reward_claims), never local state. Returns true when credited.
+  const claimTask = async (task) => {
+    if (!task || !task.id) return false;
+    const user = await getSignedInUser();
+    if (!user || !supabase) return false;
+    const reward = Number(task.reward_coins) || 0;
+    if (reward <= 0) return false;
+    const key = todayKey();
+    try {
+      const existing = await withTimeout(
+        supabase.from('reward_claims').select('id').eq('profile_id', user.id).eq('kind', `task:${task.id}`).eq('claim_date', key).limit(1),
+      );
+      if (existing && Array.isArray(existing.data) && existing.data.length > 0) return false;
+    } catch (e) { /* fall through to the completion check */ }
+    if (!(await isTaskDone(user.id, task))) return false;
+    const result = await insertClaim(user.id, `task:${task.id}`, reward);
+    if (result !== 'ok') return false;
+    setClaimedTasks((prev) => ({ ...prev, [key]: [...(prev[key] || []), String(task.id)] }));
     addRewardCoins(reward, 'Daily Task');
     return true;
   };
@@ -608,30 +893,73 @@ export function AppProvider({ children }) {
   const buyVip = (pack) => buyWithIap(skuForVipPack(pack.id));
   // [/Vero]
 
-  // Record a daily check-in. `streak` is the new streak length
-  // (the screen works it out from yesterday's date); the date is
-  // stored so the screen can tell "already claimed today".
-  const recordCheckin = (dateKeyStr, streak) => {
-    setLastCheckinDate(dateKeyStr);
-    setCheckinStreak(streak);
+  // Record a daily check-in. Server-gated to once per day per
+  // account (reward_claims kind 'checkin'). Returns
+  // { ok, alreadyClaimed }. The streak is display cache only.
+  const recordCheckin = async () => {
+    const user = await getSignedInUser();
+    if (!user || !supabase) return { ok: false, alreadyClaimed: false };
+    const result = await insertClaim(user.id, 'checkin', 0);
+    if (result === 'claimed') return { ok: false, alreadyClaimed: true };
+    if (result === 'error') return { ok: false, alreadyClaimed: false };
+    const key = todayKey();
+    const y = new Date();
+    y.setDate(y.getDate() - 1);
+    const yKey = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`;
+    setCheckinStreak((s) => (lastCheckinDate === yKey ? s + 1 : 1));
+    setLastCheckinDate(key);
+    return { ok: true, alreadyClaimed: false };
   };
   // [/F1]
 
-  const toggleFollow = (hostId) => {
-    setFollowing((f) => (f.includes(hostId) ? f.filter((x) => x !== hostId) : [...f, hostId]));
+  // Follow / unfollow a host, persisted to the follows table
+  // (follower_id = me, host_id = the host's text id). Optimistic
+  // local update; on a DB failure the list rolls back and the user
+  // is told. Callers (Home, ChatDetail) don't await it.
+  const toggleFollow = async (hostId) => {
+    if (!hostId) return;
+    const id = String(hostId);
+    const isFollowing = following.includes(id);
+    setFollowing((f) => (isFollowing ? f.filter((x) => x !== id) : [...f, id]));
+    const user = await getSignedInUser();
+    if (!user || !supabase) return; // local-only without a session
+    try {
+      if (isFollowing) {
+        const { error } = await supabase
+          .from('follows')
+          .delete()
+          .eq('follower_id', user.id)
+          .eq('host_id', id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('follows')
+          .insert({ follower_id: user.id, host_id: id });
+        if (error) throw error;
+      }
+    } catch (e) {
+      setFollowing((f) => (isFollowing ? [...f, id] : f.filter((x) => x !== id)));
+      showToast("Couldn't save the follow — check your connection and try again.");
+    }
   };
 
   const value = useMemo(
     // [F1] Reward state + actions exposed to RewardsScreen.
-    // [Live] callRates/coinPacks/gifts/vipPacks are the resolved live
-    // (Supabase) or demo (config.js) catalog; getLiveCallRate /
-    // getLiveVoiceCallRate look tiers up in them; liveSource tells
-    // screens where the data came from ('demo' | 'supabase').
+    // [Live] callRates/coinPacks/gifts/vipPacks/diamondPacks are the
+    // resolved live (Supabase) or demo (config.js) catalog (diamond
+    // packs are live-only); getLiveCallRate / getLiveVoiceCallRate
+    // look tiers up in them; liveSource tells screens where the
+    // data came from ('demo' | 'supabase').
     // [Wallet] signedIn/walletStatus/vipUntil/transactions/
     // refreshWallet/refreshTransactions expose the real wallet;
     // buyCoinPack/buyDiamondPack/buyVip open the Play sheet.
-    () => ({ coins, diamonds, earnings, following, toggleFollow, sendGift, recharge, buyDiamonds, buyCoinPack, buyDiamondPack, chargeCall, chargeVoiceCall, callHistory, toast, showToast, hosts, setHostOnline, setHostRate, userCountry /* [F3] */, addRewardCoins, recordSpin, recordCheckin, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, claimTask, vipLevel, vipUntil, buyVip /* [Vero] */, callRates, coinPacks, gifts, vipPacks, getLiveCallRate, getLiveVoiceCallRate, liveSource /* [Live] */, signedIn, walletStatus, iapStatus, transactions, refreshWallet, refreshTransactions /* [Wallet] */ }),
-    [coins, diamonds, earnings, following, callHistory, toast, hosts, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, vipLevel, vipUntil, callRates, coinPacks, gifts, vipPacks, liveSource, signedIn, walletStatus, iapStatus, transactions]
+    // spendDiamonds is negative-only; updateMyProfile patches the
+    // signed-in user's profiles row (auth.js); frames are the
+    // active panel frames; unreadTotal counts unread messages;
+    // levelInfo is { level, points, progress } from real
+    // transactions on the LV_ROWS ladder.
+    () => ({ coins, diamonds, following, toggleFollow, sendGift, spendDiamonds, buyCoinPack, buyDiamondPack, chargeCall, chargeVoiceCall, callHistory, toast, showToast, hosts, setHostOnline, setHostRate, userCountry /* [F3] */, addRewardCoins, recordSpin, recordCheckin, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, claimTask, vipLevel, vipUntil, buyVip /* [Vero] */, callRates, coinPacks, gifts, vipPacks, diamondPacks, frames, getLiveCallRate, getLiveVoiceCallRate, liveSource /* [Live] */, signedIn, walletStatus, iapStatus, transactions, refreshWallet, refreshTransactions /* [Wallet] */, unreadTotal, refreshUnreadTotal, levelInfo, updateMyProfile }),
+    [coins, diamonds, following, callHistory, toast, hosts, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, vipLevel, vipUntil, callRates, coinPacks, gifts, vipPacks, diamondPacks, frames, liveSource, signedIn, walletStatus, iapStatus, transactions, userCountry, unreadTotal, levelInfo]
     // [/F1]
   );
 
