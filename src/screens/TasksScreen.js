@@ -1,33 +1,80 @@
 // Livo TasksScreen — Vero-style daily tasks that earn coins.
-// Progress comes from real store state (check-in, spin, gifts
-// sent, calls made, follows). Each task can be claimed once per
-// day; claims are saved on the device (store.claimTask).
+// The task list comes from the Supabase `tasks` table (active rows
+// only, withTimeout-guarded). There is NO hardcoded fallback list:
+// a failed read or an empty table shows an honest empty / error
+// state instead of pretending demo tasks are live.
+// Claiming goes through store.claimTask(task), which is server-
+// gated: completion is derived on the server, and it returns true
+// only when the reward was actually credited (false = not complete
+// yet or already claimed). No local in-memory completion check is
+// used as a source of truth — the claimed marks shown here are only
+// a session display cache of server-confirmed claims.
 import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { COLORS } from '../config';
 import { useApp } from '../store';
-import { todayKey } from '../rewardsConfig';
+import { supabase } from '../supabase/client';
+import { withTimeout } from '../supabase/timeout';
 
-const TASKS = [
-  { id: 'task-checkin', icon: '📅', title: 'Daily check-in', desc: 'Claim your daily reward', reward: 100 },
-  { id: 'task-spin', icon: '🎡', title: 'Spin the wheel', desc: 'Use your free spin today', reward: 50 },
-  { id: 'task-gift', icon: '🎁', title: 'Send a gift', desc: 'Send any gift in a call', reward: 100 },
-  { id: 'task-call', icon: '📞', title: 'Make a call', desc: 'Finish one video or voice call', reward: 200 },
-  { id: 'task-follow', icon: '➕', title: 'Follow 2 hosts', desc: 'Follow hosts you like', reward: 100 },
+// The tasks table has no icon column — pick one from the title.
+const ICON_FOR_TITLE = [
+  [/check-in/i, '📅'],
+  [/spin/i, '🎡'],
+  [/gift/i, '🎁'],
+  [/call/i, '📞'],
+  [/follow/i, '➕'],
 ];
+function iconFor(task) {
+  const title = (task && task.title) || '';
+  const hit = ICON_FOR_TITLE.find(([re]) => re.test(title));
+  return hit ? hit[1] : '🎯';
+}
 
 export default function TasksScreen({ navigation }) {
-  const { coins, lastCheckinDate, lastSpinDate, spinsUsedToday, giftsSent, callHistory, following, claimedTasks, claimTask } = useApp();
-  const today = todayKey();
-  const claimedToday = claimedTasks[today] || [];
-  const isDone = (id) => {
-    if (id === 'task-checkin') return lastCheckinDate === today;
-    if (id === 'task-spin') return lastSpinDate === today && spinsUsedToday > 0;
-    if (id === 'task-gift') return giftsSent > 0;
-    if (id === 'task-call') return callHistory.length > 0;
-    if (id === 'task-follow') return following.length >= 2;
-    return false;
+  const { coins, claimTask, showToast } = useApp();
+  const [tasks, setTasks] = React.useState(null); // null = loading
+  const [loadError, setLoadError] = React.useState(false);
+  const [claimedIds, setClaimedIds] = React.useState([]); // server-confirmed, this session only
+  const [claimingId, setClaimingId] = React.useState(null);
+
+  React.useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!supabase) {
+        if (mounted) setLoadError(true);
+        return;
+      }
+      const res = await withTimeout(
+        supabase.from('tasks').select('*').eq('is_active', true),
+      );
+      if (!mounted) return;
+      if (res && !res.error && Array.isArray(res.data)) {
+        setTasks(res.data);
+      } else {
+        setLoadError(true);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+
+  const onClaim = async (task) => {
+    if (claimingId) return;
+    setClaimingId(task.id);
+    try {
+      const ok = await claimTask(task);
+      if (ok === true) {
+        setClaimedIds((ids) => (ids.includes(task.id) ? ids : [...ids, task.id]));
+        showToast(`+${Number(task.reward_coins || 0).toLocaleString()} coins — task complete!`);
+      } else {
+        showToast('Not complete yet — finish the task first, then claim.');
+      }
+    } catch (e) {
+      showToast('Could not claim — check your connection and try again.');
+    } finally {
+      setClaimingId(null);
+    }
   };
+
   return (
     <ScrollView style={styles.bg} contentContainerStyle={styles.wrap}>
       <TouchableOpacity onPress={() => navigation.goBack()}>
@@ -38,30 +85,41 @@ export default function TasksScreen({ navigation }) {
       <View style={styles.coinPill}>
         <Text style={styles.coinText}>🪙 {coins.toLocaleString()} coins</Text>
       </View>
-      {TASKS.map((t) => {
-        const done = isDone(t.id);
-        const claimed = claimedToday.includes(t.id);
-        const disabled = !done || claimed;
-        return (
-          <View key={t.id} style={[styles.card, claimed && styles.cardClaimed]}>
-            <Text style={styles.icon}>{t.icon}</Text>
-            <View style={styles.info}>
-              <Text style={styles.taskTitle}>{t.title}</Text>
-              <Text style={styles.taskDesc}>{t.desc}</Text>
-              <Text style={styles.reward}>+{t.reward} coins</Text>
+      {tasks === null && !loadError ? (
+        <Text style={styles.empty}>Loading tasks…</Text>
+      ) : loadError ? (
+        <Text style={styles.empty}>Couldn&apos;t load tasks — check your connection and try again.</Text>
+      ) : tasks.length === 0 ? (
+        <Text style={styles.empty}>No tasks right now — check back tomorrow.</Text>
+      ) : (
+        tasks.map((t) => {
+          const claimed = claimedIds.includes(t.id);
+          const claiming = claimingId === t.id;
+          const disabled = claimed || claiming;
+          return (
+            <View key={t.id} style={[styles.card, claimed && styles.cardClaimed]}>
+              <Text style={styles.icon}>{iconFor(t)}</Text>
+              <View style={styles.info}>
+                <Text style={styles.taskTitle}>{t.title}</Text>
+                {t.description ? <Text style={styles.taskDesc}>{t.description}</Text> : null}
+                {t.target_count && t.target_count > 1 ? (
+                  <Text style={styles.taskDesc}>Target: {t.target_count} {t.target_unit || ''}</Text>
+                ) : null}
+                <Text style={styles.reward}>+{Number(t.reward_coins || 0).toLocaleString()} coins</Text>
+              </View>
+              <TouchableOpacity
+                style={[styles.claimBtn, disabled && styles.claimBtnOff]}
+                disabled={disabled}
+                onPress={() => onClaim(t)}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.claimBtnText, disabled && styles.claimBtnTextOff]}>{claimed ? '✓ Claimed' : claiming ? '…' : 'Claim'}</Text>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity
-              style={[styles.claimBtn, disabled && styles.claimBtnOff]}
-              disabled={disabled}
-              onPress={() => claimTask(t.id, today, t.reward)}
-              activeOpacity={0.85}
-            >
-              <Text style={[styles.claimBtnText, disabled && styles.claimBtnTextOff]}>{claimed ? '✓ Claimed' : done ? 'Claim' : 'Not done'}</Text>
-            </TouchableOpacity>
-          </View>
-        );
-      })}
-      <Text style={styles.note}>Rewards are added to your real coin balance.</Text>
+          );
+        })
+      )}
+      <Text style={styles.note}>Rewards are added to your real coin balance. Completion is checked on the server.</Text>
     </ScrollView>
   );
 }
@@ -77,6 +135,7 @@ const styles = StyleSheet.create({
   claimBtnTextOff: { color: COLORS.grey },
   coinPill: { alignSelf: 'flex-start', backgroundColor: COLORS.lavender, borderRadius: 20, marginTop: 12, paddingHorizontal: 14, paddingVertical: 8 },
   coinText: { fontWeight: 'bold' },
+  empty: { color: COLORS.grey, fontSize: 14, marginTop: 24, textAlign: 'center' },
   icon: { fontSize: 28 },
   info: { flex: 1, marginLeft: 12 },
   note: { color: COLORS.grey, fontSize: 12, marginTop: 16, textAlign: 'center' },
