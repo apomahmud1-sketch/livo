@@ -23,7 +23,7 @@ import { Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View 
 import { COLORS } from '../config';
 import { useApp } from '../store';
 import { supabase } from '../supabase/client';
-import { fetchMyProfile, signOut } from '../supabase/auth';
+import { fetchMyProfile, getSessionUser, signOut } from '../supabase/auth';
 import { stopHostHeartbeat } from '../supabase/host';
 import LevelView from './profile/LevelView';
 import VipView from './profile/VipView';
@@ -57,8 +57,11 @@ export default function ProfileScreen({ navigation }) {
   React.useEffect(() => {
     let mounted = true;
     if (supabase) {
-      supabase.auth.getUser().then(({ data }) => {
-        if (mounted) setUser(data && data.user ? data.user : null);
+      // Identity from the LOCAL session (getSession reads storage —
+      // no network). The network getUser() call failed on the user's
+      // phone right after login and left this screen showing "Not set".
+      supabase.auth.getSession().then(({ data }) => {
+        if (mounted) setUser(data && data.session ? data.session.user : null);
       });
       const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
         if (mounted) setUser(session && session.user ? session.user : null);
@@ -130,12 +133,12 @@ export default function ProfileScreen({ navigation }) {
   const copyId = async () => {
     if (!PROFILE.id) { showToast('No ID yet — sign in first'); return; }
     try { await Clipboard.setStringAsync(String(PROFILE.id)); } catch (e) { /* clipboard unavailable */ }
-    showToast(`ID কপি হয়েছে: ${PROFILE.id}`);
+    showToast(`ID copied: ${PROFILE.id}`);
   };
 
   const toggleDark = () => {
     setDark((d) => !d);
-    showToast(!dark ? 'ডার্ক মোড চালু হয়েছে' : 'ডার্ক মোড বন্ধ হয়েছে');
+    showToast(!dark ? 'Dark mode on' : 'Dark mode off');
   };
 
   const goWallet = () => navigation.navigate('WalletTab');
@@ -159,6 +162,15 @@ export default function ProfileScreen({ navigation }) {
   const openBadge = (badge) => { setBadgeDetail(badge); setView('badge'); };
 
   // ── Real profile writes (via the store) ──
+  // Save actions re-read the session when the local user state is
+  // null (e.g. this screen mounted before the session arrived)
+  // instead of refusing with "Please sign in first." at once.
+  const ensureUser = async () => {
+    if (user) return user;
+    const u = await getSessionUser();
+    if (u) setUser(u);
+    return u;
+  };
   // updateMyProfile returns false / { error } when the write failed;
   // on success the local profile state is merged so the screen
   // reflects the saved values at once.
@@ -177,7 +189,8 @@ export default function ProfileScreen({ navigation }) {
   };
 
   const persistGender = async (g) => {
-    if (!user) { showToast('Please sign in first.'); return; }
+    const u = await ensureUser();
+    if (!u) { showToast('Please sign in first.'); return; }
     const ok = await savePatch({ gender: g });
     if (!ok) { showToast("Couldn't save gender — try again."); return; }
     setGender(g);
@@ -185,7 +198,8 @@ export default function ProfileScreen({ navigation }) {
   };
 
   const pickSecondLang = async (en) => {
-    if (!user) { showToast('Please sign in first.'); return; }
+    const u = await ensureUser();
+    if (!u) { showToast('Please sign in first.'); return; }
     const ok = await savePatch({ second_language: en });
     if (!ok) { showToast("Couldn't save — try again."); return; }
     setSecondLang(en);
@@ -206,7 +220,8 @@ export default function ProfileScreen({ navigation }) {
   };
 
   const saveProfile = async () => {
-    if (!user) { showToast('Please sign in first.'); return; }
+    const u = await ensureUser();
+    if (!u) { showToast('Please sign in first.'); return; }
     const ageTrimmed = draft.age.trim();
     const ageNum = ageTrimmed ? parseInt(ageTrimmed, 10) : null;
     if (ageTrimmed && (Number.isNaN(ageNum) || ageNum < 13 || ageNum > 120)) {
@@ -237,7 +252,8 @@ export default function ProfileScreen({ navigation }) {
   // Avatar: pick a photo, upload it to the public 'avatars' storage
   // bucket, and save the public URL as avatar_url on the profile.
   const pickAvatar = async () => {
-    if (!user) { showToast('Please sign in first.'); return; }
+    const u = await ensureUser();
+    if (!u) { showToast('Please sign in first.'); return; }
     if (avatarBusy) return;
     try {
       const res = await ImagePicker.launchImageLibraryAsync({
@@ -251,7 +267,7 @@ export default function ProfileScreen({ navigation }) {
       const uri = res.assets[0].uri;
       const resp = await fetch(uri);
       const blob = await resp.blob();
-      const path = `${user.id}/${Date.now()}.jpg`;
+      const path = `${u.id}/${Date.now()}.jpg`;
       const { error: upErr } = await supabase.storage.from('avatars').upload(path, blob, {
         contentType: 'image/jpeg',
         upsert: true,
@@ -348,7 +364,7 @@ export default function ProfileScreen({ navigation }) {
         <View style={styles.mainPad}>
           <View style={[styles.headerCard, { backgroundColor: t.surface }]}>
             <View style={styles.idHead}>
-              <TouchableOpacity onPress={() => setView('profile')} activeOpacity={0.8} accessibilityLabel="ছবিতে চাপ দিয়ে My Profile পেজ খোলো">
+              <TouchableOpacity onPress={() => setView('profile')} activeOpacity={0.8} accessibilityLabel="Tap the photo to open the My Profile page">
                 {vipLevel ? (
                   <VipFrame frame="gold" size={78}>
                     {avatarView(64, 32)}
@@ -368,7 +384,7 @@ export default function ProfileScreen({ navigation }) {
                 </View>
                 <View style={styles.idRow}>
                   <Text style={[styles.idTxt, { color: t.muted }]}>ID:&nbsp;{PROFILE.id || '—'}</Text>
-                  <TouchableOpacity onPress={copyId} accessibilityLabel="ID কপি করো">
+                  <TouchableOpacity onPress={copyId} accessibilityLabel="Copy ID">
                     <Text style={styles.copyIcon}>📋</Text>
                   </TouchableOpacity>
                 </View>
@@ -383,10 +399,10 @@ export default function ProfileScreen({ navigation }) {
               </View>
               <View style={styles.topBtns}>
                 {/* Single check-in path: RewardsScreen. */}
-                <TouchableOpacity onPress={() => navigation.navigate('Rewards')} style={styles.checkinBtn} accessibilityLabel="প্রতিদিনের চেক-ইন">
+                <TouchableOpacity onPress={() => navigation.navigate('Rewards')} style={styles.checkinBtn} accessibilityLabel="Daily check-in">
                   <Text style={styles.checkinEmoji}>📅</Text>
                 </TouchableOpacity>
-                <TouchableOpacity onPress={toggleDark} style={styles.moonBtn} accessibilityLabel="ডার্ক মোড চালু বা বন্ধ করো">
+                <TouchableOpacity onPress={toggleDark} style={styles.moonBtn} accessibilityLabel="Turn dark mode on or off">
                   <Text style={styles.moonEmoji}>{dark ? '☀️' : '🌙'}</Text>
                 </TouchableOpacity>
               </View>
@@ -458,13 +474,13 @@ export default function ProfileScreen({ navigation }) {
                     <TouchableOpacity
                       key={v}
                       style={[styles.priceOpt, chatPrice === v && styles.priceOptSel]}
-                      onPress={() => { setChatPrice(v); showToast(`Video Call Price সেট হয়েছে: ${v.toLocaleString()}/min`); }}
+                      onPress={() => { setChatPrice(v); showToast(`Video Call Price set: ${v.toLocaleString()}/min`); }}
                     >
                       <Text style={[styles.priceOptTxt, chatPrice === v && styles.priceOptTxtSel]}>{v.toLocaleString()}/min</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
-                <Text style={[styles.hint, { color: t.muted }]}>তোমার লেভেল অনুযায়ী সর্বোচ্চ 3,000/min পর্যন্ত সেট করা যাবে। এই দাম এখনো প্রোফাইলে সংরক্ষণ হয় না — হোস্টের আসল কল রেট প্যানেল থেকে সেট করা হয়।</Text>
+                <Text style={[styles.hint, { color: t.muted }]}>You can set up to 3,000/min based on your level. This price is not saved to your profile yet — a host’s real call rate is set from the panel.</Text>
               </View>
             )}
           </View>
@@ -472,7 +488,7 @@ export default function ProfileScreen({ navigation }) {
             <Text style={[styles.cardBoxTitle, { color: t.text }]}>Highest Call Price</Text>
             <View style={styles.tableHead}>
               <Text style={styles.th}>Level</Text>
-              <Text style={styles.th}>সর্বোচ্চ দাম / min</Text>
+              <Text style={styles.th}>Max price / min</Text>
             </View>
             {HIGHEST_CALL_PRICE.map((r) => (
               <View key={r.level} style={[styles.tableRow, { borderColor: t.border }]}>
@@ -554,9 +570,9 @@ export default function ProfileScreen({ navigation }) {
         <View>
           {subHead('Badge', 'profile')}
           <View style={[styles.cardBox, { backgroundColor: t.surface }]}>
-            <Text style={[styles.cardBoxTitle, { color: t.text }]}>{badgeDetail ? `${badgeDetail.n}${badgeDetail.got ? ' · পেয়ে গেছো' : ` · ${badgeDetail.p}`}` : 'একটা Badge বেছে নাও'}</Text>
+            <Text style={[styles.cardBoxTitle, { color: t.text }]}>{badgeDetail ? `${badgeDetail.n}${badgeDetail.got ? ' · Earned' : ` · ${badgeDetail.p}`}` : 'Choose a badge'}</Text>
             <Text style={[styles.hint, { color: t.muted }]}>
-              {badgeDetail ? badgeDetail.d : 'নিচের যেকোনো Badge-এ চাপ দিলে সেটা কীভাবে পাওয়া যায়, তা এখানে দেখাবে।'}
+              {badgeDetail ? badgeDetail.d : 'Tap any badge below to see how to earn it.'}
             </Text>
           </View>
           <Text style={[styles.sec, { color: t.text }]}>Activity Medal</Text>
@@ -590,7 +606,7 @@ export default function ProfileScreen({ navigation }) {
             <Text style={styles.giftEmptyIconBig}>🎁</Text>
             <Text style={[styles.giftEmptyTxt, { color: t.muted }]}>Haven't received a gift yet</Text>
             <Text style={[styles.hint, { color: t.muted, textAlign: 'center' }]}>
-              লাইভে গেলে বা প্রোফাইলে কেউ গিফট পাঠালে সেই গিফটগুলো এখানে একে একে জমা হবে — কে পাঠিয়েছে আর কত Diamonds-এর গিফট, সবসহ।
+              When you go live or someone sends a gift to your profile, the gifts will appear here one by one — who sent them and how many Diamonds each gift is worth.
             </Text>
           </View>
         </View>
