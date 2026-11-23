@@ -115,7 +115,112 @@ export async function getSession() {
   return { session: data ? data.session : null, error };
 }
 
-// ── The signed-in user: LOCAL session is the source of truth ─────
+// The profiles columns the app reads for the signed-in user.
+// frame_id / frame_expires_at drive the avatar frame display;
+// is_banned / deleted_at drive the access gate in checkAccess.
+const PROFILE_COLUMNS =
+  'id, user_id, username, country, language, gender, age, bio, avatar_url, coins, diamonds, frame_id, frame_expires_at, is_banned, deleted_at';
+
+// ── Ban / delete access gate (Hapa Mother "User" set) ────────────
+// After a session resolves, the app checks whether this account
+// may use Livo at all:
+//   (a) profiles.is_banned, (b) profiles.deleted_at NOT NULL,
+//   (c) an active bans row for the user's email OR this device id.
+// Returns { status: 'ok' | 'banned' | 'deleted' | 'unknown' }.
+// 'unknown' means the check itself failed (no network / timeout) —
+// the app lets the user in rather than locking them out over a
+// transient failure. Never throws.
+export async function checkAccess(user, deviceId) {
+  if (!supabase || !user) return { status: 'unknown' };
+  try {
+    const res = await withTimeout(
+      supabase
+        .from('profiles')
+        .select('id,is_banned,deleted_at')
+        .eq('id', user.id)
+        .maybeSingle(),
+    );
+    if (!res) return { status: 'unknown' };
+    if (res.error) {
+      // eslint-disable-next-line no-console
+      console.log('[Livo] checkAccess profile lookup failed:', res.error.message);
+      return { status: 'unknown' };
+    }
+    const row = res.data;
+    if (!row) return { status: 'unknown' };
+    if (row.is_banned) return { status: 'banned' };
+    if (row.deleted_at) return { status: 'deleted' };
+    // Active bans by email or by this device id (two small queries
+    // instead of one .or() — simpler and robust to special chars).
+    const checks = [];
+    if (user.email) {
+      checks.push(
+        supabase
+          .from('bans')
+          .select('id')
+          .eq('ban_type', 'email')
+          .eq('value', user.email)
+          .eq('active', true)
+          .maybeSingle(),
+      );
+    }
+    if (deviceId) {
+      checks.push(
+        supabase
+          .from('bans')
+          .select('id')
+          .eq('ban_type', 'device')
+          .eq('value', deviceId)
+          .eq('active', true)
+          .maybeSingle(),
+      );
+    }
+    if (checks.length > 0) {
+      const results = await Promise.all(
+        checks.map((p) => withTimeout(p).catch(() => null)),
+      );
+      for (const r of results) {
+        if (r && !r.error && r.data) return { status: 'banned' };
+      }
+    }
+    return { status: 'ok' };
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.log('[Livo] checkAccess failed:', e && e.message);
+    return { status: 'unknown' };
+  }
+}
+
+// ── Avatar frames ────────────────────────────────────────────────
+// The frames table has NO duration column, so the app stamps the
+// expiry when a frame is equipped: the VIP period (vip_until) when
+// the equip comes with one, otherwise now + 30 days. This is the
+// documented default — no other frame durations are invented.
+// Called by updateMyProfile whenever a patch sets frame_id.
+async function frameExpiryFor(patch) {
+  try {
+    let vipUntil = patch.vip_until || null;
+    if (!vipUntil) {
+      const user = await getSessionUser();
+      if (user) {
+        const res = await withTimeout(
+          supabase.from('profiles').select('vip_until').eq('id', user.id).maybeSingle(),
+        );
+        if (res && !res.error && res.data) vipUntil = res.data.vip_until || null;
+      }
+    }
+    const untilMs = vipUntil ? new Date(vipUntil).getTime() : 0;
+    if (untilMs > Date.now()) return new Date(untilMs).toISOString();
+  } catch (e) { /* fall through to the 30-day default */ }
+  return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+}
+
+// Equip an avatar frame by id (writes profiles.frame_id +
+// frame_expires_at). Returns the updated profile row or null.
+export async function equipFrame(frameId) {
+  if (!frameId) return null;
+  return updateMyProfile({ frame_id: frameId });
+}
 // getUser() is a NETWORK call (it validates the token against the
 // Auth server). On a phone that call can fail or stall even when a
 // perfectly valid session sits in local storage — and every screen
@@ -198,7 +303,7 @@ export async function ensureProfile(user) {
     const selectRes = await withTimeout(
       supabase
         .from('profiles')
-        .select('id, user_id, username, country, language, gender, age, bio, avatar_url, coins, diamonds')
+        .select(PROFILE_COLUMNS)
         .eq('id', user.id)
         .maybeSingle(),
     );
@@ -227,7 +332,7 @@ export async function ensureProfile(user) {
       supabase
         .from('profiles')
         .insert(row)
-        .select('id, user_id, username, country, language, gender, age, bio, avatar_url, coins, diamonds')
+        .select(PROFILE_COLUMNS)
         .single(),
     )) || {};
     if (insertError) return { profile: null, error: insertError };
@@ -248,7 +353,7 @@ export async function fetchMyProfile(userId) {
     const res = await withTimeout(
       supabase
         .from('profiles')
-        .select('id, user_id, username, country, language, gender, age, bio, avatar_url, coins, diamonds')
+        .select(PROFILE_COLUMNS)
         .eq('id', userId)
         .maybeSingle(),
     );
@@ -263,6 +368,9 @@ export async function fetchMyProfile(userId) {
 
 // Update the signed-in user's own profiles row (username, bio,
 // country, language, second_language, tags, frame_id, ...).
+// When the patch equips a frame (frame_id) without an explicit
+// frame_expires_at, the expiry is stamped here (VIP period, else
+// now + 30 days — see frameExpiryFor above).
 // withTimeout-guarded; never throws — returns the updated row on
 // success, null on any failure (no session, timeout, RLS error).
 export async function updateMyProfile(patch) {
@@ -272,12 +380,16 @@ export async function updateMyProfile(patch) {
     // network getUser() call can fail on a phone right after login.
     const user = await getSessionUser();
     if (!user) return null;
+    const write = { ...patch };
+    if (write.frame_id && !write.frame_expires_at) {
+      write.frame_expires_at = await frameExpiryFor(write);
+    }
     const res = await withTimeout(
       supabase
         .from('profiles')
-        .update(patch)
+        .update(write)
         .eq('id', user.id)
-        .select('id, user_id, username, country, language, gender, age, bio, avatar_url, coins, diamonds')
+        .select(PROFILE_COLUMNS)
         .maybeSingle(),
     );
     if (!res || res.error || !res.data) return null;
