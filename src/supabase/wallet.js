@@ -8,9 +8,12 @@
 //   amount_diamonds, reference).
 //
 // Contract (shared with the rest of the app):
-//   - the signed-in user comes from supabase.auth.getUser() and
-//     user.id equals profiles.id. No session → every function
-//     reports 'not-signed-in' and nothing is faked.
+//   - the signed-in user comes from the LOCAL session via
+//     getSessionUser() (src/supabase/auth.js) — never from the
+//     network getUser() call, which can fail on a phone right after
+//     login while a valid session exists locally. user.id equals
+//     profiles.id. No session → every function reports
+//     'not-signed-in' and nothing is faked.
 //   - balances are read-then-written through one in-module queue,
 //     so two quick taps can never compute from the same stale row.
 //   - AsyncStorage holds only an offline cache of the last known
@@ -19,6 +22,7 @@
 // ─────────────────────────────────────────────────────────────────
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './client';
+import { getSessionUser } from './auth';
 import { withTimeout } from './timeout';
 
 const LIVO_WALLET_CACHE_KEY = 'livo-wallet-cache-v1';
@@ -33,13 +37,10 @@ function enqueue(fn) {
 }
 
 export async function getSignedInUser() {
-  if (!supabase) return null;
-  try {
-    const { data } = await supabase.auth.getUser();
-    return (data && data.user) || null;
-  } catch (e) {
-    return null;
-  }
+  // Identity from the local session (see getSessionUser in auth.js):
+  // the network getUser() call failed on the user's phone right
+  // after login and made the Wallet look signed-out.
+  return getSessionUser();
 }
 
 // ── Offline cache (display only) ─────────────────────────────────
