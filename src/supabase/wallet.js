@@ -19,6 +19,7 @@
 // ─────────────────────────────────────────────────────────────────
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './client';
+import { withTimeout } from './timeout';
 
 const LIVO_WALLET_CACHE_KEY = 'livo-wallet-cache-v1';
 
@@ -93,11 +94,15 @@ export async function loadWallet() {
   if (!user) return { error: 'not-signed-in' };
   if (!supabase) return { error: 'load-failed' };
   try {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('coins,diamonds,vip_level,vip_until')
-      .eq('id', user.id)
-      .maybeSingle();
+    const res = await withTimeout(
+      supabase
+        .from('profiles')
+        .select('coins,diamonds,vip_level,vip_until,country')
+        .eq('id', user.id)
+        .maybeSingle(),
+    );
+    const data = res && res.data;
+    const error = res ? res.error : new Error('load-timed-out');
     if (error) return { error: 'load-failed' };
     if (!data) {
       const { error: insErr } = await supabase.from('profiles').insert({
@@ -120,6 +125,7 @@ export async function loadWallet() {
       diamonds: typeof data.diamonds === 'number' ? data.diamonds : 0,
       vipLevel: vipActive ? data.vip_level : null,
       vipUntil: vipActive ? data.vip_until : null,
+      country: typeof data.country === 'string' && data.country ? data.country : null,
     };
     await writeWalletCache(user.id, wallet);
     return wallet;
@@ -130,8 +136,15 @@ export async function loadWallet() {
 
 // ── Adjust balances ─────────────────────────────────────────────
 // Applies coinsDelta / diamondsDelta to the signed-in user's
-// profiles row and writes one transactions row. Returns the new
-// { coins, diamonds } on success, or { error, ... }:
+// profiles row and writes one transactions row. FIRST tries the
+// atomic adjust_wallet() Postgres function (balance check +
+// profiles update + transactions insert in one step); ONLY when
+// the rpc itself errors (e.g. the function does not exist yet)
+// does it fall back to the read-then-write path below. A rpc
+// timeout returns 'update-failed' WITHOUT falling back — the
+// server may still have applied it, and a second write would
+// double-credit. Returns the new { coins, diamonds } on success,
+// or { error, ... }:
 //   'not-signed-in' | 'insufficient-balance' | 'update-failed'.
 // A failed transaction-row insert does NOT fail the adjustment
 // (the user already paid / earned) — it is reported as
@@ -141,11 +154,40 @@ export function adjustWallet({ coinsDelta = 0, diamondsDelta = 0, kind, referenc
     const user = await getSignedInUser();
     if (!user) return { error: 'not-signed-in' };
     if (!supabase) return { error: 'update-failed' };
-    const { data: row, error } = await supabase
-      .from('profiles')
-      .select('coins,diamonds')
-      .eq('id', user.id)
-      .single();
+    // (1) Atomic path: adjust_wallet(p_coins, p_diamonds, p_kind,
+    // p_reference) returns table(coins int, diamonds int).
+    const rpcRes = await withTimeout(
+      supabase.rpc('adjust_wallet', {
+        p_coins: coinsDelta,
+        p_diamonds: diamondsDelta,
+        p_kind: kind || 'adjust',
+        p_reference: reference || null,
+      }),
+    );
+    if (rpcRes === null) return { error: 'update-failed' };
+    if (!rpcRes.error && Array.isArray(rpcRes.data) && rpcRes.data.length > 0) {
+      const row = rpcRes.data[0];
+      const result = {
+        coins: typeof row.coins === 'number' ? row.coins : 0,
+        diamonds: typeof row.diamonds === 'number' ? row.diamonds : 0,
+      };
+      await writeWalletCache(user.id, result);
+      return result;
+    }
+    if (rpcRes.error && /insufficient/i.test(String(rpcRes.error.message || ''))) {
+      return { error: 'insufficient-balance' };
+    }
+    // (2) Fallback: the rpc errored (function missing / not
+    // deployed yet) — read-then-write as before.
+    const readRes = await withTimeout(
+      supabase
+        .from('profiles')
+        .select('coins,diamonds')
+        .eq('id', user.id)
+        .single(),
+    );
+    const row = readRes && readRes.data;
+    const error = readRes ? readRes.error : new Error('read-timed-out');
     if (error || !row) return { error: 'update-failed' };
     const coins = (row.coins || 0) + coinsDelta;
     const diamonds = (row.diamonds || 0) + diamondsDelta;
@@ -206,40 +248,70 @@ export function setVip({ vipLevel, days, kind = 'vip_purchase', reference }) {
 // ── Host earnings (best-effort) ──────────────────────────────────
 // Credits diamonds to a host's own profile (looked up through the
 // hosts table by host_id) and bumps hosts.earnings_diamonds, plus a
-// transactions row for the host. Never throws and never blocks the
-// caller — if the host cannot be found, the caller's side of the
-// payment has already been recorded by adjustWallet.
+// transactions row for the host. Returns { ok: true } on success
+// or { ok: false, error } on failure. On failure AFTER the host
+// was found, a transactions row kind='host_credit_failed' is
+// written for the host's profile so the shortfall is visible to
+// the panel instead of vanishing. Never throws and never blocks
+// the caller — if the host cannot be found, the caller's side of
+// the payment has already been recorded by adjustWallet.
 export async function creditHostEarnings(hostId, diamonds, kind = 'call_earnings', reference) {
-  if (!hostId || !diamonds || diamonds <= 0 || !supabase) return;
+  if (!hostId || !diamonds || diamonds <= 0 || !supabase) {
+    return { ok: false, error: 'invalid' };
+  }
   try {
-    const { data: host } = await supabase
-      .from('hosts')
-      .select('profile_id,earnings_diamonds')
-      .eq('host_id', String(hostId))
-      .maybeSingle();
-    if (!host || !host.profile_id) return;
-    const { data: prof } = await supabase
-      .from('profiles')
-      .select('diamonds')
-      .eq('id', host.profile_id)
-      .single();
-    if (!prof) return;
-    await supabase
+    const hostRes = await withTimeout(
+      supabase
+        .from('hosts')
+        .select('profile_id,earnings_diamonds')
+        .eq('host_id', String(hostId))
+        .maybeSingle(),
+    );
+    const host = hostRes && hostRes.data;
+    if (!host || !host.profile_id) return { ok: false, error: 'host-not-found' };
+    const recordFailure = async (err) => {
+      try {
+        await supabase.from('transactions').insert({
+          profile_id: host.profile_id,
+          kind: 'host_credit_failed',
+          amount_coins: 0,
+          amount_diamonds: diamonds,
+          reference: reference || null,
+        });
+      } catch (e) { /* the failure row itself is best-effort */ }
+      return { ok: false, error: err };
+    };
+    const profRes = await withTimeout(
+      supabase
+        .from('profiles')
+        .select('diamonds')
+        .eq('id', host.profile_id)
+        .single(),
+    );
+    const prof = profRes && profRes.data;
+    if (!profRes || profRes.error || !prof) return recordFailure('profile-not-found');
+    const { error: upErr } = await supabase
       .from('profiles')
       .update({ diamonds: (prof.diamonds || 0) + diamonds })
       .eq('id', host.profile_id);
-    await supabase
+    if (upErr) return recordFailure('profile-update-failed');
+    const { error: hostErr } = await supabase
       .from('hosts')
       .update({ earnings_diamonds: (host.earnings_diamonds || 0) + diamonds })
       .eq('host_id', String(hostId));
-    await supabase.from('transactions').insert({
+    if (hostErr) return recordFailure('host-update-failed');
+    const { error: txErr } = await supabase.from('transactions').insert({
       profile_id: host.profile_id,
       kind,
       amount_coins: 0,
       amount_diamonds: diamonds,
       reference: reference || null,
     });
-  } catch (e) { /* best-effort only */ }
+    if (txErr) return recordFailure('receipt-failed');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: 'failed' };
+  }
 }
 
 // ── History ──────────────────────────────────────────────────────
