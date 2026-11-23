@@ -176,13 +176,18 @@ export async function ensureProfile(user) {
     // Timeout-guarded: a stalled select must fail fast, never hang
     // the sign-in (the missing profiles row on 2026-11-23 came from
     // this step never completing on the phone).
-    const { data: existing, error: selectError } = (await withTimeout(
+    const selectRes = await withTimeout(
       supabase
         .from('profiles')
         .select('id, user_id, username, country, language, gender, age, bio, avatar_url, coins, diamonds')
         .eq('id', user.id)
         .maybeSingle(),
-    )) || {};
+    );
+    // A timed-out select returns null — that is NOT "no row". Do
+    // not attempt the insert: the row may already exist, and
+    // inserting would hit a unique-violation on the primary key.
+    if (!selectRes) return { profile: null, error: new Error('Profile lookup timed out') };
+    const { data: existing, error: selectError } = selectRes;
     if (selectError) return { profile: null, error: selectError };
     if (existing) return { profile: existing, error: null };
 
@@ -214,14 +219,22 @@ export async function ensureProfile(user) {
 }
 
 // Read the signed-in user's own profiles row (null when none yet).
+// Timeout-guarded: a stalled request returns a visible timeout
+// error instead of hanging forever (the Me screen on 2026-11-23
+// showed "Profile: missing | Error: none" because this select
+// stalled and the promise never resolved).
 export async function fetchMyProfile(userId) {
   if (!supabase || !userId) return { profile: null, error: new Error('No user id.') };
   try {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('id, user_id, username, country, language, gender, age, bio, avatar_url, coins, diamonds')
-      .eq('id', userId)
-      .maybeSingle();
+    const res = await withTimeout(
+      supabase
+        .from('profiles')
+        .select('id, user_id, username, country, language, gender, age, bio, avatar_url, coins, diamonds')
+        .eq('id', userId)
+        .maybeSingle(),
+    );
+    if (!res) return { profile: null, error: new Error('Profile request timed out') };
+    const { data, error } = res;
     if (error) return { profile: null, error };
     return { profile: data || null, error: null };
   } catch (e) {
