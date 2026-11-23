@@ -1,8 +1,9 @@
 // ─────────────────────────────────────────────────────────────────
 // Livo — host-side Supabase reads/writes (real data, no demo).
 //
-// The signed-in user comes from supabase.auth.getUser(); user.id
-// equals profiles.id. Every function here NEVER throws: any failure
+// The signed-in user comes from the local session via
+// getSessionUser() (src/supabase/auth.js); user.id equals
+// profiles.id. Every function here NEVER throws: any failure
 // (no session, RLS denied, network error) returns null / false /
 // { ok: false } and the screen shows a login prompt or an error
 // toast instead of fake numbers.
@@ -13,6 +14,7 @@
 // because fetchLiveHosts only lists approved hosts.
 // ─────────────────────────────────────────────────────────────────
 import { supabase } from './client';
+import { getSessionUser } from './auth';
 import { withTimeout } from './timeout';
 
 // Kinds in the transactions table that count as host earnings
@@ -35,14 +37,9 @@ function toInt(v) {
 // ── Session ──────────────────────────────────────────────────────
 
 export async function getCurrentUser() {
-  if (!supabase) return null;
-  try {
-    const res = await withTimeout(supabase.auth.getUser());
-    if (!res || res.error || !res.data || !res.data.user) return null;
-    return res.data.user;
-  } catch (e) {
-    return null;
-  }
+  // Identity from the local session (see getSessionUser in auth.js):
+  // the network getUser() call can fail on a phone right after login.
+  return getSessionUser();
 }
 
 // ── Profile + host row ───────────────────────────────────────────
@@ -257,7 +254,7 @@ function dayKey(date) {
   return `${y}-${m}-${d}`;
 }
 
-const BN_DAY = ['রবি', 'সোম', 'মঙ্গল', 'বুধ', 'বৃহ', 'শুক্র', 'শনি'];
+const DAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export async function fetchHostEarnings(hostRowId, profileId) {
   const empty = {
@@ -278,7 +275,7 @@ export async function fetchHostEarnings(hostRowId, profileId) {
   for (let i = 6; i >= 0; i--) {
     const d = new Date();
     d.setDate(d.getDate() - i);
-    week.push({ key: dayKey(d), day: BN_DAY[d.getDay()], coins: 0, diamonds: 0 });
+    week.push({ key: dayKey(d), day: DAY_ABBR[d.getDay()], coins: 0, diamonds: 0 });
   }
   const weekByKey = new Map(week.map((w) => [w.key, w]));
   const todayKey = dayKey(new Date());
