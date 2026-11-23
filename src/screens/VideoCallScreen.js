@@ -1,26 +1,28 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Dimensions, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, BackHandler, Dimensions, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, PLATFORM_COMMISSION_PERCENT } from '../config';
 import { useApp } from '../store';
 import { supabase } from '../supabase/client';
+import { fetchMyProfile } from '../supabase/auth';
 import { joinLiveRoom, leaveLiveRoom } from '../supabase/presence';
 // [Calls] Real signalling over Supabase Realtime (src/calls/signalling.js):
-// the caller inserts a ringing calls row on Accept; the callee's app
-// (listening via useIncomingCallListener at the app root) navigates
-// here with { callId, isCallee, caller }; Accept/Decline/End update
-// the row and the other side sees it through its subscription.
+// an OUTGOING call places its ringing row at once (no self-accept
+// step — see placeOutgoingCall); the callee's app (listening via
+// useIncomingCallListener at the app root) navigates here with
+// { callId, isCallee, caller }; Accept/Decline/End update the row
+// and the other side sees it through its subscription.
 import {
   acceptCall,
   buildChannelName,
   declineCall,
   endCallRecord,
+  markCallMissed,
   placeCall,
   subscribeToCallUpdates,
 } from '../calls/signalling';
 // [F5] Full-screen gift animation for expensive gifts (price >= 1000 coins)
 import FullScreenGift from '../components/FullScreenGift';
-import { PROFILE } from './profile/levelData';
 // [/F5]
 import LiveVideo, {
   getAgoraEngine,
@@ -51,39 +53,115 @@ import { VOICE_PRESETS, applyVoicePreset, getVoicePresetLabel, resetVoicePreset 
 // live at once and never accepts their own call.
 // The host opens the call with asHost: true (Host Dashboard
 // Go Live + Imran Accept); Home cards open it as the viewer.
+// An OUTGOING call (not asHost, not isCallee) starts in 'calling'
+// at once and rings the host immediately — the caller no longer
+// sees their own incoming screen and taps Accept first.
 // Real video: <LiveVideo> joins the Agora channel
 // `livo-call-<hostId>` when the call is accepted, fetching a fresh
 // token from the token server first (EXPO_PUBLIC_AGORA_TOKEN_SERVER_URL,
 // dev fallback EXPO_PUBLIC_AGORA_TOKEN) — see src/agora/LiveVideo.js.
 // Signalling: the caller inserts a ringing row in the calls table
-// on Accept (placeCall); the callee arrives here via
+// on entry (placeCall); the callee arrives here via
 // useIncomingCallListener with { callId, isCallee, caller } and the
 // incoming screen shows the REAL caller. Accept/Decline/End update
 // the row (acceptCall / declineCall / endCallRecord) and the other
-// side sees it through its Realtime subscription. No push exists:
+// side sees it through its Realtime subscription. A caller who ends
+// (or waits out the 60s ring timeout) while the row is still
+// 'ringing' marks it 'missed' instead — nobody pays for an
+// unanswered call. No push exists:
 // the callee only rings while their app is open.
+// BILLING: only the caller (the paying viewer) is ever charged,
+// and only when the Agora channel actually joined — a call that
+// never connected costs nothing. The host side only closes the
+// signalling row; endCallRecord never overwrites a finished
+// billing record the other side already wrote.
 // ─────────────────────────────────────────────────────────────────
+// How long the caller waits for an answer before the call is
+// marked missed (the callee never answered).
+const RING_TIMEOUT_MS = 60 * 1000;
 export default function VideoCallScreen({ route, navigation }) {
   const { host, asHost, audioOnly: audioOnlyParam, callId: incomingCallId, callType, isCallee, caller } = route.params || {}; // [F2] audioOnly added; [Calls] callId/isCallee/caller for real invites
   // Voice invites (callType 'voice') render the audio-only screen,
   // exactly like the audioOnly param from ChatDetail.
   const audioOnly = audioOnlyParam || callType === 'voice';
-  // The calls row for this call (placed on Accept, or the invite
-  // row when answering). Null = local-only call (demo host or not
-  // signed in) — the call still works, it just has no signalling.
+  // The calls row for this call (placed on entry for outgoing
+  // calls, or the invite row when answering). Null = local-only
+  // call (demo host or not signed in) — the call still works, it
+  // just has no signalling.
+  // Outgoing call: this user placed it (not the host going live,
+  // not the callee answering). Outgoing calls start in 'calling'
+  // and ring at once — no self-accept step.
+  const isOutgoingCall = !asHost && !isCallee;
   const callIdRef = useRef(incomingCallId || null);
   const callUnsubRef = useRef(null);
   const roomChannelRef = useRef(null);
+  // Did the callee accept? Set by the caller's row subscription
+  // ('accepted') and by the callee's own Accept tap. A call that
+  // ends while this is still false was never answered (missed).
+  const callAcceptedRef = useRef(false);
+  // Did the local Agora channel actually join? Set by LiveVideo's
+  // onJoin (onJoinChannelSuccess). A call that never joined is
+  // never charged.
+  const joinedRef = useRef(false);
+  // endCall is defined below; the ref always points at the latest
+  // one so the hardware-back guard runs the current version (with
+  // the current timer value). finishCall is the same path minus
+  // the toast + navigation — the unmount guard calls that one,
+  // since the screen is already leaving and the triggering path
+  // already toasted (or there is nothing to say).
+  const endedRef = useRef(false);
+  const endCallRef = useRef(null);
+  const finishCallRef = useRef(null);
+  const stageRef = useRef(asHost || isOutgoingCall ? 'calling' : 'incoming');
+  const ringTimerRef = useRef(null);
+  const placeAttemptedRef = useRef(false);
   useEffect(() => () => {
     if (callUnsubRef.current) callUnsubRef.current();
+    if (ringTimerRef.current) clearTimeout(ringTimerRef.current);
     if (roomChannelRef.current) leaveLiveRoom(roomChannelRef.current);
+    // Unmount while still in a call (hardware back, gesture,
+    // remote end): run the SAME endCall path (charge + record)
+    // instead of silently dropping a free call — minus the toast
+    // and navigation, which the triggering path already handled.
+    // Video only — voice calls are ended by VoiceCallScreen's
+    // own guard.
+    if (!audioOnly && stageRef.current === 'calling' && finishCallRef.current) {
+      finishCallRef.current();
+    }
   }, []);
   const { coins, chargeCall, sendGift, showToast, vipLevel, gifts, getLiveCallRate, getLiveVoiceCallRate } = useApp();
   // [Live] Rates + gifts come from the store (live Supabase rows
   // when the setup SQL is pasted, config.js demo values otherwise).
   const rate = getLiveCallRate(host ? host.rateTier : 'tier2');
-  const [stage, setStage] = useState(asHost ? 'calling' : 'incoming');
+  const [stage, setStage] = useState(asHost || isOutgoingCall ? 'calling' : 'incoming');
+  stageRef.current = stage;
+  // The signed-in user's real username, for the full-screen gift
+  // animation ("<name> sent"). Loaded once from their profiles row.
+  const [senderName, setSenderName] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getUser();
+        const uid = data && data.user && data.user.id;
+        if (!uid) return;
+        const { profile } = await fetchMyProfile(uid);
+        if (!cancelled && profile && profile.username) setSenderName(profile.username);
+      } catch (e) {
+        // Anonymous — the gift animation falls back to 'You'.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [seconds, setSeconds] = useState(0);
+  // Talk time starts when the call is actually answered (caller:
+  // invite accepted; callee: Accept tapped; host going live:
+  // channel joined) — NOT while it is still ringing. The timer
+  // and the per-minute billing both run off `seconds`, so ringing
+  // time is never billed.
+  const [talkStarted, setTalkStarted] = useState(false);
   const [muted, setMuted] = useState(false);
   const [beauty, setBeauty] = useState(false);
   const [frontCamera, setFrontCamera] = useState(true);
@@ -109,11 +187,11 @@ export default function VideoCallScreen({ route, navigation }) {
   const timerRef = useRef(null);
 
   useEffect(() => {
-    if (stage === 'calling') {
+    if (stage === 'calling' && talkStarted) {
       timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000);
     }
     return () => clearInterval(timerRef.current);
-  }, [stage]);
+  }, [stage, talkStarted]);
 
   // [Presence] Join the live-room presence channel when the call
   // connects, so the host's viewer count is real (see
@@ -162,48 +240,121 @@ export default function VideoCallScreen({ route, navigation }) {
   const ss = String(seconds % 60).padStart(2, '0');
   const liveCost = Math.ceil(seconds / 60) * rate.coinsPerMinute;
 
-  const accept = async () => {
+  // Callee side: watch the invite row while the incoming screen
+  // is up, so it dismisses itself if the caller backs out
+  // (row → 'missed') or the call ends elsewhere. The caller-side
+  // subscription (placeOutgoingCall) covers the outgoing side.
+  useEffect(() => {
+    if (!isCallee || !callIdRef.current) return undefined;
+    const unsub = subscribeToCallUpdates(callIdRef.current, (updated) => {
+      if (updated.status === 'missed') {
+        showToast('Caller cancelled the call');
+        navigation.goBack();
+      } else if (updated.status === 'ended') {
+        navigation.goBack();
+      }
+    });
+    return unsub;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCallee]);
+
+  // Hardware back during a video call ends the call through the
+  // SAME endCall path (charge + record) instead of popping
+  // silently. Voice calls are handled by VoiceCallScreen's own
+  // guard; the incoming screen keeps the default back behaviour
+  // (the root handler pops it).
+  useEffect(() => {
+    if (stage !== 'calling' || audioOnly) return undefined;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (endCallRef.current) endCallRef.current();
+      return true;
+    });
+    return () => sub.remove();
+  }, [stage, audioOnly]);
+
+  // Outgoing call: ring the host at once — the caller no longer
+  // sees their own incoming screen and taps Accept first. The
+  // balance gate runs here instead: too few coins for 1 minute
+  // goes back with a toast, exactly as Accept used to. Null row
+  // when there is no signed-in user or no DB host row (demo host):
+  // the call then proceeds local-only, as before.
+  const placeOutgoingCall = async () => {
+    if (!host || placeAttemptedRef.current) return;
+    placeAttemptedRef.current = true;
     // Voice calls bill at the half-price voice rate, video at the
-    // full tier rate — the Accept gate uses the right one.
+    // full tier rate.
     const perMinute = audioOnly
       ? getLiveVoiceCallRate(host ? host.rateTier : 'tier2').coinsPerMinute
       : rate.coinsPerMinute;
     if (coins < perMinute) {
       showToast('Not enough coins for 1 minute — please recharge first.');
+      navigation.goBack();
       return;
     }
+    try {
+      const row = await placeCall({
+        host,
+        callType: audioOnly ? 'voice' : 'video',
+        ratePerMinute: perMinute,
+      });
+      if (row) {
+        callIdRef.current = row.id;
+        callUnsubRef.current = subscribeToCallUpdates(row.id, (updated) => {
+          if (updated.status === 'accepted') {
+            callAcceptedRef.current = true;
+            setTalkStarted(true);
+            if (ringTimerRef.current) {
+              clearTimeout(ringTimerRef.current);
+              ringTimerRef.current = null;
+            }
+          } else if (updated.status === 'declined') {
+            showToast('Call declined');
+            navigation.goBack();
+          } else if (updated.status === 'ended') {
+            navigation.goBack();
+          }
+        });
+        // Ring timeout: nobody answered in time — mark the call
+        // missed and leave. The unmount guard's endCall would do
+        // the same marking; the timer also toasts so the caller
+        // knows why the call ended.
+        ringTimerRef.current = setTimeout(() => {
+          ringTimerRef.current = null;
+          if (!callAcceptedRef.current && callIdRef.current) {
+            markCallMissed(callIdRef.current).catch(() => {});
+          }
+          showToast('No answer');
+          navigation.goBack();
+        }, RING_TIMEOUT_MS);
+      }
+    } catch (e) {
+      // Signalling failure never blocks the call itself.
+    }
+  };
+
+  // Outgoing calls start in 'calling' — place the invite row on
+  // entry. (Incoming / host entries never run this.)
+  useEffect(() => {
+    if (stage !== 'calling' || !isOutgoingCall) return undefined;
+    placeOutgoingCall();
+    return undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage]);
+
+  const accept = async () => {
+    // Callee only now — outgoing calls ring at once (see
+    // placeOutgoingCall) and never show this screen. No balance
+    // gate here: the callee is the host, who is paid — never
+    // charged — so a host with 0 coins must still be able to
+    // answer. The caller was already gated in placeOutgoingCall.
     if (isCallee && callIdRef.current) {
       // Answering a real invite: mark the row accepted so the
       // caller knows (their subscription fires). A failure here
       // must not block the call itself — still join the channel.
       acceptCall(callIdRef.current).catch(() => {});
-    } else if (!asHost && !callIdRef.current) {
-      // Outgoing call: ring the host. The invite row is placed
-      // NOW (on Accept, not on screen open) so a caller who backs
-      // out of the incoming screen never rings anyone. Null when
-      // there is no signed-in user or no DB host row (demo host):
-      // the call then proceeds local-only, as before.
-      try {
-        const row = await placeCall({
-          host,
-          callType: audioOnly ? 'voice' : 'video',
-          ratePerMinute: perMinute,
-        });
-        if (row) {
-          callIdRef.current = row.id;
-          callUnsubRef.current = subscribeToCallUpdates(row.id, (updated) => {
-            if (updated.status === 'declined') {
-              showToast('Call declined');
-              navigation.goBack();
-            } else if (updated.status === 'ended') {
-              navigation.goBack();
-            }
-          });
-        }
-      } catch (e) {
-        // Signalling failure never blocks the call itself.
-      }
+      callAcceptedRef.current = true;
     }
+    setTalkStarted(true);
     setStage('calling');
   };
 
@@ -216,8 +367,24 @@ export default function VideoCallScreen({ route, navigation }) {
     navigation.goBack();
   };
 
-  const endCall = () => {
+  // Core end-of-call work: stop timers, reset the voice preset,
+  // leave Agora + the presence room, and bill / close the
+  // signalling row. Idempotent (endedRef) — safe to run from the
+  // End button, the hardware-back guard and the unmount guard.
+  // No toast, no navigation: the caller adds those. Async: the
+  // charge is awaited before the calls row is written, so the row
+  // never claims a cost that was never deducted (chargeCall
+  // resolves to { cost } once its wallet write settles, or false
+  // when refused / failed). Fire-and-forget from the guards — the
+  // promise chain runs on after unmount.
+  const finishCall = async () => {
+    if (endedRef.current) return;
+    endedRef.current = true;
     clearInterval(timerRef.current);
+    if (ringTimerRef.current) {
+      clearTimeout(ringTimerRef.current);
+      ringTimerRef.current = null;
+    }
     if (callUnsubRef.current) callUnsubRef.current();
     // [F7] The Agora engine is a shared singleton — reset the voice
     // so the effect does not leak into the next call.
@@ -228,26 +395,69 @@ export default function VideoCallScreen({ route, navigation }) {
       leaveLiveRoom(roomChannelRef.current);
       roomChannelRef.current = null;
     }
+    // Billing: ONLY the caller (the paying viewer) is ever
+    // charged — never the host answering (isCallee) or going live
+    // (asHost). And only when the Agora channel actually joined:
+    // a call that never connected costs nothing.
+    const iAmCaller = !isCallee && !asHost;
     const minutes = Math.max(1, Math.ceil(seconds / 60));
-    const cost = chargeCall(host, minutes, rate.coinsPerMinute);
-    // Record the finished call on the signalling row (billing
-    // already happened in the store above). Host share = cost
-    // after the platform commission, in diamonds.
-    if (callIdRef.current && typeof cost === 'number') {
-      const hostShare = Math.round((cost * (100 - PLATFORM_COMMISSION_PERCENT)) / 100);
-      endCallRecord(callIdRef.current, {
-        durationSeconds: seconds,
-        billedMinutes: minutes,
-        costCoins: cost,
-        hostEarningsDiamonds: hostShare,
-      }).catch(() => {});
-      callIdRef.current = null;
+    const rowId = callIdRef.current;
+    callIdRef.current = null;
+    if (rowId) {
+      if (iAmCaller && !callAcceptedRef.current) {
+        // Still ringing — the callee never answered: missed, and
+        // nobody pays for an unanswered call.
+        markCallMissed(rowId).catch(() => {});
+      } else if (iAmCaller && joinedRef.current) {
+        // Await the settled charge first: only write the cost the
+        // wallet actually deducted.
+        const settled = await chargeCall(host, minutes, rate.coinsPerMinute);
+        if (settled && typeof settled.cost === 'number') {
+          // Record the finished call on the signalling row (billing
+          // already happened in the store above). Host share = cost
+          // after the platform commission, in diamonds.
+          const hostShare = Math.round((settled.cost * (100 - PLATFORM_COMMISSION_PERCENT)) / 100);
+          endCallRecord(rowId, {
+            durationSeconds: seconds,
+            billedMinutes: minutes,
+            costCoins: settled.cost,
+            hostEarningsDiamonds: hostShare,
+          }).catch(() => {});
+        } else {
+          // Charge refused (e.g. balance dropped mid-call) or the
+          // wallet write failed — still close the row so the other
+          // side is released, with no cost claimed.
+          endCallRecord(rowId, {
+            durationSeconds: seconds,
+            billedMinutes: 0,
+            costCoins: 0,
+            hostEarningsDiamonds: 0,
+          }).catch(() => {});
+        }
+      } else {
+        // Host side, or a caller whose Agora channel never joined:
+        // close the row with no charge. endCallRecord never
+        // overwrites a finished billing record the other side
+        // already wrote (see signalling.js).
+        endCallRecord(rowId, {
+          durationSeconds: seconds,
+          billedMinutes: 0,
+          costCoins: 0,
+          hostEarningsDiamonds: 0,
+        }).catch(() => {});
+      }
     }
+  };
+
+  const endCall = () => {
+    finishCall();
     // No call summary for anyone (user 2026-11-18): the host sees
     // the earnings in the Host Dashboard. Just go back.
     showToast('কল শেষ হয়েছে');
     navigation.goBack();
   };
+  endCallRef.current = endCall;
+  finishCallRef.current = finishCall;
 
   const toggleMute = () => {
     setMuted(!muted);
@@ -329,15 +539,45 @@ export default function VideoCallScreen({ route, navigation }) {
   // an audio-only call renders the audio-only screen instead of
   // video. The incoming screen itself is unchanged (photo, name,
   // Accept / Decline only). The video path below is untouched.
+  // The calls row id is passed explicitly (prop AND route params):
+  // VideoCallScreen renders this screen with the same route object
+  // but never puts the outgoing callId into route.params, so the
+  // voice screen on its own could never record the call.
   if (audioOnly) {
-    return <VoiceCallScreen route={route} navigation={navigation} />;
+    return (
+      <VoiceCallScreen
+        route={{ ...route, params: { ...(route.params || {}), callId: callIdRef.current || incomingCallId || null } }}
+        navigation={navigation}
+        callId={callIdRef.current}
+        callAcceptedRef={callAcceptedRef}
+        roomChannel={roomChannelRef.current}
+        talkStarted={talkStarted}
+      />
+    );
   }
   // [/F2]
 
   // calling
   return (
     <View style={styles.callBg}>
-      <LiveVideo channel={buildChannelName(host.id)} role="host" style={styles.video} />
+      <LiveVideo
+        channel={buildChannelName(host.id)}
+        role="host"
+        style={styles.video}
+        onJoin={() => {
+          joinedRef.current = true;
+          // Host going live has no accept step — talk starts when
+          // the channel joins. (For caller/callee the talk clock
+          // starts on accept instead; onJoin alone must not start
+          // it, or ring time would be billed.)
+          if (asHost) setTalkStarted(true);
+        }}
+        onJoinError={() => {
+          joinedRef.current = false;
+        }}
+        onTokenExpiring={() => showToast('Call token expiring — the call may end soon.')}
+        onTokenRenewalFailed={() => showToast('Could not renew the call token — the call may drop soon.')}
+      />
       <Text style={styles.timer}>{mm}:{ss} · 🪙 {liveCost} coins</Text>
       <Text style={styles.callName}>{host.name} · {rate.label}</Text>
       {vipLevel && (
@@ -346,14 +586,17 @@ export default function VideoCallScreen({ route, navigation }) {
         </Animated.View>
       )}
 
-      <View style={styles.giftRow}>
-        {gifts.slice(0, 4).map((g) => (
+      {/* All gifts, horizontally scrollable — the expensive gifts
+          (>= 1000 coins, which trigger the full-screen animation)
+          used to be cut off by gifts.slice(0, 4). */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.giftRow}>
+        {gifts.map((g) => (
           <TouchableOpacity key={g.id} style={styles.gift} onPress={() => handleSendGift(g)}>
             <Text style={styles.giftEmoji}>{g.emoji}</Text>
             <Text style={styles.giftPrice}>{g.price}</Text>
           </TouchableOpacity>
         ))}
-      </View>
+      </ScrollView>
 
       {/* [F7] Voice changer: a pill button opens the preset panel.
           The pill sits above the call controls so the existing
@@ -399,8 +642,8 @@ export default function VideoCallScreen({ route, navigation }) {
           <Text style={styles.ctrlText}>📞</Text>
         </TouchableOpacity>
       </View>
-      {/* [F5] Full-screen animation overlay for an expensive gift (pointerEvents="none" inside — never blocks the call controls) */}
-      <FullScreenGift gift={bigGift} senderName={PROFILE.name} visible={!!bigGift} onDone={() => setBigGift(null)} />
+      {/* [F5] Full-screen animation overlay for an expensive gift (pointerEvents="none" inside — never blocks the call controls). senderName is the signed-in user's real username (fetched from their profiles row), not demo data. */}
+      <FullScreenGift gift={bigGift} senderName={senderName || 'You'} visible={!!bigGift} onDone={() => setBigGift(null)} />
       {/* [/F5] */}
       {/* [F7] Voice label added to the existing hint line. */}
       <Text style={styles.hint}>Beauty {beauty ? 'on' : 'off'} · Mic {muted ? 'muted' : 'on'} · Voice {getVoicePresetLabel(voicePreset)} · Live video via Agora</Text>
