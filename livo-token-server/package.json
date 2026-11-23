@@ -1,0 +1,1 @@
+{"dependencies":{"agora-access-token":"^2.0.0","dotenv":"^16.4.5","express":"^4.19.2"},"description":"Agora RTC token server for Livo — issues short-lived tokens so the app never ships a secret.","engines":{"node":">=18"},"main":"server.js","name":"livo-token-server","private":true,"scripts":{"start":"node server.js"},"version":"1.0.0"}
