@@ -168,6 +168,25 @@ export function googleSubOrEmail(user) {
 // base); gender is left null — never guessed.
 // Returns { profile, error }. A missing RLS policy (or no network)
 // returns an error here but never throws.
+// Short numeric Livo ID for a new user (e.g. 63227007): 8 digits,
+// checked against the profiles table so two users never share one.
+// The DB also has a UNIQUE constraint on profiles.user_id
+// (profiles_user_id_key) as a backstop.
+async function generateShortUserId() {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const candidate = String(Math.floor(10000000 + Math.random() * 90000000));
+    try {
+      const res = await withTimeout(
+        supabase.from('profiles').select('id').eq('user_id', candidate).maybeSingle(),
+      );
+      if (res && !res.data && !res.error) return candidate;
+      if (!res) return candidate;
+    } catch (e) { return candidate; }
+  }
+  // Extremely unlikely fallback: last 8 digits of the timestamp.
+  return String(Date.now()).slice(-8);
+}
+
 export async function ensureProfile(user) {
   if (!supabase || !user) {
     return { profile: null, error: new Error('No user to create a profile for.') };
@@ -196,7 +215,7 @@ export async function ensureProfile(user) {
       meta.full_name || meta.name || (user.email ? user.email.split('@')[0] : 'Livo user');
     const row = {
       id: user.id,
-      user_id: googleSubOrEmail(user),
+      user_id: await generateShortUserId(),
       username,
       country: 'Singapore',
       language: 'English',
