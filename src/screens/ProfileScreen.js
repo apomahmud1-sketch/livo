@@ -108,29 +108,30 @@ export default function ProfileScreen({ navigation }) {
   }, [contextUser]);
   // Self-heal (2026-11-23): the signed-in user's profiles row was
   // missing on the server, so Me showed "Not set" even with a valid
-  // session. If the row is absent, create it once (same defaults as
-  // first sign-in) and re-read — never leave the screen empty.
+  // session. Call ensureProfile FIRST (find-or-create, timeout-
+  // guarded); only if it returns nothing, retry once with a
+  // timeout-guarded fetchMyProfile. Never leave the screen empty.
   React.useEffect(() => {
     if (!user) return undefined;
     let mounted = true;
-    let healed = false;
-    fetchMyProfile(user.id).then(async ({ profile: row, error: firstErr }) => {
-      if (!mounted) return;
-      if (firstErr) setFetchErr(firstErr.message || String(firstErr));
-      if (row) { setProfile(row); return; }
-      if (healed) return;
-      healed = true;
+    (async () => {
       try {
-        const { profile: created, error: createErr } = await ensureProfile(user);
+        const { profile: ensured, error: ensureErr } = await ensureProfile(user);
         if (!mounted) return;
-        if (createErr) setFetchErr(createErr.message || String(createErr));
-        if (created) { setProfile(created); return; }
-      } catch (e) { setFetchErr(e && e.message ? e.message : String(e)); /* fall through to one re-read below */ }
-      const { profile: retry, error: retryErr } = await fetchMyProfile(user.id);
-      if (!mounted) return;
-      if (retryErr) setFetchErr(retryErr.message || String(retryErr));
-      if (retry) setProfile(retry);
-    });
+        if (ensured) { setProfile(ensured); return; }
+        if (ensureErr) setFetchErr(ensureErr.message || String(ensureErr));
+      } catch (e) {
+        if (mounted) setFetchErr(e && e.message ? e.message : String(e));
+      }
+      try {
+        const { profile: retry, error: retryErr } = await fetchMyProfile(user.id);
+        if (!mounted) return;
+        if (retryErr) setFetchErr(retryErr.message || String(retryErr));
+        if (retry) setProfile(retry);
+      } catch (e) {
+        if (mounted) setFetchErr(e && e.message ? e.message : String(e));
+      }
+    })();
     return () => { mounted = false; };
   }, [user]);
 
