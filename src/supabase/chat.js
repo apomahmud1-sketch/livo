@@ -134,8 +134,8 @@ export function subscribeToConversation({ meId, otherId, onMessage }) {
 
 // Conversation list for MessagesScreen: the latest message per
 // counterpart, newest first. Also resolves each counterpart's
-// profile (username / country / language / avatar). No read
-// receipts exist, so there is no unread count — `unread` is 0.
+// profile (username / country / language / age / avatar) and the
+// REAL unread count (messages to me with read_at still NULL).
 export async function fetchConversations(meId) {
   if (!supabase || !meId) return [];
   try {
@@ -164,11 +164,35 @@ export async function fetchConversations(meId) {
       (await withTimeout(
         supabase
           .from('profiles')
-          .select('id,username,country,language,gender,avatar_url')
+          .select('id,username,country,language,gender,age,avatar_url')
           .in('id', otherIds),
       )) || {};
     if (Array.isArray(profRows)) {
       profilesById = new Map(profRows.filter((p) => p && p.id).map((p) => [p.id, p]));
+    }
+
+    // Real unread counts: messages to me from each counterpart
+    // with read_at still NULL. Guarded separately so a missing
+    // read_at column never breaks the conversation list.
+    const unreadByOther = new Map();
+    try {
+      const { data: unreadRows } =
+        (await withTimeout(
+          supabase
+            .from('messages')
+            .select('sender_id')
+            .eq('recipient_id', meId)
+            .is('read_at', null)
+            .limit(500),
+        )) || {};
+      if (Array.isArray(unreadRows)) {
+        unreadRows.forEach((r) => {
+          if (!r || !r.sender_id) return;
+          unreadByOther.set(r.sender_id, (unreadByOther.get(r.sender_id) || 0) + 1);
+        });
+      }
+    } catch (e) {
+      // Unread stays 0 — the list still renders.
     }
 
     return otherIds.map((otherId) => {
@@ -180,10 +204,139 @@ export async function fetchConversations(meId) {
         country: prof.country || '',
         lang: prof.language || 'English',
         gender: prof.gender || '',
+        age: typeof prof.age === 'number' ? prof.age : null,
         avatarUrl: prof.avatar_url || null,
         lastBody: last.body || '',
         lastAt: last.created_at,
-        unread: 0,
+        unread: unreadByOther.get(otherId) || 0,
+      };
+    });
+  } catch (e) {
+    return [];
+  }
+}
+
+// Mark one conversation read: stamp read_at on every unread
+// message from the other person to me. Never throws — returns
+// false when the write did not land (e.g. no network).
+export async function markConversationRead(meId, otherId) {
+  if (!supabase || !meId || !otherId) return false;
+  try {
+    const res = await withTimeout(
+      supabase
+        .from('messages')
+        .update({ read_at: new Date().toISOString() })
+        .eq('recipient_id', meId)
+        .eq('sender_id', otherId)
+        .is('read_at', null),
+    );
+    if (!res) return false;
+    return !res.error;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Call history for MessagesScreen: real `calls` rows where I am
+// the caller or the host, newest first (max 50). The other party's
+// name is resolved via hosts -> profiles (outgoing) or profiles
+// directly (incoming). Only columns that exist on `calls` are
+// referenced (no callee_id / call_type / ended_at).
+export async function fetchCallHistory(meId) {
+  if (!supabase || !meId) return [];
+  try {
+    // My host rows (I may be a host too): calls where I am the host
+    // store my hosts.id uuid in host_id.
+    let myHostIds = [];
+    try {
+      const { data: hostRows } =
+        (await withTimeout(
+          supabase.from('hosts').select('id').eq('profile_id', meId),
+        )) || {};
+      if (Array.isArray(hostRows)) {
+        myHostIds = hostRows.map((r) => r.id).filter(Boolean);
+      }
+    } catch (e) {
+      // Outgoing-only history below.
+    }
+
+    let q = supabase
+      .from('calls')
+      .select('id,caller_id,host_id,duration_seconds,cost_coins,status,created_at')
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (myHostIds.length > 0) {
+      q = q.or(`caller_id.eq.${meId},host_id.in.(${myHostIds.join(',')})`);
+    } else {
+      q = q.eq('caller_id', meId);
+    }
+    const { data, error } = (await withTimeout(q)) || {};
+    if (error || !Array.isArray(data) || data.length === 0) return [];
+
+    // Resolve the other party's name for each row.
+    const outgoingHostUuids = [
+      ...new Set(
+        data.filter((r) => r.caller_id === meId && r.host_id).map((r) => r.host_id),
+      ),
+    ];
+    const incomingCallerIds = [
+      ...new Set(
+        data.filter((r) => r.caller_id !== meId && r.caller_id).map((r) => r.caller_id),
+      ),
+    ];
+    let hostByUuid = new Map();
+    if (outgoingHostUuids.length > 0) {
+      const { data: hostRows } =
+        (await withTimeout(
+          supabase
+            .from('hosts')
+            .select('id,host_id,profile_id')
+            .in('id', outgoingHostUuids),
+        )) || {};
+      if (Array.isArray(hostRows)) {
+        hostByUuid = new Map(
+          hostRows.filter((h) => h && h.id).map((h) => [h.id, h]),
+        );
+      }
+    }
+    const profileIds = [
+      ...new Set([
+        ...[...hostByUuid.values()].map((h) => h.profile_id).filter(Boolean),
+        ...incomingCallerIds,
+      ]),
+    ];
+    let profilesById = new Map();
+    if (profileIds.length > 0) {
+      const { data: profRows } =
+        (await withTimeout(
+          supabase.from('profiles').select('id,username').in('id', profileIds),
+        )) || {};
+      if (Array.isArray(profRows)) {
+        profilesById = new Map(
+          profRows.filter((p) => p && p.id).map((p) => [p.id, p]),
+        );
+      }
+    }
+
+    return data.map((r) => {
+      const outgoing = r.caller_id === meId;
+      let otherName = 'Livo user';
+      if (outgoing) {
+        const hostRow = hostByUuid.get(r.host_id);
+        const prof = hostRow && profilesById.get(hostRow.profile_id);
+        otherName = (prof && prof.username) || (hostRow && hostRow.host_id) || 'Livo user';
+      } else {
+        const prof = profilesById.get(r.caller_id);
+        otherName = (prof && prof.username) || 'Livo user';
+      }
+      return {
+        id: r.id,
+        otherName,
+        direction: outgoing ? 'outgoing' : 'incoming',
+        durationSeconds: typeof r.duration_seconds === 'number' ? r.duration_seconds : 0,
+        costCoins: typeof r.cost_coins === 'number' ? r.cost_coins : 0,
+        status: r.status || '',
+        createdAt: r.created_at,
       };
     });
   } catch (e) {
