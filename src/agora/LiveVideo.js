@@ -180,6 +180,39 @@ function emitRemote(event) {
   });
 }
 
+// ── Token-expiry events ──────────────────────────────────────────
+// The engine's onTokenPrivilegeWillExpire handler is registered
+// once, globally (registerEngineEvents), so it cannot call a
+// component's props directly. It emits here instead, and the
+// mounted <LiveVideo> forwards the event to its
+// onTokenExpiring / onTokenRenewalFailed props so the call screen
+// can toast the user instead of the call dying silently.
+// Events: 'expiring-no-renewal' (token about to expire and no
+// fresh token can be fetched) and 'renewal-failed' (the token
+// server fetch failed). A successful renewal is silent — the
+// call just continues.
+const tokenEventListeners = new Set();
+
+function emitTokenEvent(event) {
+  tokenEventListeners.forEach((cb) => {
+    try {
+      cb(event);
+    } catch (e) {
+      // A listener must never break the engine handler.
+    }
+  });
+}
+
+/**
+ * Subscribe to token-expiry events. cb receives
+ * { type: 'expiring-no-renewal' | 'renewal-failed' }.
+ * Returns an unsubscribe function.
+ */
+export function onAgoraTokenEvent(cb) {
+  tokenEventListeners.add(cb);
+  return () => tokenEventListeners.delete(cb);
+}
+
 /**
  * Subscribe to remote-user events.
  * cb receives { type: 'joined' | 'left', uid }.
@@ -212,10 +245,13 @@ function registerEngineEvents(lib) {
       // Token is about to expire: fetch a fresh one from the token
       // server and renew it in place (no re-join). Dev-only env
       // tokens cannot be renewed — the call just ends when they
-      // expire (Temp Tokens last 24h).
+      // expire (Temp Tokens last 24h). Either way the user is told
+      // (via onAgoraTokenEvent → the call screen's toast) instead
+      // of the call dying silently on a long call.
       if (!lastTokenRequest || !AGORA_TOKEN_SERVER_URL || !engine) {
         // eslint-disable-next-line no-console
         console.warn('[Agora] Token will expire soon — fetch a new token from the token server.');
+        emitTokenEvent({ type: 'expiring-no-renewal' });
         return;
       }
       fetchAgoraToken(lastTokenRequest.channelName, lastTokenRequest.uid, lastTokenRequest.role)
@@ -225,6 +261,7 @@ function registerEngineEvents(lib) {
         .catch((e) => {
           // eslint-disable-next-line no-console
           console.warn('[Agora] Token renewal failed:', e && e.message);
+          emitTokenEvent({ type: 'renewal-failed' });
         });
     },
     onError: (err, msg) => {
@@ -421,6 +458,17 @@ export function setAgoraBeauty(enabled) {
 //   uid      — numeric uid (0 = Agora assigns one). Default 0.
 //   style    — container style
 //   onRemoteJoin(uid) / onRemoteLeave(uid) — optional callbacks
+//   onJoin() — the local user actually joined the channel
+//     (onJoinChannelSuccess). Call screens use it as the "connected"
+//     flag for billing: no join = no charge.
+//   onJoinError(error) — joining failed (token fetch / joinChannel).
+//   onTokenExpiring() — the token is about to expire and cannot be
+//     renewed (dev token / no token server): the call may drop soon.
+//   onTokenRenewalFailed() — the token-server renewal fetch failed:
+//     the call may drop soon.
+//   Callbacks are read through a ref so a parent re-render never
+//   re-runs the join effect (the effect deps stay channel/role/
+//   audioOnly only).
 //
 // Joins on mount, leaves on unmount. Shows the remote user's video
 // full-screen, with the local preview as a small picture-in-picture
@@ -435,6 +483,10 @@ export default function LiveVideo({
   style,
   onRemoteJoin,
   onRemoteLeave,
+  onJoin,
+  onJoinError,
+  onTokenExpiring,
+  onTokenRenewalFailed,
 }) {
   const [status, setStatus] = React.useState('idle'); // idle | joining | joined | error
   const [error, setError] = React.useState('');
@@ -442,6 +494,17 @@ export default function LiveVideo({
   const [localUid, setLocalUid] = React.useState(0);
   const joinedChannelRef = React.useRef(null);
   const RtcSurfaceViewRef = React.useRef(null);
+  // Latest callbacks, read by the join effect (which must NOT
+  // re-run when a parent re-renders with new inline callbacks).
+  const callbacksRef = React.useRef({});
+  callbacksRef.current = {
+    onRemoteJoin,
+    onRemoteLeave,
+    onJoin,
+    onJoinError,
+    onTokenExpiring,
+    onTokenRenewalFailed,
+  };
 
   React.useEffect(() => {
     const lib = loadAgora();
@@ -466,18 +529,32 @@ export default function LiveVideo({
     // below shows the message — never join without a token.
     setStatus('joining');
     const unsubscribe = onAgoraRemoteUser((event) => {
+      const cb = callbacksRef.current;
       if (event.type === 'joined') {
         setRemoteUid(event.uid);
-        if (onRemoteJoin) {
-          onRemoteJoin(event.uid);
+        if (cb.onRemoteJoin) {
+          cb.onRemoteJoin(event.uid);
         }
       } else if (event.type === 'left') {
         setRemoteUid((current) => (current === event.uid ? null : current));
-        if (onRemoteLeave) {
-          onRemoteLeave(event.uid);
+        if (cb.onRemoteLeave) {
+          cb.onRemoteLeave(event.uid);
         }
       } else if (event.type === 'joined-self') {
         setStatus('joined');
+        if (cb.onJoin) {
+          cb.onJoin();
+        }
+      }
+    });
+    // Token-expiry events come from the shared engine handler —
+    // forward them to this screen's toast callbacks.
+    const unsubscribeToken = onAgoraTokenEvent((event) => {
+      const cb = callbacksRef.current;
+      if (event.type === 'expiring-no-renewal' && cb.onTokenExpiring) {
+        cb.onTokenExpiring();
+      } else if (event.type === 'renewal-failed' && cb.onTokenRenewalFailed) {
+        cb.onTokenRenewalFailed();
       }
     });
 
@@ -509,6 +586,9 @@ export default function LiveVideo({
         if (!cancelled) {
           setError(e.message || 'Could not join the live channel.');
           setStatus('error');
+          if (callbacksRef.current.onJoinError) {
+            callbacksRef.current.onJoinError(e);
+          }
         }
       }
     })();
@@ -516,6 +596,7 @@ export default function LiveVideo({
     return () => {
       cancelled = true;
       unsubscribe();
+      unsubscribeToken();
       leaveAgoraChannel();
       joinedChannelRef.current = null;
     };
