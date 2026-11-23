@@ -13,6 +13,7 @@
 // because fetchLiveHosts only lists approved hosts.
 // ─────────────────────────────────────────────────────────────────
 import { supabase } from './client';
+import { withTimeout } from './timeout';
 
 // Kinds in the transactions table that count as host earnings
 // (gifts received, call earnings, tips). Anything else — coin
@@ -36,9 +37,9 @@ function toInt(v) {
 export async function getCurrentUser() {
   if (!supabase) return null;
   try {
-    const { data, error } = await supabase.auth.getUser();
-    if (error || !data || !data.user) return null;
-    return data.user;
+    const res = await withTimeout(supabase.auth.getUser());
+    if (!res || res.error || !res.data || !res.data.user) return null;
+    return res.data.user;
   } catch (e) {
     return null;
   }
@@ -49,13 +50,15 @@ export async function getCurrentUser() {
 export async function getMyProfile(userId) {
   if (!supabase || !userId) return null;
   try {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('id,username,avatar_url,coins,diamonds')
-      .eq('id', userId)
-      .maybeSingle();
-    if (error || !data) return null;
-    return data;
+    const res = await withTimeout(
+      supabase
+        .from('profiles')
+        .select('id,username,avatar_url,coins,diamonds')
+        .eq('id', userId)
+        .maybeSingle(),
+    );
+    if (!res || res.error || !res.data) return null;
+    return res.data;
   } catch (e) {
     return null;
   }
@@ -90,13 +93,15 @@ export async function ensureProfileRow(user) {
 export async function getMyHostRow(userId) {
   if (!supabase || !userId) return null;
   try {
-    const { data, error } = await supabase
-      .from('hosts')
-      .select('id,host_id,profile_id,status,rate_tier,is_online,last_seen')
-      .eq('profile_id', userId)
-      .maybeSingle();
-    if (error || !data) return null;
-    return data;
+    const res = await withTimeout(
+      supabase
+        .from('hosts')
+        .select('id,host_id,profile_id,status,rate_tier,is_online,last_seen')
+        .eq('profile_id', userId)
+        .maybeSingle(),
+    );
+    if (!res || res.error || !res.data) return null;
+    return res.data;
   } catch (e) {
     return null;
   }
@@ -226,13 +231,18 @@ export async function stopHostHeartbeat(markOffline = false) {
 }
 
 // ── Real earnings ────────────────────────────────────────────────
-// Canonical source 1: calls rows where this host is host_id and
-// status is 'completed'. cost_coins is what callers paid,
-// host_earnings_diamonds is the host's share.
-// Canonical source 2: transactions rows for this host's profile
-// whose kind is a host earning (gift / call earning / tip).
-// Both sources are summed separately and returned apart, so the
-// screen never double-counts one earning as the other.
+// Canonical source for call counts / minutes / coins: calls rows
+// where this host is host_id and status is 'completed' OR 'ended'
+// (signalling writes finished calls as 'ended'; the table default
+// is 'completed' — filtering on 'completed' alone returns 0 for
+// every real call).
+// Diamonds come from ONE source only: transactions rows for this
+// host's profile whose kind is a host earning (gift / call earning
+// / tip). The calls rows' host_earnings_diamonds is NOT summed —
+// it is the same earning creditHostEarnings already wrote as a
+// 'call_earnings' transaction, so adding both counted every call
+// earning twice. Calls rows are used only for counts, minutes and
+// the coins the callers paid.
 
 function startOfToday() {
   const d = new Date();
@@ -275,31 +285,29 @@ export async function fetchHostEarnings(hostRowId, profileId) {
 
   let callRows = [];
   try {
-    const { data, error } = await supabase
-      .from('calls')
-      .select('cost_coins,host_earnings_diamonds,duration_seconds,status,created_at')
-      .eq('host_id', hostRowId)
-      .eq('status', 'completed')
-      .order('created_at', { ascending: false })
-      .limit(1000);
-    if (!error && Array.isArray(data)) callRows = data;
+    const res = await withTimeout(
+      supabase
+        .from('calls')
+        .select('cost_coins,duration_seconds,status,created_at')
+        .eq('host_id', hostRowId)
+        .in('status', ['completed', 'ended'])
+        .order('created_at', { ascending: false })
+        .limit(1000),
+    );
+    if (res && !res.error && Array.isArray(res.data)) callRows = res.data;
   } catch (e) {
     callRows = [];
   }
 
   let todayCoins = 0;
-  let todayDiamonds = 0;
   let todayCalls = 0;
   let todaySeconds = 0;
   let totalCoins = 0;
-  let totalDiamonds = 0;
   let totalSeconds = 0;
   for (const c of callRows) {
     const coins = toInt(c.cost_coins);
-    const diamonds = toInt(c.host_earnings_diamonds);
     const seconds = toInt(c.duration_seconds);
     totalCoins += coins;
-    totalDiamonds += diamonds;
     totalSeconds += seconds;
     const created = c.created_at ? new Date(c.created_at) : null;
     if (created && !Number.isNaN(created.getTime())) {
@@ -307,11 +315,9 @@ export async function fetchHostEarnings(hostRowId, profileId) {
       const slot = weekByKey.get(key);
       if (slot) {
         slot.coins += coins;
-        slot.diamonds += diamonds;
       }
       if (key === todayKey) {
         todayCoins += coins;
-        todayDiamonds += diamonds;
         todayCalls += 1;
         todaySeconds += seconds;
       }
@@ -319,19 +325,24 @@ export async function fetchHostEarnings(hostRowId, profileId) {
   }
 
   // Gift / earning transactions for this host's profile.
+  // This is the ONLY source of diamonds (see the header comment
+  // above): the calls rows' host_earnings_diamonds is the same
+  // earning and must never be added on top of these.
   let txDiamondsToday = 0;
   let txDiamondsTotal = 0;
   let txCoinsTotal = 0;
   if (profileId) {
     try {
-      const { data, error } = await supabase
-        .from('transactions')
-        .select('kind,amount_coins,amount_diamonds,created_at')
-        .eq('profile_id', profileId)
-        .order('created_at', { ascending: false })
-        .limit(500);
-      if (!error && Array.isArray(data)) {
-        for (const t of data) {
+      const res = await withTimeout(
+        supabase
+          .from('transactions')
+          .select('kind,amount_coins,amount_diamonds,created_at')
+          .eq('profile_id', profileId)
+          .order('created_at', { ascending: false })
+          .limit(500),
+      );
+      if (res && !res.error && Array.isArray(res.data)) {
+        for (const t of res.data) {
           if (!t || !EARNING_KIND.test(String(t.kind || ''))) continue;
           const diamonds = toInt(t.amount_diamonds);
           const coins = toInt(t.amount_coins);
@@ -353,11 +364,11 @@ export async function fetchHostEarnings(hostRowId, profileId) {
 
   return {
     todayCoins,
-    todayDiamonds: todayDiamonds + txDiamondsToday,
+    todayDiamonds: txDiamondsToday,
     todayCalls,
     todayMinutes: Math.round(todaySeconds / 60),
     totalCoins: totalCoins + txCoinsTotal,
-    totalDiamonds: totalDiamonds + txDiamondsTotal,
+    totalDiamonds: txDiamondsTotal,
     totalCalls: callRows.length,
     totalMinutes: Math.round(totalSeconds / 60),
     week,
@@ -398,14 +409,16 @@ export async function requestWithdrawal(hostRowId, { amountDiamonds, method, acc
 export async function fetchMyWithdrawals(hostRowId) {
   if (!supabase || !hostRowId) return [];
   try {
-    const { data, error } = await supabase
-      .from('withdrawals')
-      .select('id,amount_diamonds,method,account,status,created_at')
-      .eq('host_id', hostRowId)
-      .order('created_at', { ascending: false })
-      .limit(20);
-    if (error || !Array.isArray(data)) return [];
-    return data;
+    const res = await withTimeout(
+      supabase
+        .from('withdrawals')
+        .select('id,amount_diamonds,method,account,status,created_at')
+        .eq('host_id', hostRowId)
+        .order('created_at', { ascending: false })
+        .limit(20),
+    );
+    if (!res || res.error || !Array.isArray(res.data)) return [];
+    return res.data;
   } catch (e) {
     return [];
   }
@@ -416,13 +429,15 @@ export async function fetchMyWithdrawals(hostRowId) {
 export async function fetchWithdrawnDiamonds(hostRowId) {
   if (!supabase || !hostRowId) return 0;
   try {
-    const { data, error } = await supabase
-      .from('withdrawals')
-      .select('amount_diamonds,status')
-      .eq('host_id', hostRowId);
-    if (error || !Array.isArray(data)) return 0;
+    const res = await withTimeout(
+      supabase
+        .from('withdrawals')
+        .select('amount_diamonds,status')
+        .eq('host_id', hostRowId),
+    );
+    if (!res || res.error || !Array.isArray(res.data)) return 0;
     let total = 0;
-    for (const w of data) {
+    for (const w of res.data) {
       const s = String(w.status || '').toLowerCase();
       if (s === 'rejected' || s === 'cancelled') continue;
       total += toInt(w.amount_diamonds);
