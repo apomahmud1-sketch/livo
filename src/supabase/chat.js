@@ -10,20 +10,15 @@
 // throwing, so a screen can fall back to its "sign in" prompt.
 // There is no fake data anywhere in this module.
 import { supabase } from './client';
+import { getSessionUser } from './auth';
 import { withTimeout } from './timeout';
 
 // Signed-in user id, or null when there is no session.
+// Identity from the local session (see getSessionUser in auth.js):
+// the network getUser() call can fail on a phone right after login.
 export async function getCurrentUserId() {
-  try {
-    if (!supabase) return null;
-    // Fail-fast: a stalled auth check must not hang the Messages
-    // spinner forever (see timeout.js).
-    const res = await withTimeout(supabase.auth.getUser());
-    const data = res && res.data;
-    return (data && data.user && data.user.id) || null;
-  } catch (e) {
-    return null;
-  }
+  const user = await getSessionUser();
+  return (user && user.id) || null;
 }
 
 // Resolve a chat profile (as passed in route.params.profile) to the
