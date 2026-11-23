@@ -23,6 +23,15 @@ import RewardsScreen from './src/screens/RewardsScreen'; // [F1] Lucky Spin + Da
 import MomentsScreen from './src/screens/MomentsScreen'; // [Vero] Moments feed
 import TasksScreen from './src/screens/TasksScreen'; // [Vero] Daily Tasks
 
+// AuthContext (2026-11-23): the gate in Root() holds the session in
+// MEMORY (from the SIGNED_IN / INITIAL_SESSION event). Screens must
+// NOT re-read identity from AsyncStorage: on the user's phone the
+// storage read returns nothing seconds after a successful Google
+// sign-in (nearly-full storage), so every screen that called
+// getSession() saw "no session" while the gate correctly showed
+// Main. The context carries the gate's live session/user instead.
+export const AuthContext = React.createContext({ session: null, user: null });
+
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
@@ -195,6 +204,14 @@ function Root() {
   // helper returns early and does nothing.
   useEffect(() => useIncomingCallListener(navigationRef), [session]);
 
+  // Live auth value for screens (see AuthContext above): memoised on
+  // the session object so consumers only re-render on real auth
+  // changes, not on every Root render.
+  const authValue = React.useMemo(
+    () => ({ session: session || null, user: (session && session.user) || null }),
+    [session],
+  );
+
   if (session === undefined) {
     return (
       <View style={styles.loading}>
@@ -204,6 +221,7 @@ function Root() {
   }
 
   return (
+    <AuthContext.Provider value={authValue}>
     <NavigationContainer ref={navigationRef}>
       <Stack.Navigator
         screenOptions={{
@@ -241,6 +259,7 @@ function Root() {
       <Toast />
       <StatusBar style="auto" />
     </NavigationContainer>
+    </AuthContext.Provider>
   );
 }
 
