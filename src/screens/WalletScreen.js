@@ -55,6 +55,25 @@ export default function WalletScreen({ navigation }) {
   const [agreed, setAgreed] = useState(true);
   const [selectedId, setSelectedId] = useState(null);
   const [showBill, setShowBill] = useState(false);
+  // Bill · History filter: All / Received / Sent. Received =
+  // a positive coins or diamonds amount; Sent = a negative one.
+  const [billFilter, setBillFilter] = useState('all');
+
+  const visibleTx = transactions.filter((h) => {
+    if (billFilter === 'received') return (h.amountCoins || 0) > 0 || (h.amountDiamonds || 0) > 0;
+    if (billFilter === 'sent') return (h.amountCoins || 0) < 0 || (h.amountDiamonds || 0) < 0;
+    return true;
+  });
+  // Totals for the visible filter only (never the whole list when
+  // a filter is on). Shown with a sign, e.g. +1,200 coins.
+  const visibleTotals = visibleTx.reduce(
+    (acc, h) => ({
+      coins: acc.coins + (h.amountCoins || 0),
+      diamonds: acc.diamonds + (h.amountDiamonds || 0),
+    }),
+    { coins: 0, diamonds: 0 },
+  );
+  const signed = (n) => `${n > 0 ? '+' : ''}${n.toLocaleString()}`;
 
   // Diamond pack ids, derived from the live catalog (never hardcoded).
   const DIAMOND_PACK_IDS = diamondPacks.map((p) => p.id);
@@ -102,18 +121,40 @@ export default function WalletScreen({ navigation }) {
           <Text style={styles.billTitle}>Bill · History</Text>
           <View style={styles.headerSpacer} />
         </View>
+        <View style={styles.filterRow}>
+          {['all', 'received', 'sent'].map((f) => (
+            <TouchableOpacity
+              key={f}
+              style={[styles.filterTab, billFilter === f && styles.filterTabOn]}
+              onPress={() => setBillFilter(f)}
+            >
+              <Text style={[styles.filterTxt, billFilter === f && styles.filterTxtOn]}>
+                {f === 'all' ? 'All' : f === 'received' ? 'Received' : 'Sent'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
         <ScrollView contentContainerStyle={styles.wrap}>
           {!signedIn ? (
             <Text style={styles.empty}>Please sign in to see your transactions.</Text>
           ) : transactions.length === 0 ? (
-            <Text style={styles.empty}>No transactions yet — buy a pack and it will show here as Done.</Text>
+            <Text style={styles.empty}>No transactions yet</Text>
+          ) : visibleTx.length === 0 ? (
+            <Text style={styles.empty}>
+              {billFilter === 'received' ? 'No received transactions yet' : 'No sent transactions yet'}
+            </Text>
           ) : (
-            transactions.map((h) => (
-              <View key={h.id} style={styles.histRow}>
-                <Text style={styles.histText}>{txText(h)}</Text>
-                <Text style={styles.done}>{h.createdAt ? new Date(h.createdAt).toLocaleDateString() : 'Done'}</Text>
-              </View>
-            ))
+            <View>
+              <Text style={styles.totals}>
+                Total: {signed(visibleTotals.coins)} coins · {signed(visibleTotals.diamonds)} 💎
+              </Text>
+              {visibleTx.map((h) => (
+                <View key={h.id} style={styles.histRow}>
+                  <Text style={styles.histText}>{txText(h)}</Text>
+                  <Text style={styles.done}>{h.createdAt ? new Date(h.createdAt).toLocaleDateString() : 'Done'}</Text>
+                </View>
+              ))}
+            </View>
           )}
         </ScrollView>
       </View>
@@ -241,6 +282,12 @@ const styles = StyleSheet.create({
   confirmText: { color: '#fff', fontWeight: 'bold' },
   done: { color: COLORS.green, fontWeight: 'bold' },
   empty: { color: '#fff', fontSize: 14, marginTop: 20, textAlign: 'center' },
+  filterRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  filterTab: { backgroundColor: 'rgba(255,255,255,0.18)', borderRadius: 16, paddingHorizontal: 16, paddingVertical: 8 },
+  filterTabOn: { backgroundColor: '#fff' },
+  filterTxt: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+  filterTxtOn: { color: COLORS.purple },
+  totals: { color: '#fff', fontSize: 14, fontWeight: 'bold', marginBottom: 4, marginTop: 6 },
   gems: { fontSize: 40, marginBottom: 8, textAlign: 'center' },
   grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
   header: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
