@@ -12,16 +12,13 @@
 // (store.following, default ['2']); region chips filter by country;
 // Search filters by name/ID; trophy -> Ranking; banner -> HostDashboard;
 // card tap -> VideoCall with that host.
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { FlatList, Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChartColumn, ChevronDown, ChevronRight, Coins, Eye, Globe, Search, Trophy } from 'lucide-react-native';
-import { COLORS } from '../config';
+import { COLORS, PLATFORM_COMMISSION_PERCENT } from '../config';
 import { useApp } from '../store';
-
-// Demo live-viewer counts, by host id. Replace with real live-viewer
-// counts from Supabase later; the layout does not depend on them.
-const VIEWERS = { 1: 1284, 2: 862, 3: 540, 4: 2310, 5: 0, 6: 1975 };
+import { subscribeRoomViewers } from '../supabase/presence';
 
 const COUNTRY_NAMES = { BGD: 'Bangladesh', IND: 'India', PAK: 'Pakistan' };
 // Flag images from flagcdn (w40), shown 13x9 on the photo.
@@ -74,10 +71,14 @@ const HostCard = React.memo(function HostCard({ host, viewers, navigation }) {
       </View>
       <View style={styles.cardFooter}>
         <Text style={styles.cardFooterName} numberOfLines={1}>{host.name}</Text>
-        <View style={styles.viewers}>
-          <Eye size={13} color="#818b84" strokeWidth={2} />
-          <Text style={styles.viewersText}>{formatViewers(viewers)}</Text>
-        </View>
+        {/* Live viewer count only: null (unknown) shows nothing —
+            never an invented number. */}
+        {viewers == null ? null : (
+          <View style={styles.viewers}>
+            <Eye size={13} color="#818b84" strokeWidth={2} />
+            <Text style={styles.viewersText}>{formatViewers(viewers)}</Text>
+          </View>
+        )}
       </View>
       <Text style={styles.location}>{COUNTRY_NAMES[host.country] || host.country}</Text>
     </TouchableOpacity>
@@ -105,20 +106,38 @@ export default function HomeScreen({ navigation }) {
     );
   }, [allHosts]);
 
-  // Total viewers of ONLINE hosts, for the "Live now" pill.
+  // Live viewer counts per visible host id (null = unknown yet —
+  // no count is shown until Realtime presence reports one).
+  const [viewerCounts, setViewerCounts] = useState({});
+
+  // Total viewers of ONLINE hosts, for the "Live now" pill — null
+  // when no real viewer count is known for any online host, so the
+  // pill stays hidden instead of showing an invented total.
   const totalLiveViewers = React.useMemo(() => {
-    const total = allHosts.reduce((s, h) => s + (h.online ? (VIEWERS[h.id] || 0) : 0), 0);
-    return formatTotal(total);
-  }, [allHosts]);
+    let total = 0;
+    let known = false;
+    allHosts.forEach((h) => {
+      if (!h.online) return;
+      const c = viewerCounts[h.id];
+      if (typeof c === 'number') {
+        known = true;
+        total += c;
+      }
+    });
+    return known ? formatTotal(total) : null;
+  }, [allHosts, viewerCounts]);
 
   // Stream = all hosts (region filter on top, online first);
   // Follow = only the hosts the user follows (store.following holds
-  // host ids). Searching filters by name or user ID instead.
+  // host ids). Searching filters by name, store id, or the host's
+  // real user id (h.userId, from profiles.user_id) instead.
   const hosts = React.useMemo(() => {
     const q = searchText.trim().toLowerCase();
     if (q) {
       return allHosts.filter((h) =>
-        h.name.toLowerCase().includes(q) || String(h.id).includes(q)
+        h.name.toLowerCase().includes(q) ||
+        String(h.id).includes(q) ||
+        (h.userId && String(h.userId).toLowerCase().includes(q))
       );
     }
     let list = feed === 'follow'
@@ -128,9 +147,33 @@ export default function HomeScreen({ navigation }) {
     return [...list].sort((a, b) => (b.online ? 1 : 0) - (a.online ? 1 : 0));
   }, [feed, region, allHosts, following, searchText]);
 
+  // Subscribe to Realtime presence for each visible host so the
+  // cards show live viewer counts. Re-subscribes when the visible
+  // list changes; every subscription is removed on cleanup.
+  useEffect(() => {
+    const unsubs = hosts
+      .map((h) =>
+        subscribeRoomViewers(h.id, (count) => {
+          setViewerCounts((prev) =>
+            prev[h.id] === count ? prev : { ...prev, [h.id]: count },
+          );
+        }),
+      )
+      .filter(Boolean);
+    return () => {
+      unsubs.forEach((u) => {
+        try {
+          u();
+        } catch (e) {
+          // Channel already removed.
+        }
+      });
+    };
+  }, [hosts]);
+
   const renderHost = React.useCallback(({ item }) => (
-    <HostCard host={item} viewers={VIEWERS[item.id] || 0} navigation={navigation} />
-  ), [navigation]);
+    <HostCard host={item} viewers={viewerCounts[item.id] ?? null} navigation={navigation} />
+  ), [navigation, viewerCounts]);
 
   // Commission banner + "Live now" header scroll with the list
   // (hidden while searching, like the v0 phone screen).
@@ -146,7 +189,7 @@ export default function HomeScreen({ navigation }) {
         >
           <View style={styles.commissionText}>
             <Text style={styles.commissionEyebrow}>CREATOR REWARDS</Text>
-            <Text style={styles.commissionTitle}>{'Earn Up to\n30% Commission'}</Text>
+            <Text style={styles.commissionTitle}>{`Earn Up to\n${PLATFORM_COMMISSION_PERCENT}% Commission`}</Text>
             <View style={styles.commissionBtn}>
               <Text style={styles.commissionBtnText}>Get Started</Text>
               <ChevronRight size={13} color="#d85d2e" strokeWidth={2.5} />
@@ -166,7 +209,7 @@ export default function HomeScreen({ navigation }) {
               colors={['#ffe58c', '#efaa27']}
               style={[styles.commissionBadge, { transform: [{ rotate: '9deg' }] }]}
             >
-              <Text style={styles.commissionBadgeText}>30%</Text>
+              <Text style={styles.commissionBadgeText}>{PLATFORM_COMMISSION_PERCENT}%</Text>
             </LinearGradient>
           </View>
         </LinearGradient>
@@ -176,9 +219,13 @@ export default function HomeScreen({ navigation }) {
         <View style={styles.liveNowLeft}>
           <View style={styles.liveDot} />
           <Text style={styles.liveNowText}>Live now</Text>
-          <View style={styles.totalPill}>
-            <Text style={styles.totalPillText}>{totalLiveViewers}</Text>
-          </View>
+          {/* Total pill only when at least one real viewer count is
+              known — hidden otherwise, never an invented total. */}
+          {totalLiveViewers != null ? (
+            <View style={styles.totalPill}>
+              <Text style={styles.totalPillText}>{totalLiveViewers}</Text>
+            </View>
+          ) : null}
         </View>
         <Text style={styles.seeAll}>See all ›</Text>
       </View>
