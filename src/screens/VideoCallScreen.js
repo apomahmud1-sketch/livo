@@ -4,7 +4,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, PLATFORM_COMMISSION_PERCENT } from '../config';
 import { useApp } from '../store';
 import { supabase } from '../supabase/client';
-import { fetchMyProfile } from '../supabase/auth';
+import { fetchMyProfile, getSessionUser } from '../supabase/auth';
 import { joinLiveRoom, leaveLiveRoom } from '../supabase/presence';
 // [Calls] Real signalling over Supabase Realtime (src/calls/signalling.js):
 // an OUTGOING call places its ringing row at once (no self-accept
@@ -142,8 +142,10 @@ export default function VideoCallScreen({ route, navigation }) {
     let cancelled = false;
     (async () => {
       try {
-        const { data } = await supabase.auth.getUser();
-        const uid = data && data.user && data.user.id;
+        // Identity from the local session (see getSessionUser):
+        // the network getUser() call can fail on a phone right after login.
+        const sessionUser = await getSessionUser();
+        const uid = sessionUser && sessionUser.id;
         if (!uid) return;
         const { profile } = await fetchMyProfile(uid);
         if (!cancelled && profile && profile.username) setSenderName(profile.username);
@@ -202,8 +204,9 @@ export default function VideoCallScreen({ route, navigation }) {
     (async () => {
       let viewer = { id: undefined, name: 'Guest' };
       try {
-        const { data } = await supabase.auth.getUser();
-        const u = data && data.user;
+        // Identity from the local session (see getSessionUser):
+        // the network getUser() call can fail on a phone right after login.
+        const u = await getSessionUser();
         if (u) {
           viewer = {
             id: u.id,
@@ -453,7 +456,7 @@ export default function VideoCallScreen({ route, navigation }) {
     finishCall();
     // No call summary for anyone (user 2026-11-18): the host sees
     // the earnings in the Host Dashboard. Just go back.
-    showToast('কল শেষ হয়েছে');
+    showToast('Call ended');
     navigation.goBack();
   };
   endCallRef.current = endCall;
