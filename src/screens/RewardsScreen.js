@@ -7,9 +7,13 @@
 //   from CHECKIN_REWARDS in src/rewardsConfig.js.
 // • Winnings are added to the LIVE coin balance via the store's
 //   real addRewardCoins() — no demo / hard-coded balance.
-// • Persistence: last-spin / last-check-in dates and the streak are
-//   saved on the device (AsyncStorage in store.js), so they survive
-//   closing the app. Nothing here is faked.
+// • SERVER GATE: spin and check-in go through the store's
+//   recordSpin() / recordCheckin(), which are server-gated to once
+//   per day and return { ok, alreadyClaimed }. The local dates /
+//   streak shown here are a DISPLAY CACHE ONLY — the server gate is
+//   the source of truth. A spin is gated BEFORE the wheel turns, so
+//   an already-claimed day never spins or credits. A check-in is
+//   gated BEFORE the coins are credited.
 // • No new native dependencies: the wheel is plain Views +
 //   Animated (React Native core). No call summary anywhere.
 // ─────────────────────────────────────────────────────────────────
@@ -78,10 +82,29 @@ export default function RewardsScreen({ navigation }) {
   const nextCheckinReward =
     CHECKIN_REWARDS[(nextStreak - 1) % CHECKIN_CYCLE_DAYS];
 
-  const spin = () => {
+  const spin = async () => {
     if (spinning) return;
     if (spinsLeft <= 0) {
       showToast('No free spins left today — come back tomorrow!');
+      return;
+    }
+    // Server gate first: once per day, per account. The gate is the
+    // source of truth — the local spinsLeft above is display only.
+    // (A missing gate result is treated as allowed; the gate itself
+    // is what enforces the once-per-day rule.)
+    let gate = null;
+    try {
+      gate = await recordSpin();
+    } catch (e) {
+      showToast('Could not start the spin — check your connection and try again.');
+      return;
+    }
+    if (gate && gate.alreadyClaimed) {
+      showToast('You already used your free spin today — come back tomorrow!');
+      return;
+    }
+    if (gate && gate.ok === false) {
+      showToast('Could not start the spin — try again.');
       return;
     }
     const prize = pickSpinPrize();
@@ -108,15 +131,30 @@ export default function RewardsScreen({ navigation }) {
       rotation.setValue(rotationDeg.current); // same angle, keeps numbers small
       setSpinning(false);
       addRewardCoins(prize.coins, 'Lucky Spin');
-      recordSpin(today);
       setLastWin(prize);
     });
   };
 
-  const claimCheckin = () => {
+  const claimCheckin = async () => {
     if (checkinClaimedToday) return;
+    // Server gate first: once per day, per account. Coins are
+    // credited ONLY when the gate allows the claim.
+    let gate = null;
+    try {
+      gate = await recordCheckin();
+    } catch (e) {
+      showToast('Could not claim — check your connection and try again.');
+      return;
+    }
+    if (gate && gate.alreadyClaimed) {
+      showToast('Already claimed today — come back tomorrow!');
+      return;
+    }
+    if (gate && gate.ok === false) {
+      showToast('Could not claim — try again.');
+      return;
+    }
     addRewardCoins(nextCheckinReward, 'Daily Reward');
-    recordCheckin(today, nextStreak);
   };
 
   const wheelSpin = rotation.interpolate({
@@ -253,9 +291,9 @@ export default function RewardsScreen({ navigation }) {
         {/* [/Vero] */}
 
         <Text style={styles.note}>
-          Rewards are added to your real coin balance. Spin and check-in
-          history is saved on your device, so it stays even if you close
-          the app.
+          Rewards are added to your real coin balance. Spins and
+          check-ins are limited to once a day on your account — the
+          server checks this, not just this device.
         </Text>
       </ScrollView>
     </LinearGradient>
