@@ -1,30 +1,31 @@
 // Livo VIPScreen — Vero-style Premium.
-// Shows the VIP level ladder (Baron → Legend, prices in coins,
-// from vip-config.json), the 10 privilege effects, and the 3
-// dollar packs to buy. Buying is REAL now (2026-11-22): buyVip
-// opens the Google Play sheet and the purchase listener sets
-// vip_until + vip_level on the signed-in user's profiles row.
-// Until the VIP products exist in Play Console the Buy buttons
-// explain that instead of charging anything.
+// The 10 privilege effects and the coin ladder are gone: only the
+// privileges actually enforced in code are shown as active (the gold
+// VIP frame on the avatar in ProfileScreen, and the vehicle entrance
+// effect in VideoCallScreen — both gated on store.vipLevel). The
+// rest are labelled "Coming soon", not presented as live benefits.
+// The old VIP_LEVELS coin ladder (60,000–5,000,000 coins) is removed:
+// those tiers were unbuyable and had no panel values.
+// Buying is REAL now (2026-11-22): buyVip opens the Google Play
+// sheet and the purchase listener sets vip_until + vip_level on the
+// signed-in user's profiles row. Until the VIP products exist in
+// Play Console the Buy buttons explain that instead of charging
+// anything.
 import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { COLORS } from '../config';
 import { useApp } from '../store';
 import VipFrame from '../components/VipFrame'; // [Vero] animated VIP avatar frame
 
-const VIP_LEVELS = [
-  { level: 1, name: 'Baron', price: 60000, color: '#C0C0C0', perks: 2 },
-  { level: 2, name: 'Earl', price: 120000, color: '#4FC3F7', perks: 3 },
-  { level: 3, name: 'Marquis', price: 300000, color: '#BA68C8', perks: 4 },
-  { level: 4, name: 'Duke', price: 600000, color: '#FFB300', perks: 5 },
-  { level: 5, name: 'King', price: 1200000, color: '#FFD700', perks: 6 },
-  { level: 6, name: 'Emperor', price: 2400000, color: '#FF6D00', perks: 7 },
-  { level: 7, name: 'Legend', price: 5000000, color: '#00E676', perks: 10 },
-];
+// Privileges actually enforced in code (gated on store.vipLevel):
+//  • Avatar Frame — gold VipFrame on the avatar (ProfileScreen).
+//  • Rare Vehicle — vehicle entrance effect (VideoCallScreen).
+const ACTIVE_PRIVILEGES = ['Avatar Frame', 'Rare Vehicle'];
 
-const PRIVILEGES = [
-  'VIP Title', 'Avatar Frame', 'Distinguished Card', 'Entrance Show',
-  'Chat Bubble', 'Gift Tassel', 'Rare Vehicle', 'Privileged Gifts',
+// Shown honestly as not yet live — not presented as active benefits.
+const COMING_SOON_PRIVILEGES = [
+  'VIP Title', 'Distinguished Card', 'Entrance Show',
+  'Chat Bubble', 'Gift Tassel', 'Privileged Gifts',
   'Room Priority Display', 'Birthday Gift',
 ];
 
@@ -41,9 +42,18 @@ export default function VIPScreen() {
 
       <Text style={styles.sectionTitle}>Privilege Effects</Text>
       <View style={styles.perkGrid}>
-        {PRIVILEGES.map((p) => (
+        {ACTIVE_PRIVILEGES.map((p) => (
           <View key={p} style={styles.perkChip}>
             <Text style={styles.perkText}>{p}</Text>
+          </View>
+        ))}
+      </View>
+
+      <Text style={styles.sectionTitle}>Coming soon</Text>
+      <View style={styles.perkGrid}>
+        {COMING_SOON_PRIVILEGES.map((p) => (
+          <View key={p} style={[styles.perkChip, styles.perkChipSoon]}>
+            <Text style={[styles.perkText, styles.perkTextSoon]}>{p}</Text>
           </View>
         ))}
       </View>
@@ -55,20 +65,8 @@ export default function VIPScreen() {
             <Text style={styles.frameAvatarText}>M</Text>
           </View>
         </VipFrame>
-        <Text style={styles.frameNote}>Gold VIP frame — shows on your profile when Premium is active. The purple Dynamic frame is in the Frame Designer.</Text>
+        <Text style={styles.frameNote}>Gold VIP frame — shows on your profile when Premium is active.</Text>
       </View>
-
-      <Text style={styles.sectionTitle}>VIP Levels</Text>
-      {VIP_LEVELS.map((lv) => (
-        <View key={lv.level} style={styles.levelRow}>
-          <View style={[styles.levelDot, { backgroundColor: lv.color }]} />
-          <View style={styles.levelInfo}>
-            <Text style={styles.levelName}>VIP {lv.level} · {lv.name}</Text>
-            <Text style={styles.levelSub}>{lv.perks} privileges</Text>
-          </View>
-          <Text style={styles.levelPrice}>{lv.price.toLocaleString()} coins</Text>
-        </View>
-      ))}
 
       <Text style={styles.sectionTitle}>Buy Premium</Text>
       {/* [Live] Buy packs come from the store (live Supabase rows
@@ -113,6 +111,8 @@ const styles = StyleSheet.create({
   name: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
   note: { color: '#a7f3d0', fontSize: 12, marginTop: 16 },
   perkChip: { backgroundColor: '#14532d', borderRadius: 14, marginBottom: 8, marginRight: 8, paddingHorizontal: 12, paddingVertical: 6 },
+  perkChipSoon: { backgroundColor: 'transparent', borderColor: '#14532d', borderWidth: 1 },
+  perkTextSoon: { color: '#a7f3d0', fontWeight: 'normal' },
   perkGrid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 8 },
   perkText: { color: '#fff', fontSize: 13, fontWeight: 'bold' },
   // [Vero] VIP frame preview.
