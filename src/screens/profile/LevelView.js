@@ -49,13 +49,13 @@ export default function LevelView({ gender, onGenderChange, onBack, onTopUp, sho
             style={[styles.segBtn, !female && styles.segBtnOn]}
             onPress={() => { onGenderChange('male'); }}
           >
-            <Text style={[styles.segTxt, !female && styles.segTxtOn]}>ছেলে ID</Text>
+            <Text style={[styles.segTxt, !female && styles.segTxtOn]}>Male ID</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.segBtn, female && styles.segBtnOnF]}
             onPress={() => { onGenderChange('female'); }}
           >
-            <Text style={[styles.segTxt, female && styles.segTxtOn]}>মেয়ে ID</Text>
+            <Text style={[styles.segTxt, female && styles.segTxtOn]}>Female ID</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -101,8 +101,8 @@ export default function LevelView({ gender, onGenderChange, onBack, onTopUp, sho
       </ScrollView>
       <Text style={styles.privNote}>
         {unlocked === privs.length
-          ? `Lv${tab} — ${unlocked}/${privs.length} privileges · এই লেভেলের সব Privileges খোলা আছে`
-          : `Lv${tab} — ${unlocked}/${privs.length} privileges খোলা · বাকিগুলো আরও উঁচু লেভেলে খুলবে`}
+          ? `Lv${tab} — ${unlocked}/${privs.length} privileges · All privileges for this level are unlocked`
+          : `Lv${tab} — ${unlocked}/${privs.length} privileges unlocked · The rest unlock at higher levels`}
       </Text>
       {privs.map((p) => {
         const locked = tab < p.unlock;
@@ -110,7 +110,7 @@ export default function LevelView({ gender, onGenderChange, onBack, onTopUp, sho
           <TouchableOpacity
             key={p.t}
             style={[styles.priv, locked && styles.privLocked]}
-            onPress={() => showToast(locked ? `${p.t} — Lv${p.unlock}-এ গেলে খুলবে` : `${p.t} — Lv${tab} Privilege`)}
+            onPress={() => showToast(locked ? `${p.t} — Unlocks at Lv${p.unlock}` : `${p.t} — Lv${tab} Privilege`)}
           >
             <View style={[styles.privIcon, { backgroundColor: p.bg }]}>
               <Text style={styles.privEmoji}>{p.icon}</Text>
