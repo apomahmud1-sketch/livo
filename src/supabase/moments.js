@@ -9,6 +9,7 @@
 // stored moments.likes column (0 for new posts), and the heart
 // toggle is local-only — it is not persisted anywhere.
 import { supabase } from './client';
+import { withTimeout } from './timeout';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -54,7 +55,9 @@ export async function fetchMoments({ limit = 10, before = null } = {}) {
       .order('created_at', { ascending: false })
       .limit(limit);
     if (before) q = q.lt('created_at', before);
-    const { data, error } = await q;
+    // Fail-fast: a stalled request resolves to null instead of
+    // hanging the feed spinner forever (see timeout.js).
+    const { data, error } = (await withTimeout(q)) || {};
     if (error || !Array.isArray(data) || data.length === 0) return [];
 
     // Join profiles for authors whose host_id is a real user id.
@@ -63,10 +66,13 @@ export async function fetchMoments({ limit = 10, before = null } = {}) {
     ];
     let profileById = new Map();
     if (authorIds.length > 0) {
-      const { data: profRows } = await supabase
-        .from('profiles')
-        .select('id,username,country,avatar_url')
-        .in('id', authorIds);
+      const { data: profRows } =
+        (await withTimeout(
+          supabase
+            .from('profiles')
+            .select('id,username,country,avatar_url')
+            .in('id', authorIds),
+        )) || {};
       if (Array.isArray(profRows)) {
         profileById = new Map(profRows.filter((p) => p && p.id).map((p) => [p.id, p]));
       }
