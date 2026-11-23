@@ -118,11 +118,11 @@ export default function ChatDetailScreen({ navigation, route }) {
 
   const startVoiceCall = () => {
     if (!chatHost) {
-      showToast('ভয়েস কল শুধু লাইভ হোস্টদের জন্য');
+      showToast('Voice calls are only for live hosts');
       return;
     }
     if (!chatHost.online) {
-      showToast(`${chatHost.name} এখন অফলাইন`);
+      showToast(`${chatHost.name} is offline now`);
       return;
     }
     navigation.navigate('VideoCall', { host: chatHost, audioOnly: true });
@@ -138,7 +138,7 @@ export default function ChatDetailScreen({ navigation, route }) {
       return;
     }
     if (!chatHost.online) {
-      showToast(`${chatHost.name} এখন অফলাইন`);
+      showToast(`${chatHost.name} is offline now`);
       return;
     }
     navigation.navigate('VideoCall', { host: chatHost, freeCall: true });
@@ -362,13 +362,13 @@ export default function ChatDetailScreen({ navigation, route }) {
       toggleFollow(profile.storeId);
       showToast(
         following.includes(profile.storeId)
-          ? `${profile.name}-কে Unfollow করা হয়েছে`
-          : `${profile.name}-কে Follow করা হয়েছে`,
+          ? `Unfollowed ${profile.name}`
+          : `You followed ${profile.name}`,
       );
     } else {
       const next = !localFollowing;
       setLocalFollowing(next);
-      showToast(next ? `${profile.name}-কে Follow করা হয়েছে` : `${profile.name}-কে Unfollow করা হয়েছে`);
+      showToast(next ? `You followed ${profile.name}` : `Unfollowed ${profile.name}`);
     }
   };
 
@@ -398,7 +398,7 @@ export default function ChatDetailScreen({ navigation, route }) {
     const next = !translateOn;
     setTranslateOn(next);
     showToast(
-      next ? `অটো অনুবাদ চালু — ${targetLangLabel}` : 'অটো অনুবাদ বন্ধ',
+      next ? `Auto-translate on — ${targetLangLabel}` : 'Auto-translate off',
     );
   };
   // [/F4]
