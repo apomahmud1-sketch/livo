@@ -1,24 +1,25 @@
 // Livo — Profile (Me) screen, rebuilt from the web preview (livo-home-preview).
 // Me top shows the REAL signed-in user now (name / ID / country /
-// language from the Supabase profiles row + Google account); the old
-// hardcoded demo profile (Mr.lee, ID 9065858) survives only as a
-// fallback inside DEMO_PROFILE for fields the account has not set
-// yet (friends / fans / level / signature / age).
-// Sub-views: Earn beans, Exchange, Withdraw, My chat Price, My Profile
-// detail, Badge, Gift received, Edit Profile, Second Language,
-// My Invitation, My Tasks, Settings, My Level and VIP Member Centre.
+// language from the Supabase profiles row + Google account). There
+// is NO demo fallback: fields the account has not set show "—" /
+// "Not set" — never the old demo profile (Mr.lee, ID 9065858).
+// Sub-views: My chat Price, My Profile detail, Badge, Gift received,
+// Edit Profile (real, writes via store.updateMyProfile), Second
+// Language (persisted), My Level and VIP Member Centre.
 //
-// Balances: the Wallet card shows the LIVE store Diamonds balance (shared
-// with WalletScreen via useApp), not a fixed number — the preview's 65 was
-// the balance at that moment. Beans are local here (store.js has no beans
-// field yet); they start at 0, like the preview.
-// Spending Diamonds (Exchange / VIP) goes through the store's buyDiamonds
-// with a negative amount, because store.js exposes no deduct function and
-// this file must not change store.js. A proper deductDiamonds in store.js
-// would be cleaner later.
+// Balances: the Wallet card shows the LIVE store Diamonds balance
+// (shared with WalletScreen via useApp). There are no Beans in the
+// app — the old Exchange / Withdraw (Beans) UI is deleted, and no
+// Diamonds are ever spent from this screen.
+// Check-in lives ONLY in RewardsScreen (header button navigates
+// there); Tasks live ONLY in TasksScreen. There is no invite /
+// referral system, and no unread-message count source, so neither
+// is shown.
 import React from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
-import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { COLORS } from '../config';
 import { useApp } from '../store';
 import { supabase } from '../supabase/client';
@@ -28,11 +29,9 @@ import LevelView from './profile/LevelView';
 import VipView from './profile/VipView';
 import VipFrame from '../components/VipFrame'; // [Vero] animated VIP avatar frame
 import {
-  BADGES_ACH, BADGES_ACTIVITY, BEANS_PER_USD, EX_OPTS, HIGHEST_CALL_PRICE,
-  LANGUAGES, PRICE_OPTS, PROFILE as DEMO_PROFILE, PROFILE_MEDALS, TASKS, WD_OPTS,
+  BADGES_ACH, BADGES_ACTIVITY, HIGHEST_CALL_PRICE,
+  LANGUAGES, PRICE_OPTS, PROFILE_MEDALS,
 } from './profile/levelData';
-
-const AVATAR = require('../../assets/host-arif.jpg');
 
 function themeFor(dark) {
   return dark
@@ -40,10 +39,17 @@ function themeFor(dark) {
     : { bg: '#f5f3ff', surface: '#ffffff', surface2: '#f3f4f6', text: '#111827', muted: '#6b7280', border: '#e5e7eb', cardBg: '#ffffff' };
 }
 
-export default function ProfileScreen({ navigation }) {
-  const { diamonds, buyDiamonds, recharge, showToast, vipLevel } = useApp();
+// store vipLevel is a pack id such as 'vip1' — display it as 'VIP 1'.
+function vipLabel(v) {
+  if (!v) return null;
+  const m = String(v).match(/^vip\s?(\d+)$/i);
+  return m ? `VIP ${m[1]}` : String(v);
+}
 
-  // ── Real signed-in user (replaces the hardcoded Mr.lee / 9065858) ──
+export default function ProfileScreen({ navigation }) {
+  const { diamonds, showToast, vipLevel, vipUntil, following, levelInfo, updateMyProfile } = useApp();
+
+  // ── Real signed-in user ──
   // user = Supabase auth user (Google account); profile = the user's
   // row in the profiles table (created on first sign-in, see auth.js).
   const [user, setUser] = React.useState(null);
@@ -73,70 +79,58 @@ export default function ProfileScreen({ navigation }) {
     return () => { mounted = false; };
   }, [user]);
 
-  // The profile shown on screen: real user first, demo values only
-  // as fallbacks for fields the account has not set yet. Age and
-  // gender are never guessed — they stay null when unknown.
+  // The profile shown on screen: real user only. Every field is an
+  // explicit null when the account has not set it — no demo values.
+  // Age and gender are never guessed — they stay null when unknown.
   const PROFILE = React.useMemo(() => {
     const meta = (user && user.user_metadata) || {};
     const displayName =
       (profile && profile.username)
       || meta.full_name
       || meta.name
-      || (user && user.email ? user.email.split('@')[0] : DEMO_PROFILE.name);
-    const displayId = (profile && profile.user_id) || (user && user.id) || DEMO_PROFILE.id;
+      || (user && user.email ? user.email.split('@')[0] : null);
+    const displayId = (profile && profile.user_id) || (user && user.id) || null;
     return {
-      ...DEMO_PROFILE,
       name: displayName,
       id: displayId,
-      country: (profile && profile.country) || DEMO_PROFILE.country,
-      language: (profile && profile.language) || DEMO_PROFILE.language,
+      country: (profile && profile.country) || null,
+      language: (profile && profile.language) || null,
       age: profile && profile.age ? profile.age : null,
       gender: profile && profile.gender ? profile.gender : null,
-      signature: (profile && profile.bio) || DEMO_PROFILE.signature,
+      signature: (profile && profile.bio) || null,
     };
   }, [user, profile]);
 
-  // Google profile photo when Google gave one, else the local avatar.
+  // Google profile photo when Google gave one, else the saved
+  // avatar_url, else no photo (initial-letter placeholder).
   const googleAvatar = user && user.user_metadata ? user.user_metadata.avatar_url : null;
   const profileAvatar = profile ? profile.avatar_url : null;
-  const avatarSource = googleAvatar || profileAvatar ? { uri: googleAvatar || profileAvatar } : AVATAR;
+  const avatarUri = googleAvatar || profileAvatar || null;
 
   const [view, setView] = React.useState('main');
   const [dark, setDark] = React.useState(false);
-  const [checkedIn, setCheckedIn] = React.useState(false);
-  const [gender, setGender] = React.useState('male');
-  const [beans, setBeans] = React.useState(0);
-  const [earnTab, setEarnTab] = React.useState('Video income');
-  const [exSel, setExSel] = React.useState(-1);
-  const [wdSel, setWdSel] = React.useState(-1);
-  const [chatPrice, setChatPrice] = React.useState(PROFILE.chatPrice);
+  // Gender gates Go Live, so it is real profile state, persisted
+  // through store.updateMyProfile — never a local-only toggle.
+  const [gender, setGender] = React.useState(null);
+  React.useEffect(() => { setGender(profile && profile.gender ? profile.gender : null); }, [profile]);
+  const [secondLang, setSecondLang] = React.useState(null);
+  React.useEffect(() => { setSecondLang(profile && profile.second_language ? profile.second_language : null); }, [profile]);
+  const [chatPrice, setChatPrice] = React.useState(null);
   const [priceEditing, setPriceEditing] = React.useState(false);
-  const [secondLang, setSecondLang] = React.useState(PROFILE.secondLanguage);
-  const [vipOwned, setVipOwned] = React.useState(-1);
-  const [vipDaysLeft, setVipDaysLeft] = React.useState(0);
-  const [tasksDone, setTasksDone] = React.useState({});
-  const [tasksEarned, setTasksEarned] = React.useState(0);
   const [badgeDetail, setBadgeDetail] = React.useState(null);
+  // Edit-profile draft (filled when the edit view is opened).
+  const [draft, setDraft] = React.useState({ nickname: '', bio: '', age: '', country: '', language: '', tags: '' });
+  const [saving, setSaving] = React.useState(false);
+  const [avatarBusy, setAvatarBusy] = React.useState(false);
   const t = themeFor(dark);
 
-  // Spend Diamonds through the store (see header comment). Returns false
-  // when the balance is too low. The buyDiamonds toast is overridden by
-  // the caller's own showToast right after.
-  const spendDiamonds = (amount) => {
-    if (diamonds < amount) return false;
-    buyDiamonds({ diamonds: -amount });
-    return true;
-  };
+  const myLevelLabel = levelInfo && typeof levelInfo.level === 'number' ? `Lv${levelInfo.level}` : '—';
+  const vipDaysLeft = vipUntil ? Math.max(0, Math.ceil((new Date(vipUntil).getTime() - Date.now()) / 86400000)) : 0;
 
   const copyId = async () => {
-    try { await Clipboard.setStringAsync(PROFILE.id); } catch (e) { /* clipboard unavailable */ }
+    if (!PROFILE.id) { showToast('No ID yet — sign in first'); return; }
+    try { await Clipboard.setStringAsync(String(PROFILE.id)); } catch (e) { /* clipboard unavailable */ }
     showToast(`ID কপি হয়েছে: ${PROFILE.id}`);
-  };
-
-  const checkIn = () => {
-    if (checkedIn) { showToast('আজকের চেক-ইন হয়ে গেছে — কাল আবার এসো'); return; }
-    setCheckedIn(true);
-    showToast('চেক-ইন হয়েছে! আজকের রিওয়ার্ড পেয়ে গেছো');
   };
 
   const toggleDark = () => {
@@ -159,37 +153,138 @@ export default function ProfileScreen({ navigation }) {
     await signOut();
   };
 
-  const parentOf = { badge: 'profile', gift: 'profile', edit: 'profile', lang: 'edit', chatprice: 'earn', exchange: 'earn', withdraw: 'earn' };
+  const parentOf = { badge: 'profile', gift: 'profile', edit: 'profile', lang: 'edit', chatprice: 'main' };
   const goBack = () => setView(parentOf[view] || 'main');
-
-  const doExchange = () => {
-    if (exSel < 0) { showToast('আগে একটা Exchange অপশন বেছে নাও'); return; }
-    const o = EX_OPTS[exSel];
-    if (diamonds < o.d) {
-      showToast(`Diamonds যথেষ্ট নেই — তোমার আছে ${diamonds.toLocaleString()}, লাগবে ${o.d.toLocaleString()}`);
-      return;
-    }
-    spendDiamonds(o.d);
-    setBeans((b) => b + o.b);
-    showToast(`Exchange হয়েছে! ${o.d.toLocaleString()} Diamonds → ${o.b.toLocaleString()} Beans`);
-  };
-
-  const doWithdraw = () => {
-    if (wdSel < 0) { showToast('আগে একটা Withdrawal option বেছে নাও'); return; }
-    showToast('Not authenticated yet — আগে পরিচয় যাচাই (authentication) করতে হবে');
-  };
-
-  const claimTask = (task, i) => {
-    if (tasksDone[i]) return;
-    setTasksDone((d) => ({ ...d, [i]: true }));
-    setTasksEarned((e) => e + task.reward);
-    recharge({ coins: task.reward, bonus: 0 });
-    showToast(`টাস্ক সম্পূর্ণ! +${task.reward} কয়েন ব্যালেন্সে যোগ হয়েছে`);
-  };
 
   const openBadge = (badge) => { setBadgeDetail(badge); setView('badge'); };
 
-  const beansUsd = (beans / BEANS_PER_USD).toFixed(1);
+  // ── Real profile writes (via the store) ──
+  // updateMyProfile returns false / { error } when the write failed;
+  // on success the local profile state is merged so the screen
+  // reflects the saved values at once.
+  const savePatch = async (patch) => {
+    // Guard only: the store is expected to provide updateMyProfile
+    // (it is missing from store.js as read — reported to the
+    // coordinator). A missing function must toast, never throw.
+    if (typeof updateMyProfile !== 'function') {
+      showToast("Couldn't save — profile saving is not set up yet.");
+      return false;
+    }
+    const res = await updateMyProfile(patch);
+    if (res === false || (res && res.error)) return false;
+    setProfile((p) => ({ ...(p || {}), ...patch }));
+    return true;
+  };
+
+  const persistGender = async (g) => {
+    if (!user) { showToast('Please sign in first.'); return; }
+    const ok = await savePatch({ gender: g });
+    if (!ok) { showToast("Couldn't save gender — try again."); return; }
+    setGender(g);
+    showToast(`Gender set to ${g === 'female' ? 'Female' : 'Male'}`);
+  };
+
+  const pickSecondLang = async (en) => {
+    if (!user) { showToast('Please sign in first.'); return; }
+    const ok = await savePatch({ second_language: en });
+    if (!ok) { showToast("Couldn't save — try again."); return; }
+    setSecondLang(en);
+    showToast(`Second Language: ${en}`);
+    setView('edit');
+  };
+
+  const openEdit = () => {
+    setDraft({
+      nickname: (profile && profile.username) || PROFILE.name || '',
+      bio: (profile && profile.bio) || '',
+      age: profile && profile.age ? String(profile.age) : '',
+      country: (profile && profile.country) || '',
+      language: (profile && profile.language) || '',
+      tags: (profile && profile.tags) || '',
+    });
+    setView('edit');
+  };
+
+  const saveProfile = async () => {
+    if (!user) { showToast('Please sign in first.'); return; }
+    const ageTrimmed = draft.age.trim();
+    const ageNum = ageTrimmed ? parseInt(ageTrimmed, 10) : null;
+    if (ageTrimmed && (Number.isNaN(ageNum) || ageNum < 13 || ageNum > 120)) {
+      showToast('Age must be between 13 and 120');
+      return;
+    }
+    const patch = {
+      bio: draft.bio.trim(),
+      country: draft.country.trim() || null,
+      language: draft.language.trim() || null,
+      tags: draft.tags.trim(),
+    };
+    if (draft.nickname.trim()) patch.username = draft.nickname.trim();
+    if (ageNum !== null) patch.age = ageNum;
+    setSaving(true);
+    try {
+      const ok = await savePatch(patch);
+      if (!ok) { showToast("Couldn't save — try again."); return; }
+      showToast('Profile saved');
+      setView('profile');
+    } catch (e) {
+      showToast("Couldn't save — check your connection and try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Avatar: pick a photo, upload it to the public 'avatars' storage
+  // bucket, and save the public URL as avatar_url on the profile.
+  const pickAvatar = async () => {
+    if (!user) { showToast('Please sign in first.'); return; }
+    if (avatarBusy) return;
+    try {
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+      if (res.canceled || !res.assets || !res.assets[0] || !res.assets[0].uri) return;
+      setAvatarBusy(true);
+      const uri = res.assets[0].uri;
+      const resp = await fetch(uri);
+      const blob = await resp.blob();
+      const path = `${user.id}/${Date.now()}.jpg`;
+      const { error: upErr } = await supabase.storage.from('avatars').upload(path, blob, {
+        contentType: 'image/jpeg',
+        upsert: true,
+      });
+      if (upErr) { showToast('Could not upload photo — try again.'); return; }
+      const { data: pub } = supabase.storage.from('avatars').getPublicUrl(path);
+      const url = pub && pub.publicUrl;
+      if (!url) { showToast('Could not upload photo — try again.'); return; }
+      const ok = await savePatch({ avatar_url: url });
+      if (!ok) { showToast('Photo uploaded but could not be saved — try again.'); return; }
+      showToast('Profile photo updated');
+    } catch (e) {
+      showToast('Could not change photo — try again.');
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+
+  // Clear Cache really clears the app's AsyncStorage caches (every
+  // livo-* key: wallet cache, rewards display cache) and reports
+  // what was removed. Server data (balances, VIP, tasks) is untouched.
+  const clearCache = async () => {
+    try {
+      const keys = await AsyncStorage.getAllKeys();
+      const livoKeys = keys.filter((k) => k.indexOf('livo-') === 0);
+      if (livoKeys.length > 0) await AsyncStorage.multiRemove(livoKeys);
+      showToast(livoKeys.length > 0
+        ? `Cache cleared — ${livoKeys.length} item${livoKeys.length > 1 ? 's' : ''} removed`
+        : 'Cache is already empty');
+    } catch (e) {
+      showToast('Could not clear cache — try again.');
+    }
+  };
 
   const subHead = (title, backTo) => (
     <View style={[styles.headRow, { backgroundColor: t.surface }]}>
@@ -209,12 +304,26 @@ export default function ProfileScreen({ navigation }) {
     </TouchableOpacity>
   );
 
+  // Avatar image, or an initial-letter placeholder when no photo
+  // is set (never another person's photo as a fallback).
+  const avatarView = (size, radius) => (avatarUri
+    ? <Image source={{ uri: avatarUri }} style={{ width: size, height: size, borderRadius: radius }} />
+    : (
+      <View style={[styles.avatarFallback, { width: size, height: size, borderRadius: radius }]}>
+        <Text style={styles.avatarFallbackTxt}>{(PROFILE.name || '?').charAt(0).toUpperCase()}</Text>
+      </View>
+    ));
+
+  const genderChip = PROFILE.gender || PROFILE.age
+    ? `${PROFILE.gender === 'female' ? '♀' : '♂'}${PROFILE.age ? ` ${PROFILE.age}` : ''}`
+    : null;
+
   // ── My Level / VIP (separate components, own ScrollViews) ──
   if (view === 'level') {
     return (
       <LevelView
         gender={gender}
-        onGenderChange={setGender}
+        onGenderChange={persistGender}
         onBack={() => setView('main')}
         onTopUp={goWallet}
         showToast={showToast}
@@ -224,15 +333,10 @@ export default function ProfileScreen({ navigation }) {
   if (view === 'vip') {
     return (
       <VipView
-        diamonds={diamonds}
-        spendDiamonds={spendDiamonds}
         showToast={showToast}
         onBack={() => setView('main')}
         onTopUp={goWallet}
-        vipOwned={vipOwned}
-        setVipOwned={setVipOwned}
-        vipDaysLeft={vipDaysLeft}
-        setVipDaysLeft={setVipDaysLeft}
+        onBuyPremium={() => navigation.navigate('VIP')}
       />
     );
   }
@@ -247,37 +351,40 @@ export default function ProfileScreen({ navigation }) {
               <TouchableOpacity onPress={() => setView('profile')} activeOpacity={0.8} accessibilityLabel="ছবিতে চাপ দিয়ে My Profile পেজ খোলো">
                 {vipLevel ? (
                   <VipFrame frame="gold" size={78}>
-                    <Image source={avatarSource} style={styles.avatar} />
+                    {avatarView(64, 32)}
                   </VipFrame>
                 ) : (
-                  <Image source={avatarSource} style={styles.avatar} />
+                  avatarView(64, 32)
                 )}
               </TouchableOpacity>
               <View style={styles.idMain}>
                 <View style={styles.nameRow}>
-                  <Text style={[styles.name, { color: t.text }]}>{PROFILE.name}</Text>
-                  {vipOwned >= 0 && (
+                  <Text style={[styles.name, { color: t.text }]}>{PROFILE.name || 'Not set'}</Text>
+                  {vipLevel ? (
                     <TouchableOpacity style={styles.vipBadge} onPress={() => setView('vip')}>
-                      <Text style={styles.vipBadgeTxt}>👑 VIP{vipOwned + 1}</Text>
+                      <Text style={styles.vipBadgeTxt}>👑 {vipLabel(vipLevel)}</Text>
                     </TouchableOpacity>
-                  )}
+                  ) : null}
                 </View>
                 <View style={styles.idRow}>
-                  <Text style={[styles.idTxt, { color: t.muted }]}>ID:&nbsp;{PROFILE.id}</Text>
+                  <Text style={[styles.idTxt, { color: t.muted }]}>ID:&nbsp;{PROFILE.id || '—'}</Text>
                   <TouchableOpacity onPress={copyId} accessibilityLabel="ID কপি করো">
                     <Text style={styles.copyIcon}>📋</Text>
                   </TouchableOpacity>
                 </View>
                 <View style={styles.chips}>
-                  <Text style={styles.flagChip}>🇸🇬</Text>
-                  <Text style={styles.chipMale}>{PROFILE.age ? `♂ ${PROFILE.age}` : '♂'}</Text>
-                  <Text style={styles.chipLang}>{PROFILE.language}</Text>
+                  {PROFILE.country ? <Text style={styles.flagChipTxt}>{PROFILE.country}</Text> : null}
+                  {genderChip ? <Text style={styles.chipMale}>{genderChip}</Text> : null}
+                  {PROFILE.language ? <Text style={styles.chipLang}>{PROFILE.language}</Text> : null}
+                  {!PROFILE.country && !genderChip && !PROFILE.language ? (
+                    <Text style={[styles.idTxt, { color: t.muted }]}>Not set</Text>
+                  ) : null}
                 </View>
               </View>
               <View style={styles.topBtns}>
-                <TouchableOpacity onPress={checkIn} style={styles.checkinBtn} accessibilityLabel="প্রতিদিনের চেক-ইন">
+                {/* Single check-in path: RewardsScreen. */}
+                <TouchableOpacity onPress={() => navigation.navigate('Rewards')} style={styles.checkinBtn} accessibilityLabel="প্রতিদিনের চেক-ইন">
                   <Text style={styles.checkinEmoji}>📅</Text>
-                  {!checkedIn && <View style={styles.redDot} />}
                 </TouchableOpacity>
                 <TouchableOpacity onPress={toggleDark} style={styles.moonBtn} accessibilityLabel="ডার্ক মোড চালু বা বন্ধ করো">
                   <Text style={styles.moonEmoji}>{dark ? '☀️' : '🌙'}</Text>
@@ -285,18 +392,18 @@ export default function ProfileScreen({ navigation }) {
               </View>
             </View>
             <View style={styles.stats}>
-              <TouchableOpacity style={styles.stat} onPress={() => showToast('Friend লিস্ট (প্রিভিউ)')}>
-                <Text style={[styles.statNum, { color: t.text }]}>{PROFILE.friends}</Text>
+              <View style={styles.stat}>
+                <Text style={[styles.statNum, { color: t.text }]}>—</Text>
                 <Text style={[styles.statLbl, { color: t.muted }]}>Friend</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.stat} onPress={() => showToast('Follow লিস্ট (প্রিভিউ)')}>
-                <Text style={[styles.statNum, { color: t.text }]}>{PROFILE.following}</Text>
+              </View>
+              <View style={styles.stat}>
+                <Text style={[styles.statNum, { color: t.text }]}>{following.length}</Text>
                 <Text style={[styles.statLbl, { color: t.muted }]}>Follow</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.stat} onPress={() => showToast('Fans লিস্ট (প্রিভিউ)')}>
-                <Text style={[styles.statNum, { color: t.text }]}>{PROFILE.fans}</Text>
+              </View>
+              <View style={styles.stat}>
+                <Text style={[styles.statNum, { color: t.text }]}>—</Text>
                 <Text style={[styles.statLbl, { color: t.muted }]}>Fans</Text>
-              </TouchableOpacity>
+              </View>
             </View>
           </View>
 
@@ -312,160 +419,34 @@ export default function ProfileScreen({ navigation }) {
           <View style={styles.darkRow}>
             <TouchableOpacity style={styles.darkCard} onPress={() => setView('level')} activeOpacity={0.85}>
               <Text style={styles.darkCardTitle}>My Level</Text>
-              <Text style={styles.darkCardValue}>Lv{PROFILE.level}</Text>
+              <Text style={styles.darkCardValue}>{myLevelLabel}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.darkCard} onPress={() => setView('vip')} activeOpacity={0.85}>
               <Text style={styles.darkCardTitle}>VIP</Text>
-              <Text style={styles.darkCardValue}>{vipOwned >= 0 ? `VIP${vipOwned + 1}` : 'Member Centre'}</Text>
+              <Text style={styles.darkCardValue}>{vipLevel ? `${vipLabel(vipLevel)}${vipDaysLeft > 0 ? ` · ${vipDaysLeft}d left` : ''}` : 'Member Centre'}</Text>
             </TouchableOpacity>
           </View>
 
           <View style={[styles.menuCard, { backgroundColor: t.surface }]}>
-            {menuRow('💬', '#fde7f1', 'Messages', <Text style={styles.unreadBadge}>6</Text>, () => navigation.navigate('MessagesTab'))}
-            {menuRow('🪙', '#fef3c7', 'My Income', <Text style={styles.incomeVal}>{beans.toLocaleString()} Beans</Text>, () => setView('earn'))}
+            {menuRow('💬', '#fde7f1', 'Messages', null, () => navigation.navigate('MessagesTab'))}
             {menuRow('🎥', '#fde7f1', 'Host Dashboard', <Text style={styles.tagGreen}>Approved</Text>, () => navigation.navigate('HostDashboard'))}
-            {menuRow('👥', '#fff0cd', 'My Invitation', <Text style={styles.tagGold}>Get Rewards</Text>, () => setView('invite'))}
-            {menuRow('✅', '#e2f5ec', 'My Tasks', <Text style={styles.tagPink}>New Reward</Text>, () => setView('tasks'))}
+            {menuRow('✅', '#e2f5ec', 'My Tasks', <Text style={styles.tagPink}>New Reward</Text>, () => navigation.navigate('Tasks'))}
             {menuRow('🎡', '#fef3c7', 'Lucky Spin', <Text style={styles.tagPink}>Free spin</Text>, () => navigation.navigate('Rewards'))}
+            {menuRow('💬', '#e0f5fa', 'Chat Price', <Text style={styles.chatPriceVal}>{chatPrice ? `${chatPrice.toLocaleString()}/min` : 'Not set'}</Text>, () => setView('chatprice'))}
             {menuRow('👤', '#e0f5fa', 'My Profile', null, () => setView('profile'))}
             {menuRow('⚙️', '#eef0f4', 'Settings', null, () => setView('settings'))}
           </View>
         </View>
       )}
 
-      {/* ── Earn beans (My Income) ── */}
-      {view === 'earn' && (
-        <View>
-          {subHead('Earn beans')}
-          <View style={[styles.earnCard, { backgroundColor: '#f5b93f' }]}>
-            <View>
-              <Text style={styles.earnLabel}>My income</Text>
-              <Text style={styles.earnBeans}>{beans.toLocaleString()} <Text style={styles.earnUsd}>Beans = {beansUsd} USD</Text></Text>
-            </View>
-            <View style={styles.earnBtns}>
-              <TouchableOpacity style={styles.earnBtn} onPress={() => setView('exchange')}><Text style={styles.earnBtnTxt}>Exchange</Text></TouchableOpacity>
-              <TouchableOpacity style={styles.earnBtn} onPress={() => setView('withdraw')}><Text style={styles.earnBtnTxt}>Withdraw</Text></TouchableOpacity>
-            </View>
-          </View>
-          <View style={styles.earnTabs}>
-            {['Video income', 'Gift income', 'Other'].map((tab) => (
-              <TouchableOpacity
-                key={tab}
-                style={[styles.earnTab, earnTab === tab && styles.earnTabOn]}
-                onPress={() => setEarnTab(tab)}
-              >
-                <Text style={[styles.earnTabTxt, earnTab === tab && styles.earnTabTxtOn]}>{tab}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <TouchableOpacity style={styles.calBtn} onPress={() => showToast('তারিখ অনুযায়ী আয়ের হিসাব (প্রিভিউ)')}>
-            <Text style={styles.calEmoji}>📅</Text>
-          </TouchableOpacity>
-          <View style={styles.noData}>
-            <Text style={styles.noDataEmoji}>📭</Text>
-            <Text style={[styles.noDataTxt, { color: t.muted }]}>No data</Text>
-          </View>
-          <View style={styles.menu}>
-            {menuRow('🎥', '#fde7f1', 'Chat Price', <Text style={styles.chatPriceVal}>{chatPrice.toLocaleString()}/min</Text>, () => setView('chatprice'))}
-          </View>
-        </View>
-      )}
-
-      {/* ── Exchange ── */}
-      {view === 'exchange' && (
-        <View>
-          {subHead('Exchange', 'earn')}
-          <View style={[styles.goldUser, { backgroundColor: t.surface }]}>
-            <Image source={avatarSource} style={styles.goldAva} />
-            <View>
-              <Text style={[styles.goldName, { color: t.text }]}>{PROFILE.name}</Text>
-              <Text style={[styles.goldId, { color: t.muted }]}>{PROFILE.id}</Text>
-            </View>
-          </View>
-          <View style={styles.optGrid}>
-            {EX_OPTS.map((o, i) => (
-              <TouchableOpacity
-                key={o.d}
-                style={[styles.optTile, { backgroundColor: t.surface, borderColor: exSel === i ? COLORS.purple : t.border }]}
-                onPress={() => setExSel(i)}
-              >
-                <Text style={[styles.optD, { color: t.text }]}>💎 {o.d.toLocaleString()}</Text>
-                <Text style={styles.optB}>{o.b.toLocaleString()} Beans</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <Text style={[styles.myBeans, { color: t.text }]}>🪙 My Beans:&nbsp;{beansUsd}</Text>
-          <TouchableOpacity style={styles.bigGradBtn} onPress={doExchange}>
-            <Text style={styles.bigGradTxt}>Exchange</Text>
-          </TouchableOpacity>
-          <View style={styles.notes}>
-            <Text style={[styles.noteLine, { color: t.muted }]}><Text style={styles.bang}>!</Text> Click &lt;Replace&gt; to switch the exchange beneficiary</Text>
-            <Text style={[styles.noteLine, { color: t.muted }]}><Text style={styles.bang}>!</Text> Successful exchange, irrevocable</Text>
-          </View>
-        </View>
-      )}
-
-      {/* ── Withdraw ── */}
-      {view === 'withdraw' && (
-        <View>
-          <View style={[styles.headRow, { backgroundColor: t.surface }]}>
-            <TouchableOpacity onPress={() => setView('earn')} style={styles.backBtn}>
-              <Text style={[styles.backTxt, { color: t.text }]}>‹</Text>
-            </TouchableOpacity>
-            <Text style={[styles.headTitle, { color: t.text }]}>Withdraw</Text>
-            <TouchableOpacity onPress={() => showToast('Withdraw record — এখনো কোনো রেকর্ড নেই')}>
-              <Text style={styles.recordLink}>Withdraw record</Text>
-            </TouchableOpacity>
-          </View>
-          <TouchableOpacity
-            style={[styles.wdBanner, { backgroundColor: '#fb923c' }]}
-            onPress={() => showToast('পরিচয় যাচাই (Authentication) — আসল অ্যাপে যাচাইয়ের পেজ খুলবে')}
-          >
-            <Image source={avatarSource} style={styles.wdAva} />
-            <Text style={styles.wdBannerTxt}>Verify identity</Text>
-            <Text style={styles.wdBannerChev}>›</Text>
-          </TouchableOpacity>
-          <Text style={[styles.wdAuth, { color: t.text }]}>Not authenticated yet <Text style={styles.bang}>!</Text></Text>
-          <View style={styles.wdOptHead}>
-            <Text style={[styles.wdOptTitle, { color: t.text }]}>Withdrawal option</Text>
-            <Text style={[styles.wdBeans, { color: t.muted }]}>Beans: <Text style={{ fontWeight: 'bold', color: t.text }}>{beansUsd}</Text></Text>
-          </View>
-          <View style={styles.optGrid}>
-            {WD_OPTS.map((o, i) => (
-              <TouchableOpacity
-                key={o.label}
-                style={[styles.optTile, { backgroundColor: t.surface, borderColor: wdSel === i ? COLORS.purple : t.border }]}
-                onPress={() => setWdSel(i)}
-              >
-                <Text style={[styles.optD, { color: t.text }]}>{o.label}</Text>
-                <Text style={styles.optB}>{o.b.toLocaleString()} Beans</Text>
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity
-              style={[styles.optTile, styles.sendTile, { backgroundColor: t.surface, borderColor: t.border }]}
-              onPress={() => showToast('Send Beans — অন্য ইউজারের ID-তে Beans পাঠাও')}
-            >
-              <Text style={styles.sendTxt}>Send Beans</Text>
-            </TouchableOpacity>
-          </View>
-          <TouchableOpacity style={styles.bigDarkBtn} onPress={doWithdraw}>
-            <Text style={styles.bigDarkTxt}>Withdraw now</Text>
-          </TouchableOpacity>
-          <Text style={[styles.wdNote, { color: t.muted }]}>
-            The minimum withdrawal amount for this method is <Text style={{ fontWeight: 'bold' }}>10</Text> dollars.{'\n'}
-            The larger the single withdrawal amount, the lower the handling fee.
-          </Text>
-        </View>
-      )}
-
       {/* ── My chat Price ── */}
       {view === 'chatprice' && (
         <View>
-          {subHead('My chat Price', 'earn')}
+          {subHead('My chat Price', 'main')}
           <View style={[styles.cardBox, { backgroundColor: t.surface }]}>
             <Text style={[styles.cardBoxTitle, { color: t.text }]}>Video Call Price</Text>
             <View style={styles.priceBigRow}>
-              <Text style={[styles.priceBig, { color: t.text }]}>{chatPrice.toLocaleString()}<Text style={styles.pricePer}>/ min</Text></Text>
+              <Text style={[styles.priceBig, { color: t.text }]}>{chatPrice ? chatPrice.toLocaleString() : '—'}<Text style={styles.pricePer}>/ min</Text></Text>
               <TouchableOpacity style={styles.editBtn} onPress={() => setPriceEditing((e) => !e)}>
                 <Text style={styles.editBtnTxt}>{priceEditing ? 'Done' : 'Edit'}</Text>
               </TouchableOpacity>
@@ -483,7 +464,7 @@ export default function ProfileScreen({ navigation }) {
                     </TouchableOpacity>
                   ))}
                 </View>
-                <Text style={[styles.hint, { color: t.muted }]}>তোমার লেভেল অনুযায়ী সর্বোচ্চ 3,000/min পর্যন্ত সেট করা যাবে।</Text>
+                <Text style={[styles.hint, { color: t.muted }]}>তোমার লেভেল অনুযায়ী সর্বোচ্চ 3,000/min পর্যন্ত সেট করা যাবে। এই দাম এখনো প্রোফাইলে সংরক্ষণ হয় না — হোস্টের আসল কল রেট প্যানেল থেকে সেট করা হয়।</Text>
               </View>
             )}
           </View>
@@ -507,30 +488,32 @@ export default function ProfileScreen({ navigation }) {
       {view === 'profile' && (
         <View>
           <View style={styles.heroWrap}>
-            <Image source={avatarSource} style={styles.heroImg} />
+            {avatarUri
+              ? <Image source={{ uri: avatarUri }} style={styles.heroImg} />
+              : <View style={[styles.heroImg, styles.heroFallback]} />}
             <TouchableOpacity onPress={() => setView('main')} style={styles.heroBack}>
               <Text style={styles.heroBackTxt}>‹</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => setView('edit')} style={styles.heroEdit}>
+            <TouchableOpacity onPress={openEdit} style={styles.heroEdit}>
               <Text style={styles.heroEditTxt}>Edit</Text>
             </TouchableOpacity>
           </View>
           <View style={[styles.pfMain, { backgroundColor: t.surface }]}>
             <View style={styles.pfIdRow}>
-              <Image source={avatarSource} style={styles.pfAva} />
+              {avatarView(72, 36)}
               <View style={{ flex: 1 }}>
                 <View style={styles.pfNameRow}>
-                  <Text style={[styles.pfName, { color: t.text }]}>{PROFILE.name}</Text>
+                  <Text style={[styles.pfName, { color: t.text }]}>{PROFILE.name || 'Not set'}</Text>
                   <Text style={styles.onlineBadge}>● Online</Text>
-                  {vipOwned >= 0 && <Text style={styles.vipBadge2}>👑 VIP{vipOwned + 1}</Text>}
+                  {vipLevel ? <Text style={styles.vipBadge2}>👑 {vipLabel(vipLevel)}</Text> : null}
                 </View>
-                <Text style={[styles.pfStats, { color: t.muted }]}>Follow <Text style={{ fontWeight: 'bold', color: t.text }}>{PROFILE.following}</Text>   Fans <Text style={{ fontWeight: 'bold', color: t.text }}>{PROFILE.fans}</Text></Text>
+                <Text style={[styles.pfStats, { color: t.muted }]}>Follow <Text style={{ fontWeight: 'bold', color: t.text }}>{following.length}</Text>   Fans <Text style={{ fontWeight: 'bold', color: t.text }}>—</Text></Text>
               </View>
             </View>
-            <Text style={[styles.pfSig, { color: t.muted }]}>{PROFILE.signature}</Text>
+            <Text style={[styles.pfSig, { color: t.muted }]}>{PROFILE.signature || 'Not set'}</Text>
             <View style={styles.chips}>
-              <Text style={styles.chipMale}>{PROFILE.age ? `♂ ${PROFILE.age}` : '♂'}</Text>
-              <Text style={styles.flagChipTxt}>🇸🇬 Singapore</Text>
+              {genderChip ? <Text style={styles.chipMale}>{genderChip}</Text> : null}
+              <Text style={styles.flagChipTxt}>{PROFILE.country || 'Not set'}</Text>
             </View>
             <Text style={styles.infoTab}>Information</Text>
             <Text style={[styles.albumEmpty, { color: t.muted }]}>There are no photos in the album yet~</Text>
@@ -613,49 +596,109 @@ export default function ProfileScreen({ navigation }) {
         </View>
       )}
 
-      {/* ── Edit Profile ── */}
+      {/* ── Edit Profile (real form — saves to the profiles row) ── */}
       {view === 'edit' && (
         <View>
           {subHead('Edit Profile', 'profile')}
           <View style={styles.menu}>
-            {[
-              { label: 'My Avatar', value: '🖼️', onPress: () => showToast('My Avatar এডিট পেজ খুলবে') },
-              { label: 'ID', value: PROFILE.id, copy: true },
-              { label: 'Nickname', value: PROFILE.name, onPress: () => showToast('Nickname এডিট পেজ খুলবে') },
-              { label: 'Gender', value: PROFILE.gender ? PROFILE.gender.charAt(0).toUpperCase() + PROFILE.gender.slice(1) : 'Not set', onPress: () => showToast('Gender এডিট পেজ খুলবে') },
-              { label: 'Age', value: PROFILE.age ? String(PROFILE.age) : 'Not set', onPress: () => showToast('Age এডিট পেজ খুলবে') },
-              { label: 'Regions', value: PROFILE.country, onPress: () => showToast('Regions এডিট পেজ খুলবে') },
-              { label: 'Location', value: PROFILE.country, onPress: () => showToast('Location এডিট পেজ খুলবে') },
-              { label: 'Language', value: PROFILE.language, onPress: () => showToast('Language এডিট পেজ খুলবে') },
-              { label: 'Second Language', value: secondLang, onPress: () => setView('lang') },
-              { label: 'Tags', value: 'Designer, Leo, Cricket…', onPress: () => showToast('Tags এডিট পেজ খুলবে') },
-              { label: 'Self-introduction', value: profile && profile.bio ? profile.bio : `Hello, I am ${PROFILE.name}.`, onPress: () => showToast('Self-introduction এডিট পেজ খুলবে') },
-              { label: 'Cosmetics', value: 'Default', onPress: () => showToast('Cosmetics এডিট পেজ খুলবে') },
-              { label: 'Google', value: 'Linked', onPress: () => showToast('Google এডিট পেজ খুলবে') },
-              { label: 'Phone', value: '+65 •••• ••••', onPress: () => showToast('Phone এডিট পেজ খুলবে') },
-              { label: 'Gmail', value: user && user.email ? user.email : 'Linked', onPress: () => showToast('Gmail এডিট পেজ খুলবে') },
-              { label: 'Password', value: '••••••••', onPress: () => showToast('Password এডিট পেজ খুলবে') },
-              { label: 'Login Device', value: 'This device', onPress: () => showToast('Login Device এডিট পেজ খুলবে') },
-            ].map((r) => (
-              <TouchableOpacity
-                key={r.label}
-                style={[styles.editRow, { backgroundColor: t.surface, borderColor: t.border }]}
-                onPress={r.onPress}
-              >
-                <Text style={[styles.editLabel, { color: t.text }]}>{r.label}</Text>
-                {r.label === 'My Avatar'
-                  ? <Image source={avatarSource} style={styles.editAva} />
-                  : <Text style={[styles.editValue, { color: t.muted }]}>{r.value}</Text>}
-                {r.copy
-                  ? <TouchableOpacity onPress={copyId} style={styles.copyBtn}><Text style={styles.copyBtnTxt}>Copy</Text></TouchableOpacity>
-                  : <Text style={styles.menuChev}>›</Text>}
-              </TouchableOpacity>
-            ))}
+            <TouchableOpacity
+              style={[styles.editRow, { backgroundColor: t.surface, borderColor: t.border }]}
+              onPress={pickAvatar}
+              disabled={avatarBusy}
+            >
+              <Text style={[styles.editLabel, { color: t.text }]}>My Avatar</Text>
+              {avatarView(40, 20)}
+              <Text style={[styles.editValue, { color: t.muted }]}>{avatarBusy ? 'Uploading…' : 'Change photo'}</Text>
+            </TouchableOpacity>
+            <View style={[styles.editRow, { backgroundColor: t.surface, borderColor: t.border }]}>
+              <Text style={[styles.editLabel, { color: t.text }]}>ID</Text>
+              <Text style={[styles.editValue, { color: t.muted }]}>{PROFILE.id || '—'}</Text>
+              <TouchableOpacity onPress={copyId} style={styles.copyBtn}><Text style={styles.copyBtnTxt}>Copy</Text></TouchableOpacity>
+            </View>
+            <View style={[styles.editRow, { backgroundColor: t.surface, borderColor: t.border }]}>
+              <Text style={[styles.editLabel, { color: t.text }]}>Gmail</Text>
+              <Text style={[styles.editValue, { color: t.muted }]}>{user && user.email ? user.email : 'Not set'}</Text>
+            </View>
+
+            <Text style={[styles.fieldLabel, { color: t.text }]}>Nickname</Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: t.surface, borderColor: t.border, color: t.text }]}
+              value={draft.nickname}
+              onChangeText={(v) => setDraft((d) => ({ ...d, nickname: v }))}
+              placeholder="Your nickname"
+              placeholderTextColor={t.muted}
+            />
+            <Text style={[styles.fieldLabel, { color: t.text }]}>Age</Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: t.surface, borderColor: t.border, color: t.text }]}
+              value={draft.age}
+              onChangeText={(v) => setDraft((d) => ({ ...d, age: v.replace(/[^0-9]/g, '') }))}
+              placeholder="Not set"
+              placeholderTextColor={t.muted}
+              keyboardType="numeric"
+            />
+            <Text style={[styles.fieldLabel, { color: t.text }]}>Gender (gates Go Live — saved to your profile)</Text>
+            <View style={styles.genderRow}>
+              {['male', 'female'].map((g) => (
+                <TouchableOpacity
+                  key={g}
+                  style={[styles.genderBtn, gender === g && styles.genderBtnOn]}
+                  onPress={() => persistGender(g)}
+                >
+                  <Text style={[styles.genderBtnTxt, gender === g && styles.genderBtnTxtOn]}>{g === 'male' ? 'Male' : 'Female'}</Text>
+                </TouchableOpacity>
+              ))}
+              <Text style={[styles.editValue, { color: t.muted }]}>{gender ? '' : 'Not set'}</Text>
+            </View>
+            <Text style={[styles.fieldLabel, { color: t.text }]}>Country</Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: t.surface, borderColor: t.border, color: t.text }]}
+              value={draft.country}
+              onChangeText={(v) => setDraft((d) => ({ ...d, country: v }))}
+              placeholder="Not set"
+              placeholderTextColor={t.muted}
+            />
+            <Text style={[styles.fieldLabel, { color: t.text }]}>Language</Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: t.surface, borderColor: t.border, color: t.text }]}
+              value={draft.language}
+              onChangeText={(v) => setDraft((d) => ({ ...d, language: v }))}
+              placeholder="Not set"
+              placeholderTextColor={t.muted}
+            />
+            <TouchableOpacity
+              style={[styles.editRow, { backgroundColor: t.surface, borderColor: t.border }]}
+              onPress={() => setView('lang')}
+            >
+              <Text style={[styles.editLabel, { color: t.text }]}>Second Language</Text>
+              <Text style={[styles.editValue, { color: t.muted }]}>{secondLang || 'Not set'}</Text>
+              <Text style={styles.menuChev}>›</Text>
+            </TouchableOpacity>
+            <Text style={[styles.fieldLabel, { color: t.text }]}>Tags (comma-separated)</Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: t.surface, borderColor: t.border, color: t.text }]}
+              value={draft.tags}
+              onChangeText={(v) => setDraft((d) => ({ ...d, tags: v }))}
+              placeholder="e.g. Designer, Leo, Cricket"
+              placeholderTextColor={t.muted}
+            />
+            <Text style={[styles.fieldLabel, { color: t.text }]}>Self-introduction</Text>
+            <TextInput
+              style={[styles.input, styles.inputMulti, { backgroundColor: t.surface, borderColor: t.border, color: t.text }]}
+              value={draft.bio}
+              onChangeText={(v) => setDraft((d) => ({ ...d, bio: v }))}
+              placeholder="Tell others about yourself"
+              placeholderTextColor={t.muted}
+              multiline
+            />
+            <TouchableOpacity style={[styles.bigGradBtn, saving && { opacity: 0.5 }]} onPress={saveProfile} disabled={saving}>
+              <Text style={styles.bigGradTxt}>{saving ? 'Saving…' : 'Save Profile'}</Text>
+            </TouchableOpacity>
           </View>
         </View>
       )}
 
-      {/* ── Second Language picker ── */}
+      {/* ── Second Language picker (persisted) ── */}
       {view === 'lang' && (
         <View>
           {subHead('Second Language', 'edit')}
@@ -664,7 +707,7 @@ export default function ProfileScreen({ navigation }) {
               <TouchableOpacity
                 key={en}
                 style={[styles.langRow, { backgroundColor: t.surface, borderColor: t.border }]}
-                onPress={() => { setSecondLang(en); showToast(`Second Language: ${en}`); setView('edit'); }}
+                onPress={() => pickSecondLang(en)}
               >
                 <Text style={[styles.langName, { color: t.text }]}>{en} <Text style={{ color: t.muted }}>{native}</Text></Text>
                 {secondLang === en && <Text style={styles.langTick}>✓</Text>}
@@ -674,82 +717,21 @@ export default function ProfileScreen({ navigation }) {
         </View>
       )}
 
-      {/* ── My Invitation ── */}
-      {view === 'invite' && (
-        <View>
-          {subHead('My Invitation')}
-          <View style={[styles.cardBox, { backgroundColor: t.surface }]}>
-            <Text style={[styles.cardBoxTitle, { color: t.text }]}>Invite friends, Get Rewards</Text>
-            <Text style={[styles.hint, { color: t.muted }]}>বন্ধুদের আমন্ত্রণ জানাও — বন্ধু অ্যাপে যোগ দিলেই তুমি রিওয়ার্ড পাবে।</Text>
-            <View style={styles.inviteCodeRow}>
-              <Text style={[styles.inviteCode, { color: t.text }]}>LIVO-{PROFILE.id}</Text>
-              <TouchableOpacity
-                style={styles.copyBtn}
-                onPress={async () => { try { await Clipboard.setStringAsync(`LIVO-${PROFILE.id}`); } catch (e) { /* noop */ } showToast('Invitation code কপি হয়েছে'); }}
-              >
-                <Text style={styles.copyBtnTxt}>Copy</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      )}
-
-      {/* ── My Tasks ── */}
-      {view === 'tasks' && (
-        <View>
-          {subHead('আজকের টাস্ক')}
-          <View style={[styles.taskSummary, { backgroundColor: t.surface }]}>
-            <Text style={styles.taskSummaryIcon}>🪙</Text>
-            <Text style={[styles.taskSummaryTxt, { color: t.text }]}>টাস্ক থেকে মোট আয়</Text>
-            <Text style={[styles.taskSummaryVal, { color: t.text }]}>{tasksEarned}</Text>
-            <Text style={[styles.taskSummaryTxt, { color: t.muted }]}>কয়েন</Text>
-          </View>
-          {TASKS.map((task, i) => (
-            <View key={task.title} style={[styles.taskRow, { backgroundColor: t.surface }]}>
-              <View style={[styles.taskIcon, { backgroundColor: task.bg }]}><Text style={styles.taskEmoji}>{task.icon}</Text></View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.taskTitle, { color: t.text }]}>{task.title}</Text>
-                <Text style={[styles.taskSub, { color: t.muted }]}>{task.sub}</Text>
-              </View>
-              <View style={styles.taskRight}>
-                <Text style={styles.taskReward}>🪙+{task.reward}</Text>
-                <TouchableOpacity
-                  style={[styles.claimBtn, tasksDone[i] && styles.claimBtnDone]}
-                  disabled={!!tasksDone[i]}
-                  onPress={() => claimTask(task, i)}
-                >
-                  <Text style={styles.claimTxt}>{tasksDone[i] ? 'পেয়ে গেছো ✓' : 'দাবি করো'}</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ))}
-          <Text style={[styles.hint, { color: t.muted, textAlign: 'center' }]}>টাস্কগুলো পরে প্যানেল থেকে সেট করা যাবে — এখন নমুনা টাস্ক দেখানো হয়েছে।</Text>
-        </View>
-      )}
-
       {/* ── Settings ── */}
       {view === 'settings' && (
         <View>
           {subHead('Settings')}
           <View style={styles.menu}>
-            {[
-              { label: 'Notifications', value: 'On' },
-              { label: 'App Language', value: 'English' },
-              { label: 'Clear Cache', value: '12 MB' },
-              { label: 'About Livo', value: 'v1.0.0' },
-              { label: 'Privacy Policy', value: '' },
-            ].map((r) => (
-              <TouchableOpacity
-                key={r.label}
-                style={[styles.editRow, { backgroundColor: t.surface, borderColor: t.border }]}
-                onPress={() => showToast(`${r.label} — প্রিভিউ`)}
-              >
-                <Text style={[styles.editLabel, { color: t.text }]}>{r.label}</Text>
-                <Text style={[styles.editValue, { color: t.muted }]}>{r.value}</Text>
-                <Text style={styles.menuChev}>›</Text>
-              </TouchableOpacity>
-            ))}
+            <TouchableOpacity
+              style={[styles.editRow, { backgroundColor: t.surface, borderColor: t.border }]}
+              onPress={clearCache}
+            >
+              <Text style={[styles.editLabel, { color: t.text }]}>Clear Cache</Text>
+              <Text style={[styles.editValue, { color: t.muted }]}>Removes saved app caches</Text>
+              <Text style={styles.menuChev}>›</Text>
+            </TouchableOpacity>
           </View>
+          <Text style={[styles.versionTxt, { color: t.muted }]}>Livo v1.0.0</Text>
           <TouchableOpacity style={styles.logoutBtn} onPress={doLogout}>
             <Text style={styles.logoutTxt}>Log Out</Text>
           </TouchableOpacity>
@@ -762,6 +744,8 @@ export default function ProfileScreen({ navigation }) {
 const styles = StyleSheet.create({
   albumEmpty: { fontSize: 13, marginTop: 10 },
   avatar: { borderRadius: 32, height: 64, width: 64 },
+  avatarFallback: { alignItems: 'center', backgroundColor: '#7c3aed', justifyContent: 'center' },
+  avatarFallbackTxt: { color: '#fff', fontSize: 24, fontWeight: 'bold' },
   backBtn: { alignItems: 'center', borderRadius: 20, height: 36, justifyContent: 'center', width: 36 },
   backTxt: { fontSize: 28, fontWeight: 'bold' },
   badgeGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginHorizontal: 16, marginTop: 8 },
@@ -821,8 +805,14 @@ const styles = StyleSheet.create({
   editLabel: { flex: 1, fontSize: 15 },
   editRow: { alignItems: 'center', borderBottomWidth: 1, flexDirection: 'row', paddingHorizontal: 14, paddingVertical: 13 },
   editValue: { fontSize: 14, marginRight: 8 },
+  fieldLabel: { fontSize: 13, fontWeight: 'bold', marginHorizontal: 16, marginTop: 14 },
   flagChip: { fontSize: 16 },
   flagChipTxt: { backgroundColor: '#eef2ff', borderRadius: 10, color: '#1e293b', fontSize: 12, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
+  genderBtn: { borderColor: '#d1d5db', borderRadius: 16, borderWidth: 1, marginRight: 8, paddingHorizontal: 16, paddingVertical: 8 },
+  genderBtnOn: { backgroundColor: '#7c3aed', borderColor: '#7c3aed' },
+  genderBtnTxt: { color: '#374151', fontSize: 14, fontWeight: 'bold' },
+  genderBtnTxtOn: { color: '#fff' },
+  genderRow: { alignItems: 'center', flexDirection: 'row', marginHorizontal: 16, marginTop: 8 },
   giftEmpty: { alignItems: 'center', paddingVertical: 18 },
   giftEmptyBig: { alignItems: 'center', padding: 32 },
   giftEmptyIcon: { fontSize: 44 },
@@ -838,6 +828,7 @@ const styles = StyleSheet.create({
   heroBackTxt: { color: '#fff', fontSize: 24, fontWeight: 'bold', textAlign: 'center' },
   heroEdit: { backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 7, position: 'absolute', right: 12, top: 48 },
   heroEditTxt: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+  heroFallback: { backgroundColor: '#7c3aed' },
   heroImg: { height: 230, width: '100%' },
   heroWrap: { position: 'relative' },
   hint: { fontSize: 13, lineHeight: 19, marginTop: 8 },
@@ -846,6 +837,8 @@ const styles = StyleSheet.create({
   idRow: { alignItems: 'center', flexDirection: 'row', marginTop: 4 },
   idTxt: { fontSize: 12 },
   infoTab: { borderBottomColor: '#7c3aed', borderBottomWidth: 2, color: '#7c3aed', fontSize: 15, fontWeight: 'bold', marginTop: 16, paddingBottom: 6, width: 96 },
+  input: { borderRadius: 10, borderWidth: 1, fontSize: 15, marginHorizontal: 16, marginTop: 6, paddingHorizontal: 12, paddingVertical: 10 },
+  inputMulti: { minHeight: 72, textAlignVertical: 'top' },
   inviteCode: { fontSize: 18, fontWeight: 'bold' },
   inviteCodeRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginTop: 14 },
   langName: { fontSize: 15 },
@@ -929,6 +922,7 @@ const styles = StyleSheet.create({
   td: { fontSize: 14 },
   topBtns: { alignItems: 'center', flexDirection: 'row', gap: 12 },
   unreadBadge: { backgroundColor: '#ef4444', borderRadius: 10, color: '#fff', fontSize: 12, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 2 },
+  versionTxt: { fontSize: 13, marginTop: 16, textAlign: 'center' },
   vipBadge: { backgroundColor: '#f5b93f', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3 },
   vipBadge2: { backgroundColor: '#f5b93f', borderRadius: 10, color: '#1f2937', fontSize: 11, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
   vipBadgeTxt: { color: '#1f2937', fontSize: 11, fontWeight: 'bold' },
