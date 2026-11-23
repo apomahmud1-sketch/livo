@@ -22,6 +22,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { COLORS } from '../config';
 import { useApp } from '../store';
+import { AuthContext } from '../../App';
 import { supabase } from '../supabase/client';
 import { ensureProfile, fetchMyProfile, getSessionUser, signOut } from '../supabase/auth';
 import { stopHostHeartbeat } from '../supabase/host';
@@ -57,12 +58,41 @@ export default function ProfileScreen({ navigation }) {
   // Diagnostic (2026-11-23): last profile-fetch error message, shown
   // on the Me screen only while the profile row is missing.
   const [fetchErr, setFetchErr] = React.useState(null);
+  // Storage self-test (2026-11-23): the phone's AsyncStorage read
+  // returned no session right after sign-in. Write a timestamp and
+  // read it back — if it does not match, local storage is broken.
+  const [storageTest, setStorageTest] = React.useState('pending');
   React.useEffect(() => {
     let mounted = true;
+    (async () => {
+      try {
+        const stamp = String(Date.now());
+        await AsyncStorage.setItem('livo-storage-test', stamp);
+        const back = await AsyncStorage.getItem('livo-storage-test');
+        if (mounted) setStorageTest(back === stamp ? 'ok' : 'fail');
+      } catch (e) {
+        if (mounted) setStorageTest('fail');
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+  // Identity PRIMARY source: the gate's live session via AuthContext
+  // (in-memory — never a storage read). The old getSession()/listener
+  // fallback runs only when the context has no user (e.g. after a
+  // sign-out, when the context clears).
+  const authCtx = React.useContext(AuthContext);
+  const contextUser = authCtx && authCtx.user ? authCtx.user : null;
+  React.useEffect(() => {
+    if (contextUser) {
+      setUser(contextUser);
+      return undefined;
+    }
+    let mounted = true;
     if (supabase) {
-      // Identity from the LOCAL session (getSession reads storage —
-      // no network). The network getUser() call failed on the user's
-      // phone right after login and left this screen showing "Not set".
+      // Fallback only: identity from the LOCAL session (getSession
+      // reads storage — no network). The network getUser() call
+      // failed on the user's phone right after login and left this
+      // screen showing "Not set".
       supabase.auth.getSession().then(({ data }) => {
         if (mounted) setUser(data && data.session ? data.session.user : null);
       });
@@ -75,7 +105,7 @@ export default function ProfileScreen({ navigation }) {
       };
     }
     return undefined;
-  }, []);
+  }, [contextUser]);
   // Self-heal (2026-11-23): the signed-in user's profiles row was
   // missing on the server, so Me showed "Not set" even with a valid
   // session. If the row is absent, create it once (same defaults as
@@ -447,7 +477,7 @@ export default function ProfileScreen({ navigation }) {
 
           {!profile && (
             <Text style={{ fontSize: 11, color: t.muted, marginTop: 6, marginBottom: 2 }}>
-              {`Session: ${user ? 'yes' : 'no'} | User: ${user && user.id ? String(user.id).slice(0, 8) : 'none'} | Profile: missing | Error: ${fetchErr || 'none'}`}
+              {`Session: ${user ? 'yes' : 'no'} | User: ${user && user.id ? String(user.id).slice(0, 8) : 'none'} | Profile: missing | Error: ${fetchErr || 'none'} | Storage: ${storageTest}`}
             </Text>
           )}
 
