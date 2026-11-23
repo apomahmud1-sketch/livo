@@ -6,7 +6,8 @@
 // anywhere on this screen — when there are no calls yet, the
 // numbers are honestly 0.
 //
-// The signed-in user comes from supabase.auth.getUser(); user.id
+// The signed-in user comes from the local session via
+// getSessionUser() (src/supabase/auth.js); user.id
 // equals profiles.id. With no session the screen prompts login
 // instead of showing anyone else's data. A host row is created on
 // demand with status 'pending' — only the Mother Panel / an admin
@@ -147,7 +148,7 @@ export default function HostDashboardScreen({ navigation }) {
   const toggleOnline = async () => {
     if (!hostRow) return;
     if (!approved) {
-      showToast('এখনো approve হয়নি — প্যানেল থেকে approve হলে লাইভে যেতে পারবে');
+      showToast('Not approved yet — you can go live once the panel approves you');
       return;
     }
     const next = !online;
@@ -155,7 +156,7 @@ export default function HostDashboardScreen({ navigation }) {
     const ok = await setHostOnline(hostRow.id, next);
     if (!ok) {
       setOnline(!next);
-      showToast('Online অবস্থা সেভ হয়নি — আবার চেষ্টা করো');
+      showToast('Online status was not saved — please try again');
       return;
     }
     if (next) startHostHeartbeat(hostRow.id);
@@ -163,8 +164,8 @@ export default function HostDashboardScreen({ navigation }) {
     if (storeHost) setStoreHostOnline(storeHost.id, next);
     showToast(
       next
-        ? 'Online হয়েছো — Home-এ তোমার লাইভ দেখা যাচ্ছে'
-        : 'Offline হয়েছো — Home থেকে তোমার লাইভ নেমে গেছে'
+        ? "You're online — your live is now showing on Home"
+        : "You're offline — your live is no longer on Home"
     );
   };
 
@@ -173,28 +174,28 @@ export default function HostDashboardScreen({ navigation }) {
     setMyTier(tierId);
     const ok = await setHostRateTier(hostRow.id, tierId);
     if (!ok) {
-      showToast('রেট সেভ হয়নি — আবার চেষ্টা করো');
+      showToast('Rate was not saved — please try again');
       return;
     }
     if (storeHost) setStoreHostRate(storeHost.id, tierId);
     const r = getLiveCallRate(tierId);
-    showToast(`তোমার কল রেট এখন ${fmt(r.coinsPerMinute)} coins/min`);
+    showToast(`Your call rate is now ${fmt(r.coinsPerMinute)} coins/min`);
   };
 
   const goLive = () => {
     if (!approved) {
-      showToast('এখনো approve হয়নি — প্যানেল থেকে approve হলে লাইভে যেতে পারবে');
+      showToast('Not approved yet — you can go live once the panel approves you');
       return;
     }
     if (!isFemale) {
-      showToast('Go Live শুধু female হোস্টদের জন্য');
+      showToast('Go Live is only for female hosts');
       return;
     }
     if (!storeHost) {
-      showToast('তোমার হোস্ট প্রোফাইল এখনো লোড হয়নি — একটু পরে আবার চেষ্টা করো');
+      showToast('Your host profile has not loaded yet — please try again in a moment');
       return;
     }
-    showToast('তুমি লাইভে আছো — এখান থেকে মাইক, ক্যামেরা আর বিউটি কন্ট্রোল করো');
+    showToast("You're live — control your mic, camera and beauty settings from here");
     navigation.navigate('VideoCall', { host: storeHost, asHost: true });
   };
 
@@ -202,38 +203,38 @@ export default function HostDashboardScreen({ navigation }) {
     if (!hostRow || withdrawing) return;
     const diamonds = Math.floor(Number(amount) || 0);
     if (diamonds <= 0) {
-      showToast('কত Diamond তুলবে সেটা লেখো');
+      showToast('Enter how many Diamonds to withdraw');
       return;
     }
     if (diamonds < MIN_WITHDRAW_DIAMONDS) {
-      showToast(`কমপক্ষে ${fmt(MIN_WITHDRAW_DIAMONDS)} Diamond তুলতে হবে`);
+      showToast(`You need to withdraw at least ${fmt(MIN_WITHDRAW_DIAMONDS)} Diamonds`);
       return;
     }
     if (diamonds > availableDiamonds) {
-      showToast(`তোমার কাছে ${fmt(availableDiamonds)} Diamond আছে — এর বেশি তোলা যাবে না`);
+      showToast(`You have ${fmt(availableDiamonds)} Diamonds — you can't withdraw more than that`);
       return;
     }
     if (!account.trim()) {
-      showToast('টাকা পাঠানোর অ্যাকাউন্ট নম্বর লেখো');
+      showToast('Enter the account number to receive the money');
       return;
     }
     setWithdrawing(true);
     const res = await requestWithdrawal(hostRow.id, { amountDiamonds: diamonds, method, account });
     setWithdrawing(false);
     if (!res.ok) {
-      showToast('Withdraw জমা হয়নি — আবার চেষ্টা করো');
+      showToast('Withdraw was not submitted — please try again');
       return;
     }
     setAmount('');
     setAccount('');
     await refreshMoney();
-    showToast(`Withdraw জমা হয়েছে — ${fmt(diamonds)} Diamond, ${method} (Pending)`);
+    showToast(`Withdraw submitted — ${fmt(diamonds)} Diamonds, ${method} (Pending)`);
   };
 
   if (loading) {
     return (
       <View style={[styles.bg, styles.center]}>
-        <Text style={styles.loadingText}>লোড হচ্ছে…</Text>
+        <Text style={styles.loadingText}>Loading…</Text>
       </View>
     );
   }
@@ -242,10 +243,10 @@ export default function HostDashboardScreen({ navigation }) {
   if (!user) {
     return (
       <View style={[styles.bg, styles.center]}>
-        <Text style={styles.loginTitle}>লগইন করো</Text>
-        <Text style={styles.loginSub}>Host Dashboard দেখতে আগে লগইন করতে হবে।</Text>
+        <Text style={styles.loginTitle}>Sign in</Text>
+        <Text style={styles.loginSub}>Please sign in to see the Host Dashboard.</Text>
         <TouchableOpacity style={styles.loginBtn} onPress={() => navigation.navigate('Login')}>
-          <Text style={styles.loginBtnText}>লগইন করো</Text>
+          <Text style={styles.loginBtnText}>Sign in</Text>
         </TouchableOpacity>
       </View>
     );
@@ -291,7 +292,7 @@ export default function HostDashboardScreen({ navigation }) {
         </View>
         {!approved && (
           <Text style={styles.pendingNote}>
-            তোমার host অ্যাকাউন্ট এখনো approve হয়নি — Mother Panel থেকে approve হলে লাইভে যেতে পারবে।
+            Your host account is not approved yet — you can go live once the Mother Panel approves it.
           </Text>
         )}
       </View>
@@ -300,11 +301,11 @@ export default function HostDashboardScreen({ navigation }) {
       <View style={styles.card}>
         <View style={styles.switchRow}>
           <View style={styles.switchText}>
-            <Text style={styles.switchTitle}>{online ? 'তুমি এখন Online' : 'তুমি এখন Offline'}</Text>
+            <Text style={styles.switchTitle}>{online ? "You're Online" : "You're Offline"}</Text>
             <Text style={styles.switchSub}>
               {online
-                ? 'Home-এ তোমার লাইভ LIVE ব্যাজসহ দেখা যাচ্ছে'
-                : 'তুমি লাইভ থেকে নেমে গেছো — Home-এ আর দেখা যাচ্ছে না'}
+                ? 'Your live is showing on Home with the LIVE badge'
+                : "You've gone off live — you're no longer showing on Home"}
             </Text>
           </View>
           <TouchableOpacity
@@ -312,7 +313,7 @@ export default function HostDashboardScreen({ navigation }) {
             onPress={toggleOnline}
             accessibilityRole="switch"
             accessibilityState={{ checked: online }}
-            accessibilityLabel="Online বা Offline করো"
+            accessibilityLabel="Go online or offline"
           >
             <View style={[styles.switchKnob, online ? styles.knobRight : styles.knobLeft]} />
           </TouchableOpacity>
@@ -321,34 +322,34 @@ export default function HostDashboardScreen({ navigation }) {
 
       {/* today's earnings — real calls + transactions rows */}
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>আজকের আয়</Text>
+        <Text style={styles.cardTitle}>Today's earnings</Text>
         <View style={styles.statsGrid}>
           <View style={styles.stat}>
             <Text style={styles.statValue}>🪙 {fmt(earnings ? earnings.todayCoins : 0)}</Text>
-            <Text style={styles.statLabel}>আজকের কয়েন আয়</Text>
+            <Text style={styles.statLabel}>Coins earned today</Text>
           </View>
           <View style={styles.stat}>
             <Text style={styles.statValue}>💎 {fmt(earnings ? earnings.todayDiamonds : 0)}</Text>
-            <Text style={styles.statLabel}>Diamonds পেয়েছো</Text>
+            <Text style={styles.statLabel}>Diamonds earned</Text>
           </View>
           <View style={styles.stat}>
             <Text style={styles.statValue}>{fmt(earnings ? earnings.todayCalls : 0)}</Text>
-            <Text style={styles.statLabel}>আজকের কল</Text>
+            <Text style={styles.statLabel}>Calls today</Text>
           </View>
           <View style={styles.stat}>
             <Text style={styles.statValue}>{fmt(earnings ? earnings.todayMinutes : 0)}</Text>
-            <Text style={styles.statLabel}>মোট মিনিট (কলে)</Text>
+            <Text style={styles.statLabel}>Total minutes (on calls)</Text>
           </View>
         </View>
         <Text style={styles.totalNote}>
-          মোট আয়: 🪙 {fmt(earnings ? earnings.totalCoins : 0)} কয়েন · 💎{' '}
-          {fmt(earnings ? earnings.totalDiamonds : 0)} Diamond · {fmt(earnings ? earnings.totalCalls : 0)} কল
+          Total earnings: 🪙 {fmt(earnings ? earnings.totalCoins : 0)} coins · 💎{' '}
+          {fmt(earnings ? earnings.totalDiamonds : 0)} Diamonds · {fmt(earnings ? earnings.totalCalls : 0)} calls
         </Text>
       </View>
 
       {/* call rate — persisted to the hosts table */}
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>Call Rate — প্রতি মিনিটে</Text>
+        <Text style={styles.cardTitle}>Call Rate — per minute</Text>
         <View style={styles.ratesRow}>
           {callRates.map((r) => (
             <TouchableOpacity
@@ -364,8 +365,7 @@ export default function HostDashboardScreen({ navigation }) {
           ))}
         </View>
         <Text style={styles.rateNote}>
-          এখন তোমার রেট: <Text style={styles.bold}>{fmt(rate.coinsPerMinute)} coins/min</Text> — যেকোনো একটায়
-          চাপ দিলেই সেটাই তোমার নতুন কল রেট হয়ে যাবে।
+          Your current rate: <Text style={styles.bold}>{fmt(rate.coinsPerMinute)} coins/min</Text> — tap any rate to make it your new call rate.
         </Text>
       </View>
 
@@ -378,12 +378,12 @@ export default function HostDashboardScreen({ navigation }) {
         <Text style={styles.goLiveText}>🎥  Go Live</Text>
       </TouchableOpacity>
       {approved && !isFemale ? (
-        <Text style={styles.goLiveNote}>Go Live শুধু female হোস্টদের জন্য — প্রোফাইলে gender সেট করা নেই বা female নয়।</Text>
+        <Text style={styles.goLiveNote}>Go Live is only for female hosts — your profile gender is not set or is not female.</Text>
       ) : null}
 
       {/* weekly earnings chart — real calls rows, last 7 days */}
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>এই সপ্তাহের আয় (কয়েন)</Text>
+        <Text style={styles.cardTitle}>This week’s earnings (coins)</Text>
         {earnings && earnings.week.length > 0 ? (
           <View style={styles.chart}>
             {earnings.week.map((d) => (
@@ -405,26 +405,26 @@ export default function HostDashboardScreen({ navigation }) {
             ))}
           </View>
         ) : (
-          <Text style={styles.emptyNote}>এখনো কোনো কল হয়নি — প্রথম কল হলেই এখানে আয় দেখা যাবে।</Text>
+          <Text style={styles.emptyNote}>No calls yet — your earnings will show here after your first call.</Text>
         )}
       </View>
 
       {/* withdraw — real Pending row in the withdrawals table */}
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>Withdraw — টাকা তোলো</Text>
+        <Text style={styles.cardTitle}>Withdraw — cash out</Text>
         <Text style={styles.balanceNote}>
-          তোলা যাবে: 💎 <Text style={styles.bold}>{fmt(availableDiamonds)}</Text> Diamond
+          Available to withdraw: 💎 <Text style={styles.bold}>{fmt(availableDiamonds)}</Text> Diamonds
         </Text>
-        <Text style={styles.fieldLabel}>কত Diamond তুলবে?</Text>
+        <Text style={styles.fieldLabel}>How many Diamonds to withdraw?</Text>
         <TextInput
           style={styles.input}
           value={amount}
           onChangeText={setAmount}
           keyboardType="numeric"
-          placeholder="যেমন: 1000"
+          placeholder="e.g. 1000"
           placeholderTextColor={COLORS.grey}
         />
-        <Text style={styles.fieldLabel}>কীভাবে পেতে চাও?</Text>
+        <Text style={styles.fieldLabel}>How do you want to receive it?</Text>
         <View style={styles.methodsRow}>
           {WITHDRAW_METHODS.map((m) => (
             <TouchableOpacity
@@ -436,13 +436,13 @@ export default function HostDashboardScreen({ navigation }) {
             </TouchableOpacity>
           ))}
         </View>
-        <Text style={styles.fieldLabel}>অ্যাকাউন্ট নম্বর</Text>
+        <Text style={styles.fieldLabel}>Account number</Text>
         <TextInput
           style={styles.input}
           value={account}
           onChangeText={setAccount}
           keyboardType="default"
-          placeholder="Bkash / Nagad / ব্যাংক অ্যাকাউন্ট নম্বর"
+          placeholder="bKash / Nagad / bank account number"
           placeholderTextColor={COLORS.grey}
         />
         <TouchableOpacity
@@ -450,14 +450,14 @@ export default function HostDashboardScreen({ navigation }) {
           onPress={doWithdraw}
           disabled={withdrawing}
         >
-          <Text style={styles.withdrawText}>{withdrawing ? 'জমা হচ্ছে…' : '🪙  Withdraw জমা দাও'}</Text>
+          <Text style={styles.withdrawText}>{withdrawing ? 'Submitting…' : '🪙  Submit withdraw'}</Text>
         </TouchableOpacity>
         <Text style={styles.withdrawNote}>
-          জমা দিলে স্ট্যাটাস Pending থাকবে — অ্যাডমিন টাকা পাঠিয়ে approve করবে। কমপক্ষে {fmt(MIN_WITHDRAW_DIAMONDS)} Diamond তুলতে হবে।
+          After submitting, the status stays Pending — the admin will send the money and approve it. You need to withdraw at least {fmt(MIN_WITHDRAW_DIAMONDS)} Diamonds.
         </Text>
         {withdrawals.length > 0 && (
           <View style={styles.historyWrap}>
-            <Text style={styles.historyTitle}>আগের Withdraw</Text>
+            <Text style={styles.historyTitle}>Previous withdrawals</Text>
             {withdrawals.map((w) => (
               <View key={w.id} style={styles.historyRow}>
                 <Text style={styles.historyMain}>
