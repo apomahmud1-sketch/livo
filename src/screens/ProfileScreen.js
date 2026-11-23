@@ -23,7 +23,7 @@ import { Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View 
 import { COLORS } from '../config';
 import { useApp } from '../store';
 import { supabase } from '../supabase/client';
-import { fetchMyProfile, getSessionUser, signOut } from '../supabase/auth';
+import { ensureProfile, fetchMyProfile, getSessionUser, signOut } from '../supabase/auth';
 import { stopHostHeartbeat } from '../supabase/host';
 import LevelView from './profile/LevelView';
 import VipView from './profile/VipView';
@@ -73,11 +73,26 @@ export default function ProfileScreen({ navigation }) {
     }
     return undefined;
   }, []);
+  // Self-heal (2026-11-23): the signed-in user's profiles row was
+  // missing on the server, so Me showed "Not set" even with a valid
+  // session. If the row is absent, create it once (same defaults as
+  // first sign-in) and re-read — never leave the screen empty.
   React.useEffect(() => {
     if (!user) return undefined;
     let mounted = true;
-    fetchMyProfile(user.id).then(({ profile: row }) => {
-      if (mounted && row) setProfile(row);
+    let healed = false;
+    fetchMyProfile(user.id).then(async ({ profile: row }) => {
+      if (!mounted) return;
+      if (row) { setProfile(row); return; }
+      if (healed) return;
+      healed = true;
+      try {
+        const { profile: created } = await ensureProfile(user);
+        if (!mounted) return;
+        if (created) { setProfile(created); return; }
+      } catch (e) { /* fall through to one re-read below */ }
+      const { profile: retry } = await fetchMyProfile(user.id);
+      if (mounted && retry) setProfile(retry);
     });
     return () => { mounted = false; };
   }, [user]);
