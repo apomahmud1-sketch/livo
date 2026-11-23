@@ -1,1 +1,22 @@
-{"build":{"preview":{"android":{"buildType":"apk"}},"production":{"android":{"buildType":"app-bundle"},"channel":"production"}},"cli":{"appVersionSource":"remote","version":">= 13.0.0"},"submit":{"production":{}}}
+{
+  "build": {
+    "preview": {
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "channel": "production"
+    }
+  },
+  "cli": {
+    "appVersionSource": "local",
+    "version": ">= 13.0.0"
+  },
+  "submit": {
+    "production": {}
+  }
+}
