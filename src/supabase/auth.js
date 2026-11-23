@@ -129,7 +129,11 @@ export async function getSession() {
 export async function getSessionUser() {
   if (!supabase) return null;
   try {
-    const { data } = await supabase.auth.getSession();
+    // getSession() itself can stall on a phone when the stored token
+    // needs a network refresh — race it, so no screen can spin
+    // forever waiting for identity (the Messages list did that).
+    const res = await withTimeout(supabase.auth.getSession());
+    const data = res && res.data;
     if (data && data.session && data.session.user) return data.session.user;
   } catch (e) { /* fall through to the network fallback */ }
   try {
@@ -169,11 +173,16 @@ export async function ensureProfile(user) {
     return { profile: null, error: new Error('No user to create a profile for.') };
   }
   try {
-    const { data: existing, error: selectError } = await supabase
-      .from('profiles')
-      .select('id, user_id, username, country, language, gender, age, bio, avatar_url, coins, diamonds')
-      .eq('id', user.id)
-      .maybeSingle();
+    // Timeout-guarded: a stalled select must fail fast, never hang
+    // the sign-in (the missing profiles row on 2026-11-23 came from
+    // this step never completing on the phone).
+    const { data: existing, error: selectError } = (await withTimeout(
+      supabase
+        .from('profiles')
+        .select('id, user_id, username, country, language, gender, age, bio, avatar_url, coins, diamonds')
+        .eq('id', user.id)
+        .maybeSingle(),
+    )) || {};
     if (selectError) return { profile: null, error: selectError };
     if (existing) return { profile: existing, error: null };
 
@@ -190,11 +199,13 @@ export async function ensureProfile(user) {
       coins: 0,
       diamonds: 0,
     };
-    const { data: inserted, error: insertError } = await supabase
-      .from('profiles')
-      .insert(row)
-      .select('id, user_id, username, country, language, gender, age, bio, avatar_url, coins, diamonds')
-      .single();
+    const { data: inserted, error: insertError } = (await withTimeout(
+      supabase
+        .from('profiles')
+        .insert(row)
+        .select('id, user_id, username, country, language, gender, age, bio, avatar_url, coins, diamonds')
+        .single(),
+    )) || {};
     if (insertError) return { profile: null, error: insertError };
     return { profile: inserted, error: null };
   } catch (e) {
