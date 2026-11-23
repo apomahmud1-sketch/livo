@@ -126,28 +126,28 @@ export const HIGHEST_CALL_PRICE = [
 ];
 
 export const BADGES_ACTIVITY = [
-  { n: 'Autumn Harvest', p: 'পেয়ে গেছো', got: true, icon: '🍂', bg: '#ffedd5', fg: '#ea580c', d: 'Autumn Harvest ইভেন্টে অংশ নিয়ে এই Activity Medal পাওয়া গেছে। প্রোফাইলে সবার উপরে দেখায়।' },
-  { n: 'Daily Star', p: 'আজকেরটা বাকি', got: false, icon: '⭐', bg: '#fef3c7', fg: '#d97706', d: 'প্রতিদিন লাইভে গিয়ে বা গিফট পাঠিয়ে Daily Star জমাও — 7 দিন পর পর Medal পাবে।' },
-  { n: 'Active Star 300', p: '212 / 300', got: false, icon: '⚡', bg: '#e0f2fe', fg: '#0284c7', d: 'মোট 300 বার অ্যাক্টিভ থাকলে (লাইভ, কল, গিফট) Active Star 300 Badge খুলবে। এখন 212 হয়েছে।' },
+  { n: 'Autumn Harvest', p: 'Earned', got: true, icon: '🍂', bg: '#ffedd5', fg: '#ea580c', d: 'Earned by taking part in the Autumn Harvest event. It shows at the top of your profile.' },
+  { n: 'Daily Star', p: "Today's one left", got: false, icon: '⭐', bg: '#fef3c7', fg: '#d97706', d: 'Go live or send a gift every day to collect Daily Stars — you get a Medal every 7 days.' },
+  { n: 'Active Star 300', p: '212 / 300', got: false, icon: '⚡', bg: '#e0f2fe', fg: '#0284c7', d: 'Stay active 300 times in total (live, calls, gifts) to unlock the Active Star 300 Badge. You are at 212 now.' },
 ];
 
 export const BADGES_ACH = [
-  { n: 'Gem Kitty', p: 'পেয়ে গেছো', got: true, icon: '🐱', bg: '#fde7f1', fg: '#db2777', d: 'Gem Kitty গিফট সিরিজ শেষ করে এই Achievement Badge পাওয়া গেছে।' },
-  { n: 'King of Calls', p: '48 / 100 কল', got: false, icon: '👑', bg: '#f1eafd', fg: '#7c3aed', d: 'মোট 100টা ভিডিও কল শেষ করলে King of Calls Badge খুলবে। এখন 48টা হয়েছে।' },
-  { n: 'Gift Collector', p: '17 / 30 গিফট', got: false, icon: '🎁', bg: '#dcfce7', fg: '#16a34a', d: '30 রকমের আলাদা গিফট সংগ্রহ করলে Gift Collector Badge খুলবে। এখন 17 রকম হয়েছে।' },
+  { n: 'Gem Kitty', p: 'Earned', got: true, icon: '🐱', bg: '#fde7f1', fg: '#db2777', d: 'Earned by completing the Gem Kitty gift series.' },
+  { n: 'King of Calls', p: '48 / 100 calls', got: false, icon: '👑', bg: '#f1eafd', fg: '#7c3aed', d: 'Finish 100 video calls in total to unlock the King of Calls Badge. You are at 48 now.' },
+  { n: 'Gift Collector', p: '17 / 30 gifts', got: false, icon: '🎁', bg: '#dcfce7', fg: '#16a34a', d: 'Collect 30 different kinds of gifts to unlock the Gift Collector Badge. You have 17 kinds now.' },
 ];
 
 // The 3 medals shown on the My Profile Badge card.
 export const PROFILE_MEDALS = ['Autumn Harvest', 'Gem Kitty', 'Active Star 300'];
 
 export const LANGUAGES = [
-  ['English', 'English'], ['Bengali', 'বাংলা'], ['Chinese Simplified', '简体中文'],
-  ['Chinese Traditional', '繁體中文'], ['Hindi', 'हिन्दी'], ['Urdu', 'اردو'],
-  ['Arabic', 'العربية'], ['Spanish', 'Español'], ['French', 'Français'],
-  ['German', 'Deutsch'], ['Italian', 'Italiano'], ['Portuguese', 'Português'],
-  ['Russian', 'Русский'], ['Japanese', '日本語'], ['Korean', '한국어'],
-  ['Thai', 'ไทย'], ['Vietnamese', 'Tiếng Việt'], ['Indonesian', 'Bahasa Indonesia'],
-  ['Malay', 'Bahasa Melayu'], ['Filipino', 'Filipino'], ['Turkish', 'Türkçe'],
+  ['English', 'English'], ['Bengali', 'Bengali'], ['Chinese Simplified', 'Chinese Simplified'],
+  ['Chinese Traditional', 'Chinese Traditional'], ['Hindi', 'Hindi'], ['Urdu', 'Urdu'],
+  ['Arabic', 'Arabic'], ['Spanish', 'Spanish'], ['French', 'French'],
+  ['German', 'German'], ['Italian', 'Italian'], ['Portuguese', 'Portuguese'],
+  ['Russian', 'Russian'], ['Japanese', 'Japanese'], ['Korean', 'Korean'],
+  ['Thai', 'Thai'], ['Vietnamese', 'Vietnamese'], ['Indonesian', 'Indonesian'],
+  ['Malay', 'Malay'], ['Filipino', 'Filipino'], ['Turkish', 'Turkish'],
   ['Tamil', 'தமிழ்'], ['Telugu', 'తెలుగు'], ['Punjabi', 'ਪੰਜਾਬੀ'],
   ['Nepali', 'नेपाली'], ['Sinhala', 'සිංහල'], ['Burmese', 'မြန်မာ'],
   ['Khmer', 'ខ្មែរ'], ['Dutch', 'Nederlands'], ['Polish', 'Polski'],
@@ -155,10 +155,10 @@ export const LANGUAGES = [
 
 // Demo daily tasks (preview TASKS) — real tasks come from the panel later.
 export const TASKS = [
-  { icon: '🔑', bg: '#f1eafd', title: 'প্রতিদিন লগইন করো', sub: 'আজকের লগইন টাস্ক', reward: 50 },
-  { icon: '👁️', bg: '#fdf0d5', title: '১০ মিনিট লাইভ দেখো', sub: 'অগ্রগতি: 0 / 10 মিনিট', reward: 100 },
-  { icon: '➕', bg: '#fde7f1', title: 'একজন হোস্টকে Follow করো', sub: 'যেকোনো লাইভ রুম থেকে', reward: 80 },
-  { icon: '🎁', bg: '#e0f5fa', title: 'একটা গিফট পাঠাও', sub: 'যেকোনো হোস্টকে পাঠালেই হবে', reward: 150 },
-  { icon: '👤', bg: '#e2f5ec', title: 'প্রোফাইল সম্পূর্ণ করো', sub: 'ছবি, নাম আর ভাষা যোগ করো', reward: 200 },
-  { icon: '✉️', bg: '#f1eafd', title: 'একজন বন্ধুকে আমন্ত্রণ জানাও', sub: 'বন্ধু অ্যাপে যোগ দিলেই পাবে', reward: 500 },
+  { icon: '🔑', bg: '#f1eafd', title: 'Log in every day', sub: "Today's login task", reward: 50 },
+  { icon: '👁️', bg: '#fdf0d5', title: 'Watch live for 10 minutes', sub: 'Progress: 0 / 10 minutes', reward: 100 },
+  { icon: '➕', bg: '#fde7f1', title: 'Follow a host', sub: 'From any live room', reward: 80 },
+  { icon: '🎁', bg: '#e0f5fa', title: 'Send a gift', sub: 'Send one to any host', reward: 150 },
+  { icon: '👤', bg: '#e2f5ec', title: 'Complete your profile', sub: 'Add a photo, name and language', reward: 200 },
+  { icon: '✉️', bg: '#f1eafd', title: 'Invite a friend', sub: 'You get it when your friend joins the app', reward: 500 },
 ];
