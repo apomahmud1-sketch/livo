@@ -54,6 +54,9 @@ export default function ProfileScreen({ navigation }) {
   // row in the profiles table (created on first sign-in, see auth.js).
   const [user, setUser] = React.useState(null);
   const [profile, setProfile] = React.useState(null);
+  // Diagnostic (2026-11-23): last profile-fetch error message, shown
+  // on the Me screen only while the profile row is missing.
+  const [fetchErr, setFetchErr] = React.useState(null);
   React.useEffect(() => {
     let mounted = true;
     if (supabase) {
@@ -81,18 +84,22 @@ export default function ProfileScreen({ navigation }) {
     if (!user) return undefined;
     let mounted = true;
     let healed = false;
-    fetchMyProfile(user.id).then(async ({ profile: row }) => {
+    fetchMyProfile(user.id).then(async ({ profile: row, error: firstErr }) => {
       if (!mounted) return;
+      if (firstErr) setFetchErr(firstErr.message || String(firstErr));
       if (row) { setProfile(row); return; }
       if (healed) return;
       healed = true;
       try {
-        const { profile: created } = await ensureProfile(user);
+        const { profile: created, error: createErr } = await ensureProfile(user);
         if (!mounted) return;
+        if (createErr) setFetchErr(createErr.message || String(createErr));
         if (created) { setProfile(created); return; }
-      } catch (e) { /* fall through to one re-read below */ }
-      const { profile: retry } = await fetchMyProfile(user.id);
-      if (mounted && retry) setProfile(retry);
+      } catch (e) { setFetchErr(e && e.message ? e.message : String(e)); /* fall through to one re-read below */ }
+      const { profile: retry, error: retryErr } = await fetchMyProfile(user.id);
+      if (!mounted) return;
+      if (retryErr) setFetchErr(retryErr.message || String(retryErr));
+      if (retry) setProfile(retry);
     });
     return () => { mounted = false; };
   }, [user]);
@@ -437,6 +444,12 @@ export default function ProfileScreen({ navigation }) {
               </View>
             </View>
           </View>
+
+          {!profile && (
+            <Text style={{ fontSize: 11, color: t.muted, marginTop: 6, marginBottom: 2 }}>
+              {`Session: ${user ? 'yes' : 'no'} | User: ${user && user.id ? String(user.id).slice(0, 8) : 'none'} | Profile: missing | Error: ${fetchErr || 'none'}`}
+            </Text>
+          )}
 
           <TouchableOpacity style={styles.goldBanner} onPress={goWallet} activeOpacity={0.85}>
             <Text style={styles.goldBannerIcon}>🪙</Text>
