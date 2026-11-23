@@ -143,7 +143,7 @@ function useHardwareBack() {
       const now = Date.now();
       if (now - lastPressRef.current < 2000) return false;
       lastPressRef.current = now;
-      showToast('আরেকবার চাপলে অ্যাপ বন্ধ হবে');
+      showToast('Press again to close the app');
       return true;
     });
     return () => sub.remove();
