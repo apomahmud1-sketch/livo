@@ -1,12 +1,17 @@
 // Livo — My Level page, from the web preview.
 // Male: grey-blue, Top-up/Consumption rule. Female: orange, Received Beans rule.
-// Both show Level 2, 39,200 points, a 13% progress bar to Lv3,
-// Lv1-Lv50 privilege tabs and the full Lv0-Lv50 table.
+// The user's OWN level / points / progress come ONLY from
+// store.levelInfo (computed from real transactions). If levelInfo
+// is absent, an honest "Level coming soon" state is shown — the old
+// hardcoded Lv2 / 39,200 points are never displayed.
+// The Lv0–Lv50 ladder table and privilege lists below are the
+// preview's ladder display; the highlighted row is the real level.
 import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useApp } from '../../store';
 import {
   LEVEL_NOTE_LOW_BALANCE, LEVEL_RULE_FEMALE, LEVEL_RULE_MALE, LV_PRIVS_FEMALE,
-  LV_PRIVS_MALE, LV_ROWS, PROFILE,
+  LV_PRIVS_MALE, LV_ROWS,
 } from './levelData';
 
 function levelPillIcon(lv) {
@@ -18,12 +23,16 @@ function levelPillIcon(lv) {
 }
 
 export default function LevelView({ gender, onGenderChange, onBack, onTopUp, showToast }) {
+  const { levelInfo } = useApp();
   const female = gender === 'female';
   const privs = female ? LV_PRIVS_FEMALE : LV_PRIVS_MALE;
   const rule = female ? LEVEL_RULE_FEMALE : LEVEL_RULE_MALE;
   const head2 = female ? 'Received Beans' : 'Top-up/Consumption';
-  // Preview default tab: male Lv1, female Lv2.
-  const [tab, setTab] = React.useState(female ? 2 : 1);
+  // Default tab: the user's real level (clamped to the ladder).
+  const defaultTab = levelInfo && typeof levelInfo.level === 'number'
+    ? Math.min(50, Math.max(1, levelInfo.level))
+    : 1;
+  const [tab, setTab] = React.useState(defaultTab);
   const unlocked = privs.filter((p) => tab >= p.unlock).length;
 
   const theme = female
@@ -38,36 +47,45 @@ export default function LevelView({ gender, onGenderChange, onBack, onTopUp, sho
         <View style={styles.genderSeg}>
           <TouchableOpacity
             style={[styles.segBtn, !female && styles.segBtnOn]}
-            onPress={() => { onGenderChange('male'); setTab(1); }}
+            onPress={() => { onGenderChange('male'); }}
           >
             <Text style={[styles.segTxt, !female && styles.segTxtOn]}>ছেলে ID</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.segBtn, female && styles.segBtnOnF]}
-            onPress={() => { onGenderChange('female'); setTab(2); }}
+            onPress={() => { onGenderChange('female'); }}
           >
             <Text style={[styles.segTxt, female && styles.segTxtOn]}>মেয়ে ID</Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Hero card */}
-      <View style={[styles.hero, { backgroundColor: theme.hero[0], borderColor: theme.hero[1] }]}>
-        <View style={styles.heroTop}>
-          <Text style={styles.heroTitle}>Level <Text style={styles.heroLv}>{PROFILE.level}</Text></Text>
-          <Text style={[styles.heroBadge, { backgroundColor: theme.accent }]}>✔</Text>
+      {/* Hero card — real level from the store, or an honest placeholder. */}
+      {!levelInfo ? (
+        <View style={[styles.hero, { backgroundColor: theme.hero[0], borderColor: theme.hero[1] }]}>
+          <Text style={styles.heroTitle}>Level coming soon</Text>
+          <Text style={[styles.progNote, { color: theme.note }]}>
+            Your level will appear here once your activity is counted.
+          </Text>
         </View>
-        <View style={styles.progMeta}>
-          <Text style={styles.progCur}>Lv{PROFILE.level} ♥ {PROFILE.levelPoints.toLocaleString()}</Text>
-          <Text style={styles.progNext}>Lv{PROFILE.level + 1}</Text>
+      ) : (
+        <View style={[styles.hero, { backgroundColor: theme.hero[0], borderColor: theme.hero[1] }]}>
+          <View style={styles.heroTop}>
+            <Text style={styles.heroTitle}>Level <Text style={styles.heroLv}>{levelInfo.level}</Text></Text>
+            <Text style={[styles.heroBadge, { backgroundColor: theme.accent }]}>✔</Text>
+          </View>
+          <View style={styles.progMeta}>
+            <Text style={styles.progCur}>Lv{levelInfo.level} ♥ {Number(levelInfo.points || 0).toLocaleString()}</Text>
+            <Text style={styles.progNext}>Lv{levelInfo.level + 1}</Text>
+          </View>
+          <View style={styles.barTrack}>
+            <View style={[styles.barFill, { width: `${Math.min(100, Math.max(0, levelInfo.progress || 0))}%`, backgroundColor: theme.bar }]} />
+          </View>
+          <Text style={[styles.progNote, { color: theme.note }]}>
+            {Math.min(100, Math.max(0, levelInfo.progress || 0))}% of the way to Lv{levelInfo.level + 1}
+          </Text>
         </View>
-        <View style={styles.barTrack}>
-          <View style={[styles.barFill, { width: `${PROFILE.levelProgress}%`, backgroundColor: theme.bar }]} />
-        </View>
-        <Text style={[styles.progNote, { color: theme.note }]}>
-          Top up {PROFILE.levelTopUpToGo.toLocaleString()} diamonds more to level up
-        </Text>
-      </View>
+      )}
 
       <Text style={styles.sec}>Level Privileges</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabs}>
@@ -114,7 +132,7 @@ export default function LevelView({ gender, onGenderChange, onBack, onTopUp, sho
         <Text style={styles.th}>{head2}</Text>
       </View>
       {LV_ROWS.map(([lv, val]) => (
-        <View key={lv} style={[styles.tableRow, lv === PROFILE.level && styles.tableRowNow]}>
+        <View key={lv} style={[styles.tableRow, levelInfo && lv === levelInfo.level && styles.tableRowNow]}>
           <Text style={styles.tdLv}>{levelPillIcon(lv)} Lv{lv}</Text>
           <Text style={styles.tdVal}>{val}</Text>
         </View>
