@@ -41,12 +41,12 @@ export default function RankingScreen() {
         ))}
       </View>
       {loading ? (
-        <Text style={styles.empty}>লোড হচ্ছে…</Text>
+        <Text style={styles.empty}>Loading…</Text>
       ) : rows.length === 0 ? (
         <Text style={styles.empty}>
           {tab === 'All Time'
-            ? 'এখনো কোনো হোস্টের আয় হয়নি — প্রথম কল বা গিফট হলেই এখানে র‍্যাংকিং দেখা যাবে।'
-            : `এই ${tab === 'Daily' ? 'দিনে' : tab === 'Weekly' ? 'সপ্তাহে' : 'মাসে'} এখনো কোনো হোস্টের আয় হয়নি।`}
+            ? 'No host has earned yet — the ranking will show here after the first call or gift.'
+            : `No host has earned ${tab === 'Daily' ? 'today' : tab === 'Weekly' ? 'this week' : 'this month'} yet.`}
         </Text>
       ) : (
         <ScrollView>
