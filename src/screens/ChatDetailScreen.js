@@ -3,25 +3,22 @@
 // mint #f0fdf4 background, white profile card with soft shadow,
 // green #20a64b Follow button and Send button, white incoming
 // bubbles / light-green #dcfce7 outgoing bubbles, lucide icons
-// everywhere (no emoji). All behaviour, demo data and wording
-// unchanged — except the unlock line's 🎫, which is now a lucide
-// Ticket icon (same words).
+// everywhere (no emoji).
 //
 // ── BEHAVIOUR (from the preview) ───────────────────────────────────
-// The first message sent unlocks the chat (the unlock line
-// disappears). Messages are real: sent into the messages table and
-// delivered live via a Realtime subscription — there is no canned
-// auto-reply. Follow toggles locally.
-// ── DEMO (Supabase / payments replace this later) ──────────────────
-// No real ticket is spent and no real payment happens yet — the x1
-// unlock is a demo state, like the preview. Photos are coloured
-// initial tiles: the app has no host photos for these demo chats yet.
-// ── FOLLOW-UP (not silently changed) ───────────────────────────────
-// The Free video button only shows a toast: VideoCallScreen bills
-// per minute on end (chargeCall), so opening a "free" call through
-// it today would charge coins. A free-call mode in VideoCallScreen
-// is needed before this button can really start a free call. The
-// gift button likewise needs the Live Room gift panel wired in.
+// Messages are real: sent into the messages table and delivered
+// live via a Realtime subscription — there is no canned auto-reply.
+// Follow toggles locally. The fake "unlock x1 ticket" line is gone
+// (no ticket is spent, no payment happens for chatting). Photos are
+// coloured initial tiles: the app has no host photos for these demo
+// chats yet.
+// ── FOLLOW-UP (done 2026-11-23) ──────────────────────────────────
+// The Free video button starts a real free call (VideoCall with
+// freeCall: true — no balance gate, no charge). The gift button
+// opens a real gift picker (gifts from the store) and sends for
+// real, recording the gift as a message. Emoji / image / report
+// buttons are gone — there is no backend for them and no
+// toast-only button may remain.
 
 // ── F4 (2026-11-19) ───────────────────────────────────────────────
 // Chat auto-translation: a toggle (🌐 button below, or "Translation
@@ -34,6 +31,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -48,29 +46,34 @@ import {
   Gift,
   Globe,
   Heart,
-  Image as ImageIcon,
   MapPin,
-  MoreHorizontal,
   Phone,
-  Smile,
-  Ticket,
   Video,
 } from 'lucide-react-native';
 import { COLORS } from '../config'; // [F2] getVoiceCallRate added
 import { useApp } from '../store';
-// [F4] Auto-translation helper + the user's profile language
-// (PROFILE.language, 'English' -> 'en'; falls back to 'en').
+// [F4] Auto-translation helper + the SIGNED-IN user's profile
+// language (fetchMyProfile, 'English' -> 'en'; falls back to 'en').
 import { resolveTargetLanguage, translateText } from '../utils/translate';
-import { PROFILE } from './profile/levelData';
+import { fetchMyProfile } from '../supabase/auth';
 // [Live] Real chat over the messages table (no canned replies).
 import {
   fetchConversation,
   getCurrentUserId,
+  markConversationRead,
   resolveRecipientProfileId,
   sendMessage,
   subscribeToConversation,
 } from '../supabase/chat';
 // [/F4]
+
+// Clock time of a message ("20:41") for the first-message stamp.
+function formatClock(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 
 // [F4] Incoming-message bubble with auto-translation.
 // When a translation exists, the translated text is the main line and
@@ -102,7 +105,7 @@ function TranslatedBubble({ msg, translated, showOriginal, translating, onToggle
 
 export default function ChatDetailScreen({ navigation, route }) {
   const { profile } = route.params || {};
-  const { showToast, following, toggleFollow, hosts, getLiveVoiceCallRate } = useApp(); // [F2] hosts added
+  const { showToast, following, toggleFollow, hosts, getLiveVoiceCallRate, gifts, sendGift, refreshUnreadTotal } = useApp(); // [F2] hosts added
   // [F2] Voice call needs the live store host (rate tier + online
   // state). Chat-only profiles (no storeId) have none — the voice
   // button then toasts instead of navigating.
@@ -125,8 +128,50 @@ export default function ChatDetailScreen({ navigation, route }) {
     navigation.navigate('VideoCall', { host: chatHost, audioOnly: true });
   };
   // [/F2]
+
+  // Free video call: a real call with freeCall: true (the call
+  // screen honours it — no balance gate, no charge). Only for a
+  // live host; otherwise an honest reason, not a fake start.
+  const startFreeVideo = () => {
+    if (!chatHost) {
+      showToast('Free video call is only available with a live host');
+      return;
+    }
+    if (!chatHost.online) {
+      showToast(`${chatHost.name} এখন অফলাইন`);
+      return;
+    }
+    navigation.navigate('VideoCall', { host: chatHost, freeCall: true });
+  };
+
+  // Real gift picker state. Sending a gift deducts real coins via
+  // the store and records the gift as a real message row.
+  const [giftPickerVisible, setGiftPickerVisible] = useState(false);
+  const [sendingGift, setSendingGift] = useState(false);
+
+  const sendGiftFromPicker = async (gift) => {
+    if (sendingGift || !meId || !otherId) return;
+    setSendingGift(true);
+    const ok = sendGift(gift, chatHost || null);
+    if (!ok) {
+      // Store already toasted the reason (not signed in / not
+      // enough coins) — keep the picker open.
+      setSendingGift(false);
+      return;
+    }
+    const saved = await sendMessage({
+      senderId: meId,
+      recipientId: otherId,
+      body: `🎁 Sent ${gift.name}`,
+    });
+    setSendingGift(false);
+    setGiftPickerVisible(false);
+    if (saved) {
+      setMsgs((m) => [...m, saved]);
+      if (scrollRef.current) scrollRef.current.scrollToEnd({ animated: true });
+    }
+  };
   const [text, setText] = useState('');
-  const [unlocked, setUnlocked] = useState(false);
   const [localFollowing, setLocalFollowing] = useState(
     profile && profile.storeId ? following.includes(profile.storeId) : false,
   );
@@ -168,8 +213,10 @@ export default function ChatDetailScreen({ navigation, route }) {
       if (cancelled) return;
       setMsgs(page);
       setHasMore(page.length === 30);
-      setUnlocked(page.some((m) => m.me));
       setLoadingHistory(false);
+      // Opening the chat marks it read (real read receipts).
+      markConversationRead(uid, oid);
+      if (typeof refreshUnreadTotal === 'function') refreshUnreadTotal();
       unsubscribe = subscribeToConversation({
         meId: uid,
         otherId: oid,
@@ -178,7 +225,10 @@ export default function ChatDetailScreen({ navigation, route }) {
             if (prev.some((x) => x.id === m.id)) return prev;
             return [...prev, m];
           });
-          if (m.me) setUnlocked(true);
+          if (!m.me) {
+            markConversationRead(uid, oid);
+            if (typeof refreshUnreadTotal === 'function') refreshUnreadTotal();
+          }
         },
       });
     })();
@@ -206,10 +256,21 @@ export default function ChatDetailScreen({ navigation, route }) {
   // [/Live]
 
   // [F4] Auto-translation state.
-  // Target language: the user's profile language when one is set
-  // (PROFILE.language, e.g. 'English' -> 'en'); English by default.
-  // Note: the store holds no language field, so PROFILE is the source.
-  const targetLangLabel = (PROFILE && PROFILE.language) || 'English';
+  // Target language: the SIGNED-IN user's profiles.language
+  // (fetchMyProfile), 'English' by default. Never the static
+  // preview PROFILE — that is demo data, not the user's language.
+  const [myLanguage, setMyLanguage] = useState(null);
+  useEffect(() => {
+    if (!meId) return undefined;
+    let cancelled = false;
+    fetchMyProfile(meId).then(({ profile: mine }) => {
+      if (!cancelled && mine && mine.language) setMyLanguage(mine.language);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [meId]);
+  const targetLangLabel = myLanguage || 'English';
   const targetLang = resolveTargetLanguage(targetLangLabel);
   const [translateOn, setTranslateOn] = useState(false);
   const [translations, setTranslations] = useState({}); // msg id -> translated text
@@ -328,7 +389,6 @@ export default function ChatDetailScreen({ navigation, route }) {
       return;
     }
     setMsgs((m) => [...m, saved]);
-    setUnlocked(true);
     if (scrollRef.current) scrollRef.current.scrollToEnd({ animated: true });
   };
 
@@ -357,9 +417,6 @@ export default function ChatDetailScreen({ navigation, route }) {
         ) : null}
         <Text style={styles.title}>{profile.name}</Text>
         <View style={styles.onlineDot} />
-        <TouchableOpacity onPress={() => showToast('রিপোর্ট / ব্লক অপশন (প্রিভিউ)')}>
-          <MoreHorizontal size={24} color="#111713" />
-        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -389,11 +446,17 @@ export default function ChatDetailScreen({ navigation, route }) {
               <MapPin size={13} color="#273029" />
               <Text style={styles.meta}> {profile.country}</Text>
             </View>
-            <Text style={styles.meta}>{profile.age}</Text>
-            <View style={styles.metaItem}>
-              <Check size={13} color="#20a64b" strokeWidth={3} />
-              <Text style={styles.meta}> Real</Text>
-            </View>
+            {profile.age != null && profile.age !== '' ? (
+              <Text style={styles.meta}>{profile.age}</Text>
+            ) : null}
+            {/* "Real" only when a real profiles row backs the peer
+                (otherId resolved) — never a static badge. */}
+            {otherId ? (
+              <View style={styles.metaItem}>
+                <Check size={13} color="#20a64b" strokeWidth={3} />
+                <Text style={styles.meta}> Real</Text>
+              </View>
+            ) : null}
           </View>
           <Text style={styles.lang}>{profile.lang}</Text>
           <View style={styles.photosRow}>
@@ -406,7 +469,11 @@ export default function ChatDetailScreen({ navigation, route }) {
           </View>
         </View>
 
-        <Text style={styles.time}>20:41</Text>
+        {/* Real first-message time — omitted when there are no
+            messages yet. Never a hardcoded clock time. */}
+        {msgs.length > 0 ? (
+          <Text style={styles.time}>{formatClock(msgs[0].created_at)}</Text>
+        ) : null}
 
         {/* Messages */}
         {loadingHistory ? (
@@ -454,21 +521,8 @@ export default function ChatDetailScreen({ navigation, route }) {
         )}
       </ScrollView>
 
-      {/* Unlock line — hidden after the first message unlocks the chat */}
-      {!unlocked && (
-        <View style={styles.unlockRow}>
-          <Ticket size={15} color="#111713" />
-          <Text style={styles.unlock}>
-            {' '}Spend <Text style={styles.unlockX1}>x1</Text> to unlock chat with her. No reply in 30 mins? Auto refund.
-          </Text>
-        </View>
-      )}
-
       {/* Composer */}
       <View style={styles.inputBar}>
-        <TouchableOpacity onPress={() => showToast('ইমোজি প্যানেল খুলবে (প্রিভিউ)')}>
-          <Smile size={24} color="#9aa39c" />
-        </TouchableOpacity>
         <TextInput
           style={styles.input}
           placeholder="Say something"
@@ -494,13 +548,7 @@ export default function ChatDetailScreen({ navigation, route }) {
         {/* [/F4] */}
         <TouchableOpacity
           style={styles.act}
-          onPress={() => showToast(unlocked ? 'ছবি বাছাই খুলবে (প্রিভিউ)' : 'ছবি পাঠাতে আগে চ্যাট আনলক করো')}
-        >
-          <ImageIcon size={26} color="#9aa39c" />
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.act}
-          onPress={() => showToast('Free ভিডিও কল শুরু হচ্ছে… (প্রিভিউ)')}
+          onPress={startFreeVideo}
         >
           <Text style={styles.freeBadge}>Free</Text>
           <Video size={26} color="#9aa39c" />
@@ -517,10 +565,47 @@ export default function ChatDetailScreen({ navigation, route }) {
           <Phone size={26} color="#9aa39c" />
         </TouchableOpacity>
         {/* [/F2] */}
-        <TouchableOpacity style={styles.act} onPress={() => showToast('গিফট প্যানেল খুলবে (প্রিভিউ)')}>
+        <TouchableOpacity style={styles.act} onPress={() => setGiftPickerVisible(true)}>
           <Gift size={26} color="#9aa39c" />
         </TouchableOpacity>
       </View>
+
+      {/* Real gift picker — gifts from the store; tapping one sends
+          it for real (coins deducted, host credited) and records
+          the gift as a message row. */}
+      <Modal
+        visible={giftPickerVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setGiftPickerVisible(false)}
+      >
+        <View style={styles.giftBackdrop}>
+          <View style={styles.giftSheet}>
+            <View style={styles.giftHeader}>
+              <Text style={styles.giftTitle}>Send a gift</Text>
+              <TouchableOpacity onPress={() => setGiftPickerVisible(false)}>
+                <Text style={styles.giftClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            {!gifts || gifts.length === 0 ? (
+              <Text style={styles.empty}>No gifts available right now.</Text>
+            ) : (
+              gifts.map((g) => (
+                <TouchableOpacity
+                  key={g.id}
+                  style={styles.giftRow}
+                  onPress={() => sendGiftFromPicker(g)}
+                  disabled={sendingGift}
+                >
+                  <Text style={styles.giftEmoji}>{g.emoji}</Text>
+                  <Text style={styles.giftName}>{g.name}</Text>
+                  <Text style={styles.giftPrice}>{g.price} coins</Text>
+                </TouchableOpacity>
+              ))
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -579,13 +664,20 @@ const styles = StyleSheet.create({
   time: { color: '#a0aaa2', fontSize: 12, marginVertical: 8, textAlign: 'center' },
   title: { color: '#111713', fontSize: 18, fontWeight: '800', marginLeft: 4 },
   translateLink: { color: '#20a64b', fontSize: 12, marginTop: 4 },
-  unlock: { color: '#111713', flex: 1, fontSize: 14, fontWeight: '700', lineHeight: 21 },
-  unlockRow: { alignItems: 'flex-start', flexDirection: 'row', paddingHorizontal: 16, paddingTop: 10 },
-  unlockX1: { color: '#20a64b' },
   // [F2] Voice-call rate label above the Phone button.
   voiceRate: { color: '#20a64b', fontSize: 11, fontWeight: 'bold' },
   voiceRateRow: { alignItems: 'center', flexDirection: 'row' },
   // [/F2]
+  // Real gift picker (bottom sheet).
+  giftBackdrop: { backgroundColor: 'rgba(0,0,0,0.45)', flex: 1, justifyContent: 'flex-end' },
+  giftSheet: { backgroundColor: '#f0fdf4', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '70%', paddingBottom: 24, paddingHorizontal: 16, paddingTop: 12 },
+  giftHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
+  giftTitle: { color: '#111713', fontSize: 18, fontWeight: 'bold' },
+  giftClose: { color: '#111713', fontSize: 18, fontWeight: '700' },
+  giftRow: { alignItems: 'center', borderBottomColor: '#e9eeea', borderBottomWidth: 1, flexDirection: 'row', paddingVertical: 12 },
+  giftEmoji: { fontSize: 22, marginRight: 12 },
+  giftName: { color: '#111713', flex: 1, fontSize: 15, fontWeight: '600' },
+  giftPrice: { color: '#20a64b', fontSize: 13, fontWeight: 'bold' },
   unreadBadge: { alignItems: 'center', backgroundColor: '#f04f4b', borderRadius: 7, height: 14, justifyContent: 'center', marginLeft: 4, minWidth: 14, paddingHorizontal: 4 },
   unreadText: { color: '#fff', fontSize: 8, fontWeight: '800', textAlign: 'center' },
 });
