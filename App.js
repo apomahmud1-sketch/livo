@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { ActivityIndicator, BackHandler, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, BackHandler, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -7,7 +7,8 @@ import { StatusBar } from 'expo-status-bar';
 import { House, MessageCircle, Play, UserRound, Video } from 'lucide-react-native';
 import { AppProvider, useApp } from './src/store';
 import { supabase } from './src/supabase/client';
-import { ensureProfile } from './src/supabase/auth';
+import { checkAccess, ensureProfile, signOut } from './src/supabase/auth';
+import { getOrCreateDeviceId, registerDevice } from './src/supabase/device';
 import { useIncomingCallListener } from './src/calls/signalling';
 import LoginScreen from './src/screens/LoginScreen';
 import HomeScreen from './src/screens/HomeScreen';
@@ -167,35 +168,110 @@ function Root() {
   // AsyncStorage. null → no session, show Login only. A session →
   // Main + the rest of the app. Sign-out flips it back to Login.
   const [session, setSession] = React.useState(undefined);
+  // Access-blocked state (Hapa Mother "User" set): 'banned' or
+  // 'deleted', set when checkAccess rejects the signed-in account.
+  // The auth gate shows the blocked screen instead of Main/Login
+  // until the user goes back to sign-in (the next sign-in re-runs
+  // the check, so a restored account gets in again).
+  const [blocked, setBlocked] = React.useState(null);
+  // One access check per user id per app run: the initial
+  // getSession() restore and the INITIAL_SESSION event describe the
+  // same session, so the second one must not re-run the checks
+  // (and a SIGNED_OUT clears it so the next sign-in checks again).
+  const accessCheckedFor = React.useRef(null);
+
+  // Runs once per sign-in: registers this device (best-effort,
+  // never blocks sign-in) and checks whether the account may use
+  // the app (ban / deleted). Returns the checkAccess status.
+  const runAccessChecks = React.useCallback(async (user) => {
+    if (!user) return { status: 'unknown' };
+    try {
+      const deviceId = await getOrCreateDeviceId();
+      try {
+        await registerDevice(user.id, deviceId);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.log('[Livo] registerDevice failed:', e && e.message);
+      }
+      return await checkAccess(user, deviceId);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.log('[Livo] access checks failed:', e && e.message);
+      return { status: 'unknown' };
+    }
+  }, []);
+
+  // Lets a resolved session into Main, or blocks it: on 'banned' /
+  // 'deleted' the session is signed out (which flips the gate to
+  // Login) and the blocked screen is shown instead. Returns true
+  // when the session may proceed.
+  const admitSession = React.useCallback(async (newSession) => {
+    const user = newSession && newSession.user;
+    if (!user) return false;
+    if (accessCheckedFor.current === user.id) return true;
+    const access = await runAccessChecks(user);
+    if (access.status === 'banned' || access.status === 'deleted') {
+      accessCheckedFor.current = null;
+      setBlocked({ kind: access.status });
+      try {
+        await signOut();
+      } catch (e) { /* already signed out / no session */ }
+      return false;
+    }
+    accessCheckedFor.current = user.id;
+    return true;
+  }, [runAccessChecks]);
+
   useEffect(() => {
     if (!supabase) {
       setSession(null);
       return undefined;
     }
     let mounted = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (mounted) setSession(data && data.session ? data.session : null);
+    // Restore the saved session, but run the access checks BEFORE
+    // showing Main — a banned/deleted account must never flash the
+    // app for a moment on launch.
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (!mounted) return;
+      const restored = data && data.session ? data.session : null;
+      if (!restored) { setSession(null); return; }
+      const admitted = await admitSession(restored);
+      if (!mounted) return;
+      setSession(admitted ? restored : null);
     });
     const { data: listener } = supabase.auth.onAuthStateChange(async (event, newSession) => {
       if (!mounted) return;
-      setSession(newSession || null);
-      if (event === 'SIGNED_IN' && newSession && newSession.user) {
-        // First sign-in: create the profiles row if it does not exist.
-        // Best-effort — login must not fail if the row can't be written
-        // (e.g. a missing RLS policy); see src/supabase/auth.js.
-        try {
-          await ensureProfile(newSession.user);
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          console.log('[Livo] ensureProfile on SIGNED_IN failed:', e && e.message);
-        }
+      if (event === 'SIGNED_OUT') {
+        accessCheckedFor.current = null;
+        setSession(null);
+        return;
       }
+      if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && newSession && newSession.user) {
+        if (event === 'SIGNED_IN') {
+          // First sign-in: create the profiles row if it does not exist.
+          // Best-effort — login must not fail if the row can't be written
+          // (e.g. a missing RLS policy); see src/supabase/auth.js.
+          try {
+            await ensureProfile(newSession.user);
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.log('[Livo] ensureProfile on SIGNED_IN failed:', e && e.message);
+          }
+        }
+        // Device registration + ban/delete gate (best-effort: a
+        // failed check lets the user in — see checkAccess).
+        const admitted = await admitSession(newSession);
+        if (!mounted) return;
+        setSession(admitted ? newSession : null);
+        return;
+      }
+      setSession(newSession || null);
     });
     return () => {
       mounted = false;
       listener.subscription.unsubscribe();
     };
-  }, []);
+  }, [admitSession]);
 
   // ── Incoming-call listener (real Realtime signalling, 2026-11-22) ──
   // Subscribes to ringing calls rows for the signed-in user and
@@ -216,6 +292,25 @@ function Root() {
     return (
       <View style={styles.loading}>
         <ActivityIndicator size="large" color="#fff" />
+      </View>
+    );
+  }
+
+  // Access blocked by the admin panel (ban / deleted account):
+  // the session was already signed out above, so this screen is
+  // shown instead of Login until the user taps back.
+  if (blocked && !session) {
+    return (
+      <View style={styles.blocked}>
+        <Text style={styles.blockedTitle}>Account unavailable</Text>
+        <Text style={styles.blockedText}>
+          {blocked.kind === 'deleted'
+            ? 'This account has been deleted. It can be restored from the admin panel within 3 months.'
+            : 'Your account has been banned. Contact support.'}
+        </Text>
+        <TouchableOpacity style={styles.blockedBtn} onPress={() => setBlocked(null)}>
+          <Text style={styles.blockedBtnTxt}>Back to sign-in</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -274,6 +369,12 @@ export default function App() {
 const styles = StyleSheet.create({
   // Auth gate loading screen (while the saved session is restored).
   loading: { alignItems: 'center', backgroundColor: '#7c3aed', flex: 1, justifyContent: 'center' },
+  // Access-blocked screen (ban / deleted account).
+  blocked: { alignItems: 'center', backgroundColor: '#7c3aed', flex: 1, justifyContent: 'center', paddingHorizontal: 32 },
+  blockedTitle: { color: '#fff', fontSize: 22, fontWeight: 'bold', marginBottom: 12, textAlign: 'center' },
+  blockedText: { color: '#ede9fe', fontSize: 15, lineHeight: 22, textAlign: 'center' },
+  blockedBtn: { backgroundColor: '#fff', borderRadius: 24, marginTop: 28, paddingHorizontal: 24, paddingVertical: 12 },
+  blockedBtnTxt: { color: '#7c3aed', fontSize: 15, fontWeight: 'bold' },
   // Bottom nav — v0 design: mint-white bar, 70px total (8 + 50 + 12).
   tabBar: {
     backgroundColor: '#f9fffaf7',
