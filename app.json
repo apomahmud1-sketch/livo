@@ -58,8 +58,9 @@
   "orientation": "portrait",
   "plugins": [
     "expo-av",
-    "expo-video",
-    "expo-image-picker"
+    "expo-image-picker",
+    "expo-updates",
+    "expo-video"
   ],
   "scheme": "livo",
   "slug": "livo",
@@ -67,6 +68,16 @@
     "backgroundColor": "#7c3aed",
     "image": "./assets/splash.png",
     "resizeMode": "contain"
+  },
+  "updates": {
+    "checkAutomatically": "ON_LOAD",
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+    },
+    "url": "https://u.expo.dev/f856b1d6-e464-47ff-a6a8-98322772f8dd",
+    "requestHeaders": {
+      "expo-channel-name": "production"
+    }
   },
   "userInterfaceStyle": "light",
   "version": "1.0.0",
