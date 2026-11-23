@@ -205,7 +205,23 @@ function Root() {
 
   return (
     <NavigationContainer ref={navigationRef}>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Navigator
+        screenOptions={{
+          headerShown: false,
+          // Smooth Vero-style slides (2026-11-23): the platform-default
+          // animation on Android varies by OS version/theme (often a
+          // fade / hard cut, and two screens cross-fading at once) —
+          // pin an explicit slide-in on push, slide-back on pop, and
+          // let the swipe-back gesture use the same slide animation.
+          animation: 'slide_from_right',
+          animationDuration: 300,
+          animationTypeForReplace: 'push',
+          gestureEnabled: true,
+          gestureDirection: 'horizontal',
+          fullScreenGestureEnabled: true,
+          customAnimationOnGesture: true,
+        }}
+      >
         {session ? (
           <>
             <Stack.Screen name="Main" component={MainTabs} />
@@ -219,7 +235,7 @@ function Root() {
             <Stack.Screen name="Tasks" component={TasksScreen} />
           </>
         ) : (
-          <Stack.Screen name="Login" component={LoginScreen} />
+          <Stack.Screen name="Login" component={LoginScreen} options={{ animation: 'none' }} />
         )}
       </Stack.Navigator>
       <Toast />
