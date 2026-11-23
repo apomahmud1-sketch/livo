@@ -15,14 +15,13 @@
 // the hardcoded CHATS and the fake Say-hi entry every 30s are
 // gone. Say Hi is a real action: it sends a real first message
 // ('Hi!') into the messages table, then opens the chat. The Call
-// tab shows an empty state: calls are not recorded in Supabase
-// yet (chargeCall is local store only), so there is no real call
-// history to list. No unread counts exist (no read receipts), so
-// no unread badges are shown on real chats. When there is no
-// Supabase session the Chat list prompts login instead of
+// tab lists the real call history from the `calls` table (duration,
+// cost, status, other party). Unread counts are real (messages
+// with read_at NULL) and shown as badges on chat rows. When there
+// is no Supabase session the Chat list prompts login instead of
 // showing fake chats.
 
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   BackHandler,
@@ -36,11 +35,12 @@ import {
   View,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { Bell, ChevronLeft, Headphones, Send, Video } from 'lucide-react-native';
+import { ChevronLeft, Headphones, Send, Video } from 'lucide-react-native';
 import { COLORS } from '../config';
 import { useApp } from '../store';
 // [Live] Real conversations + real first message.
 import {
+  fetchCallHistory,
   fetchConversations,
   getCurrentUserId,
   resolveRecipientProfileId,
@@ -74,29 +74,38 @@ function formatTime(iso) {
   return `${days}d`;
 }
 
+// Duration of a finished call ("45s", "3m 20s").
+function formatDuration(seconds) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  const m = Math.floor(s / 60);
+  if (m === 0) return `${s}s`;
+  return `${m}m ${s % 60}s`;
+}
+
 // Profile for ChatDetail from a real conversation row.
 function profileForConversation(conv) {
   return {
     profileId: conv.counterpartId,
     name: conv.name,
     country: COUNTRY_NAMES[conv.country] || conv.country || 'Bangladesh',
-    age: '',
+    age: conv.age != null ? conv.age : null,
     lv: '',
     lang: conv.lang || 'English',
     firstMsg: conv.lastBody,
-    unread: 0,
+    unread: conv.unread || 0,
     color: '#7c3aed',
     avatarUrl: conv.avatarUrl,
   };
 }
 
 // Profile for a live store host (online row / Contacts / Say hi).
+// Age is unknown here (hosts carry no age) — never invented.
 function profileForHost(host, firstMsg) {
   return {
     storeId: host.id,
     name: host.name,
     country: COUNTRY_NAMES[host.country] || host.country || 'Bangladesh',
-    age: 19 + (parseInt(host.id, 10) % 6),
+    age: null,
     lv: host.level || 1,
     lang: host.lang || 'English',
     firstMsg: firstMsg || 'Hi!',
@@ -131,6 +140,25 @@ export default function MessagesScreen({ navigation }) {
   const [authChecked, setAuthChecked] = useState(false);
   const [loadingChats, setLoadingChats] = useState(true);
   const [sendingHi, setSendingHi] = useState(false);
+
+  // [Live] Real call history from the `calls` table, loaded when
+  // the Call sub-tab is opened.
+  const [callHistory, setCallHistory] = useState([]);
+  const [loadingCalls, setLoadingCalls] = useState(false);
+
+  useEffect(() => {
+    if (subTab !== 'call' || !meId) return undefined;
+    let cancelled = false;
+    setLoadingCalls(true);
+    fetchCallHistory(meId).then((rows) => {
+      if (cancelled) return;
+      setCallHistory(rows);
+      setLoadingCalls(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [subTab, meId]);
 
   const loadConversations = useCallback(async () => {
     const uid = await getCurrentUserId();
@@ -221,14 +249,38 @@ export default function MessagesScreen({ navigation }) {
       </View>
       <View style={styles.rowRight}>
         <Text style={styles.time}>{formatTime(item.lastAt)}</Text>
+        {item.unread > 0 ? (
+          <View style={styles.unreadBadge}>
+            <Text style={styles.unreadText}>{item.unread}</Text>
+          </View>
+        ) : null}
       </View>
     </TouchableOpacity>
+  );
+
+  // [Live] One real call-history row: other party, direction,
+  // duration, cost, status, time. Honest empty state when none.
+  const renderCallRow = ({ item }) => (
+    <View style={styles.row}>
+      <View style={styles.msgBody}>
+        <Text style={styles.name}>
+          {item.otherName}{' '}
+          <Text style={styles.idChip}>{item.direction === 'outgoing' ? 'Outgoing' : 'Incoming'}</Text>
+        </Text>
+        <Text style={styles.text} numberOfLines={1}>
+          {formatDuration(item.durationSeconds)} · {item.costCoins} coins{item.status ? ` · ${item.status}` : ''}
+        </Text>
+      </View>
+      <View style={styles.rowRight}>
+        <Text style={styles.time}>{formatTime(item.createdAt)}</Text>
+      </View>
+    </View>
   );
 
   const renderSayHiRow = ({ item }) => (
     <TouchableOpacity
       style={styles.row}
-      onPress={() => openChat(profileForHost(item, 'Hi!'))}
+      onPress={() => sendSayHi(item)}
     >
       <View>
         <Avatar name={item.name} color={item.color || '#7c3aed'} photo={item.photo} />
@@ -386,9 +438,19 @@ export default function MessagesScreen({ navigation }) {
             )
           )}
           {subTab === 'call' && (
-            <View style={styles.emptyWrap}>
-              <Text style={styles.emptyText}>No call history yet — calls are not saved yet.</Text>
-            </View>
+            loadingCalls ? (
+              <ActivityIndicator color="#20a64b" style={{ marginTop: 32 }} />
+            ) : !meId ? (
+              <View style={styles.emptyWrap}>
+                <Text style={styles.emptyText}>Please sign in to see your call history.</Text>
+              </View>
+            ) : callHistory.length === 0 ? (
+              <View style={styles.emptyWrap}>
+                <Text style={styles.emptyText}>No call history yet.</Text>
+              </View>
+            ) : (
+              <FlatList data={callHistory} keyExtractor={(c) => String(c.id)} renderItem={renderCallRow} removeClippedSubviews maxToRenderPerBatch={10} windowSize={8} initialNumToRender={10} updateCellsBatchingPeriod={50} getItemLayout={msgLayout} />
+            )
           )}
           {subTab === 'sayhi' && (
             onlineHosts.length === 0 ? (
@@ -404,24 +466,6 @@ export default function MessagesScreen({ navigation }) {
 
       {topTab === 'notice' && (
         <View>
-          <TouchableOpacity
-            style={styles.row}
-            onPress={() => showToast('System message: Task completed! Rewards have been credited automatically')}
-          >
-            <View style={[styles.avatar, { backgroundColor: '#f1eafd' }]}>
-              <Bell size={20} color="#7c3aed" />
-            </View>
-            <View style={styles.msgBody}>
-              <Text style={styles.name}>System message</Text>
-              <Text style={styles.text} numberOfLines={2}>Task completed! Rewards have been credited automatically</Text>
-            </View>
-            <View style={styles.rowRight}>
-              <Text style={styles.time}>10:05</Text>
-              <View style={styles.unreadBadge}>
-                <Text style={styles.unreadText}>1</Text>
-              </View>
-            </View>
-          </TouchableOpacity>
           <TouchableOpacity style={styles.row} onPress={() => setCsOpen(true)}>
             <View style={[styles.avatar, { backgroundColor: '#fde7f1' }]}>
               <Headphones size={20} color="#db2777" />
