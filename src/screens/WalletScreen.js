@@ -15,18 +15,27 @@ import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { COLORS } from '../config';
 import { useApp } from '../store';
+import { getIapProducts, skuForCoinPack, skuForDiamondPack } from '../billing/iap';
 
-// Exact packs from the screenshot. `old` is the struck-through price
-// shown above the real price (null = no old price on that card).
-// Admin can change every value from the mother panel later.
-const DIAMOND_PACKS = [
-  { id: 'd4000', diamonds: 4000, old: null, price: '$1.48', gems: '💎💎', special: false },
-  { id: 'd13200', diamonds: 13200, old: 12000, price: '$3.99', gems: '💎', special: false },
-  { id: 'd48000', diamonds: 48000, old: 40000, price: '$13.99', gems: '💎💎', special: false },
-  { id: 'd150000', diamonds: 150000, old: 120000, price: '$41.99', gems: '💎💎💎', special: false },
-  { id: 'd520000', diamonds: 520000, old: 400000, price: '$139.99', gems: '💎💎💎💎', special: false },
-  { id: 'd57000', diamonds: 57000, old: 40000, price: '$13.99', gems: '💎💎💎', special: true },
-];
+// Diamond packs come ONLY from the store's live catalog
+// (diamond_packs table via live.js) — no hardcoded list here.
+// `old` is the struck-through base price: diamonds minus bonus
+// (null when there is no bonus). The 57,000 pack keeps its
+// special orange-pink border + 👍 badge, as in the screenshot.
+// Display price: Play's localizedPrice when the Play product was
+// found, else the catalog price — never a price that differs from
+// what Play charges.
+function playPrice(sku, catalogPrice) {
+  const prod = getIapProducts().find((p) => p.id === sku);
+  return (prod && (prod.localizedPrice || prod.price)) || catalogPrice;
+}
+
+function packGems(diamonds) {
+  if (diamonds >= 100000) return '💎💎💎💎';
+  if (diamonds >= 48000) return '💎💎💎';
+  if (diamonds >= 13200) return '💎💎';
+  return '💎';
+}
 
 function txText(t) {
   if (t.amountCoins) {
@@ -40,14 +49,17 @@ function txText(t) {
 
 export default function WalletScreen({ navigation }) {
   const {
-    coins, diamonds, buyDiamondPack, buyCoinPack, coinPacks,
+    coins, diamonds, buyDiamondPack, buyCoinPack, coinPacks, diamondPacks,
     showToast, signedIn, iapStatus, transactions, refreshTransactions,
   } = useApp();
   const [agreed, setAgreed] = useState(true);
   const [selectedId, setSelectedId] = useState(null);
   const [showBill, setShowBill] = useState(false);
 
-  const selected = DIAMOND_PACKS.find((p) => p.id === selectedId) || null;
+  // Diamond pack ids, derived from the live catalog (never hardcoded).
+  const DIAMOND_PACK_IDS = diamondPacks.map((p) => p.id);
+  const selected = diamondPacks.find((p) => p.id === selectedId) || null;
+  const selectedPrice = selected ? playPrice(skuForDiamondPack(selected.id), selected.price) : null;
 
   // Bill · History is the real transactions table, re-read whenever
   // the view opens.
@@ -130,29 +142,38 @@ export default function WalletScreen({ navigation }) {
       <Text style={styles.coinsBalance}>🪙 {coins.toLocaleString()} coins</Text>
 
       <View style={styles.grid}>
-        {DIAMOND_PACKS.map((p) => (
-          <TouchableOpacity
-            key={p.id}
-            style={[
-              styles.pack,
-              p.special && styles.packSpecial,
-              selectedId === p.id && styles.packSelected,
-            ]}
-            onPress={() => setSelectedId(p.id)}
-          >
-            {p.special ? (
-              <View style={styles.thumbBadge}>
-                <Text style={styles.thumbBadgeText}>👍</Text>
-              </View>
-            ) : null}
-            <Text style={styles.gems}>{p.gems}</Text>
-            <Text style={styles.packAmount}>{p.diamonds.toLocaleString()}</Text>
-            {p.old ? <Text style={styles.oldPrice}>{p.old.toLocaleString()}</Text> : null}
-            <View style={[styles.priceBar, p.special && styles.priceBarSpecial]}>
-              <Text style={[styles.price, p.special && styles.priceSpecial]}>{p.price}</Text>
-            </View>
-          </TouchableOpacity>
-        ))}
+        {diamondPacks.length === 0 ? (
+          <Text style={styles.empty}>Diamond packs are loading from the store — check your connection and try again.</Text>
+        ) : (
+          diamondPacks.map((p) => {
+            const old = p.bonus ? p.diamonds - p.bonus : null;
+            const special = p.id === 'd57000';
+            const price = playPrice(skuForDiamondPack(p.id), p.price);
+            return (
+              <TouchableOpacity
+                key={p.id}
+                style={[
+                  styles.pack,
+                  special && styles.packSpecial,
+                  selectedId === p.id && styles.packSelected,
+                ]}
+                onPress={() => setSelectedId(p.id)}
+              >
+                {special ? (
+                  <View style={styles.thumbBadge}>
+                    <Text style={styles.thumbBadgeText}>👍</Text>
+                  </View>
+                ) : null}
+                <Text style={styles.gems}>{packGems(p.diamonds)}</Text>
+                <Text style={styles.packAmount}>{p.diamonds.toLocaleString()}</Text>
+                {old ? <Text style={styles.oldPrice}>{old.toLocaleString()}</Text> : null}
+                <View style={[styles.priceBar, special && styles.priceBarSpecial]}>
+                  <Text style={[styles.price, special && styles.priceSpecial]}>{price}</Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })
+        )}
       </View>
 
       <TouchableOpacity style={styles.agreeRow} onPress={() => setAgreed(!agreed)}>
@@ -169,7 +190,7 @@ export default function WalletScreen({ navigation }) {
         onPress={confirmBuy}
       >
         <Text style={styles.confirmText}>
-          {selected ? `Confirm · ${selected.diamonds.toLocaleString()} Diamonds ${selected.price}` : 'Confirm'}
+          {selected ? `Confirm · ${selected.diamonds.toLocaleString()} Diamonds ${selectedPrice}` : 'Confirm'}
         </Text>
       </TouchableOpacity>
 
@@ -180,7 +201,7 @@ export default function WalletScreen({ navigation }) {
             {((p.coins || 0) + (p.bonus || 0)).toLocaleString()} coins
             {p.bonus ? ` (+${p.bonus.toLocaleString()} bonus)` : ''}
           </Text>
-          <Text style={styles.coinPrice}>{p.price}</Text>
+          <Text style={styles.coinPrice}>{playPrice(skuForCoinPack(p.id), p.price)}</Text>
           <TouchableOpacity style={styles.coinBtn} onPress={() => buyCoinPack(p)}>
             <Text style={styles.coinBtnText}>Buy</Text>
           </TouchableOpacity>
