@@ -5,20 +5,6 @@
       "foregroundImage": "./assets/icon.png"
     },
     "package": "com.livo.app",
-    "intentFilters": [
-      {
-        "action": "VIEW",
-        "category": [
-          "BROWSABLE",
-          "DEFAULT"
-        ],
-        "data": [
-          {
-            "scheme": "livo"
-          }
-        ]
-      }
-    ],
     "permissions": [
       "android.permission.CAMERA",
       "android.permission.RECORD_AUDIO",
