@@ -31,8 +31,9 @@
 //     who backs out (or waits out the ring timeout) while the row
 //     is still 'ringing' marks it 'missed' via markCallMissed().
 //
-// Identity: the signed-in user is (await supabase.auth.getUser())
-// .data.user and user.id equals profiles.id. A "host" on screen is
+// Identity: the signed-in user is the local session user (see
+// getSessionUser in src/supabase/auth.js) and user.id equals
+// profiles.id. A "host" on screen is
 // the live-mapped object from src/supabase/live.js: host.id is the
 // hosts.host_id TEXT (not the hosts.id uuid), so resolveHostRow()
 // looks the hosts row up by host_id to get hosts.id + profile_id.
@@ -41,6 +42,7 @@
 // as before — signalling is best-effort, never a crash.
 // ─────────────────────────────────────────────────────────────────
 import { supabase } from '../supabase/client';
+import { getSessionUser } from '../supabase/auth';
 import { getVoiceCallRate } from '../config';
 
 // ── Channel ──────────────────────────────────────────────────────
@@ -51,13 +53,10 @@ export function buildChannelName(hostId) {
 
 // ── Identity ─────────────────────────────────────────────────────
 export async function getCurrentUserId() {
-  if (!supabase) return null;
-  try {
-    const { data } = await supabase.auth.getUser();
-    return (data && data.user && data.user.id) || null;
-  } catch (e) {
-    return null;
-  }
+  // Identity from the local session (see getSessionUser in auth.js):
+  // the network getUser() call can fail on a phone right after login.
+  const user = await getSessionUser();
+  return (user && user.id) || null;
 }
 
 // ── Host resolution ──────────────────────────────────────────────
