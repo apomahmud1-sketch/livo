@@ -24,7 +24,9 @@ import { COLORS } from '../config';
 import { useApp } from '../store';
 import { AuthContext } from '../../App';
 import { supabase } from '../supabase/client';
-import { ensureProfile, fetchMyProfile, getSessionUser, signOut } from '../supabase/auth';
+import { ensureProfile, equipFrame, fetchMyProfile, getSessionUser, signOut } from '../supabase/auth';
+import { fetchUserTags } from '../supabase/tags';
+import { DEVICE_ID_KEY } from '../supabase/device';
 import { stopHostHeartbeat } from '../supabase/host';
 import LevelView from './profile/LevelView';
 import VipView from './profile/VipView';
@@ -48,7 +50,7 @@ function vipLabel(v) {
 }
 
 export default function ProfileScreen({ navigation }) {
-  const { diamonds, showToast, vipLevel, vipUntil, following, levelInfo, updateMyProfile } = useApp();
+  const { diamonds, showToast, vipLevel, vipUntil, following, levelInfo, updateMyProfile, frames } = useApp();
 
   // ── Real signed-in user ──
   // user = Supabase auth user (Google account); profile = the user's
@@ -135,9 +137,42 @@ export default function ProfileScreen({ navigation }) {
     return () => { mounted = false; };
   }, [user]);
 
-  // The profile shown on screen: real user only. Every field is an
-  // explicit null when the account has not set it — no demo values.
-  // Age and gender are never guessed — they stay null when unknown.
+  // Admin-set tags (user_tags, active only) — small chips under
+  // the name. No rows → no chips, never demo tags.
+  const [userTags, setUserTags] = React.useState([]);
+  React.useEffect(() => {
+    if (!profile || !profile.id) return undefined;
+    let mounted = true;
+    fetchUserTags(profile.id).then((rows) => {
+      if (mounted) setUserTags(rows);
+    });
+    return () => { mounted = false; };
+  }, [profile && profile.id]);
+
+  // Equipped avatar frame: name from the live frames catalog
+  // (falls back to the raw frame id when the catalog has not
+  // loaded it) + its expiry. frame_expires_at NULL = no expiry.
+  const frameInfo = React.useMemo(() => {
+    if (!profile || !profile.frame_id) return null;
+    const found = (frames || []).find((f) => f.id === profile.frame_id);
+    const expires = profile.frame_expires_at ? new Date(profile.frame_expires_at) : null;
+    return {
+      id: profile.frame_id,
+      name: (found && found.name) || profile.frame_id,
+      expiryText: expires
+        ? `Expires ${expires.toLocaleDateString()}`
+        : 'No expiry',
+    };
+  }, [profile && profile.frame_id, profile && profile.frame_expires_at, frames]);
+
+  const equipFrameById = async (frameId) => {
+    const u = await ensureUser();
+    if (!u) { showToast('Please sign in first.'); return; }
+    const updated = await equipFrame(frameId);
+    if (!updated) { showToast("Couldn't equip the frame — try again."); return; }
+    setProfile((p) => ({ ...(p || {}), ...updated }));
+    showToast(`Frame equipped: ${updated.frame_id}`);
+  };
   const PROFILE = React.useMemo(() => {
     const meta = (user && user.user_metadata) || {};
     const displayName =
@@ -178,6 +213,9 @@ export default function ProfileScreen({ navigation }) {
   const [draft, setDraft] = React.useState({ nickname: '', bio: '', age: '', country: '', language: '', tags: '' });
   const [saving, setSaving] = React.useState(false);
   const [avatarBusy, setAvatarBusy] = React.useState(false);
+  // Delete-account two-step confirm (Settings section).
+  const [confirmDelete, setConfirmDelete] = React.useState(false);
+  const [deleting, setDeleting] = React.useState(false);
   const t = themeFor(dark);
 
   const myLevelLabel = levelInfo && typeof levelInfo.level === 'number' ? `Lv${levelInfo.level}` : '—';
@@ -342,16 +380,73 @@ export default function ProfileScreen({ navigation }) {
   // Clear Cache really clears the app's AsyncStorage caches (every
   // livo-* key: wallet cache, rewards display cache) and reports
   // what was removed. Server data (balances, VIP, tasks) is untouched.
+  // The device id ('livo-device-id') is NOT cleared: it identifies
+  // this install for the Mother Panel's device list, and wiping it
+  // would register a brand-new device on the next sign-in.
   const clearCache = async () => {
     try {
       const keys = await AsyncStorage.getAllKeys();
-      const livoKeys = keys.filter((k) => k.indexOf('livo-') === 0);
+      const livoKeys = keys.filter((k) => k.indexOf('livo-') === 0 && k !== DEVICE_ID_KEY);
       if (livoKeys.length > 0) await AsyncStorage.multiRemove(livoKeys);
       showToast(livoKeys.length > 0
         ? `Cache cleared — ${livoKeys.length} item${livoKeys.length > 1 ? 's' : ''} removed`
         : 'Cache is already empty');
     } catch (e) {
       showToast('Could not clear cache — try again.');
+    }
+  };
+
+  // Delete account (two-step confirm in Settings): stamps
+  // profiles.deleted_at (kept 3 months, restorable from the admin
+  // panel) and closes any live room — the host row is marked
+  // offline, and its approval status is set to 'closed' on a
+  // best-effort basis (the hosts.status values the app knows are
+  // 'pending' / 'approved', so a panel check constraint may reject
+  // 'closed' — the offline flag is what closes the room, and it
+  // always runs first). Then signs out. A failed profile update
+  // aborts before sign-out so nothing is half-deleted.
+  const doDeleteAccount = async () => {
+    const u = await ensureUser();
+    if (!u) { showToast('Please sign in first.'); return; }
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      const { error: delErr } = await supabase
+        .from('profiles')
+        .update({ deleted_at: new Date().toISOString() })
+        .eq('id', u.id);
+      if (delErr) {
+        showToast("Couldn't delete the account — try again.");
+        return;
+      }
+      try {
+        const { data: hostRow } = await supabase
+          .from('hosts')
+          .select('id')
+          .eq('profile_id', u.id)
+          .maybeSingle();
+        if (hostRow && hostRow.id) {
+          await supabase
+            .from('hosts')
+            .update({ is_online: false, last_seen: new Date().toISOString() })
+            .eq('id', hostRow.id);
+          // Best-effort only: 'closed' is not a status the app has
+          // ever written, so the panel may reject it.
+          await supabase
+            .from('hosts')
+            .update({ status: 'closed' })
+            .eq('id', hostRow.id);
+        }
+      } catch (e) { /* host cleanup must not block the delete */ }
+      try {
+        await stopHostHeartbeat(true);
+      } catch (e) { /* never blocks sign-out */ }
+      await signOut();
+    } catch (e) {
+      showToast("Couldn't delete the account — try again.");
+    } finally {
+      setDeleting(false);
+      setConfirmDelete(false);
     }
   };
 
@@ -449,6 +544,18 @@ export default function ProfileScreen({ navigation }) {
                     <Text style={[styles.idTxt, { color: t.muted }]}>Not set</Text>
                   ) : null}
                 </View>
+                {userTags.length > 0 ? (
+                  <View style={styles.tagChips}>
+                    {userTags.map((tg) => (
+                      <Text key={tg.id || tg.tag} style={styles.tagChip}>{tg.tag}</Text>
+                    ))}
+                  </View>
+                ) : null}
+                {frameInfo ? (
+                  <Text style={[styles.frameLine, { color: t.muted }]}>
+                    Frame: {frameInfo.name} · {frameInfo.expiryText}
+                  </Text>
+                ) : null}
               </View>
               <View style={styles.topBtns}>
                 {/* Single check-in path: RewardsScreen. */}
@@ -586,12 +693,56 @@ export default function ProfileScreen({ navigation }) {
               </View>
             </View>
             <Text style={[styles.pfSig, { color: t.muted }]}>{PROFILE.signature || 'Not set'}</Text>
+            {userTags.length > 0 ? (
+              <View style={styles.tagChips}>
+                {userTags.map((tg) => (
+                  <Text key={tg.id || tg.tag} style={styles.tagChip}>{tg.tag}</Text>
+                ))}
+              </View>
+            ) : null}
+            {frameInfo ? (
+              <Text style={[styles.frameLine, { color: t.muted }]}>
+                Frame: {frameInfo.name} · {frameInfo.expiryText}
+              </Text>
+            ) : null}
             <View style={styles.chips}>
               {genderChip ? <Text style={styles.chipMale}>{genderChip}</Text> : null}
               <Text style={styles.flagChipTxt}>{PROFILE.country || 'Not set'}</Text>
             </View>
             <Text style={styles.infoTab}>Information</Text>
             <Text style={[styles.albumEmpty, { color: t.muted }]}>There are no photos in the album yet~</Text>
+
+            {/* Avatar frame — equipped frame + expiry, and the live
+                frames catalog to equip from. Equipping writes
+                profiles.frame_id + frame_expires_at (VIP period,
+                else 30 days). No frames in the panel → nothing here. */}
+            {frames && frames.length > 0 ? (
+              <View style={[styles.pfCard, { backgroundColor: t.surface2 }]}>
+                <View style={styles.frameHead}>
+                  <Text style={[styles.frameHeadTitle, { color: t.text }]}>Frame</Text>
+                  <Text style={[styles.frameHeadSub, { color: t.muted }]}>
+                    {frameInfo ? `${frameInfo.name} · ${frameInfo.expiryText}` : 'No frame equipped'}
+                  </Text>
+                </View>
+                <View style={styles.frameList}>
+                  {frames.map((f) => {
+                    const equipped = profile && profile.frame_id === f.id;
+                    return (
+                      <TouchableOpacity
+                        key={f.id}
+                        style={[styles.frameItem, equipped && styles.frameItemOn]}
+                        onPress={() => { if (!equipped) equipFrameById(f.id); }}
+                      >
+                        <Text style={[styles.frameItemTxt, { color: t.text }]}>{f.name}</Text>
+                        <Text style={[styles.frameItemSub, { color: t.muted }]}>
+                          {equipped ? 'Equipped' : 'Tap to equip'}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : null}
 
             <View style={[styles.pfCard, { backgroundColor: t.surface2 }]}>
               <TouchableOpacity style={styles.pfBannerGold} onPress={() => setView('badge')}>
@@ -807,6 +958,30 @@ export default function ProfileScreen({ navigation }) {
             </TouchableOpacity>
           </View>
           <Text style={[styles.versionTxt, { color: t.muted }]}>Livo v1.0.0</Text>
+          {confirmDelete ? (
+            <View style={[styles.deleteBox, { backgroundColor: t.surface, borderColor: '#ef4444' }]}>
+              <Text style={[styles.deleteTitle, { color: t.text }]}>Delete your account?</Text>
+              <Text style={[styles.deleteText, { color: t.muted }]}>
+                Your profile, ID, balance and saved items are kept for 3 months and can be restored from the admin panel.
+              </Text>
+              <View style={styles.deleteBtns}>
+                <TouchableOpacity
+                  style={[styles.deleteConfirmBtn, deleting && { opacity: 0.5 }]}
+                  onPress={doDeleteAccount}
+                  disabled={deleting}
+                >
+                  <Text style={styles.deleteConfirmTxt}>{deleting ? 'Deleting…' : 'Confirm delete'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.deleteCancelBtn} onPress={() => setConfirmDelete(false)} disabled={deleting}>
+                  <Text style={styles.deleteCancelTxt}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <TouchableOpacity style={styles.deleteBtn} onPress={() => setConfirmDelete(true)}>
+              <Text style={styles.deleteBtnTxt}>Delete account</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity style={styles.logoutBtn} onPress={doLogout}>
             <Text style={styles.logoutTxt}>Log Out</Text>
           </TouchableOpacity>
@@ -982,6 +1157,31 @@ const styles = StyleSheet.create({
   tagGold: { backgroundColor: '#fef3c7', borderRadius: 10, color: '#b45309', fontSize: 11, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
   tagGreen: { backgroundColor: '#dcfce7', borderRadius: 10, color: '#16a34a', fontSize: 11, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
   tagPink: { backgroundColor: '#fde7f1', borderRadius: 10, color: '#db2777', fontSize: 11, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
+  // Admin-set profile tags (user_tags) — small chips under the name.
+  tagChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  tagChip: { backgroundColor: '#ede9fe', borderRadius: 10, color: '#7c3aed', fontSize: 11, fontWeight: 'bold', overflow: 'hidden', paddingHorizontal: 8, paddingVertical: 3 },
+  // Equipped avatar frame line (name + expiry) under the name.
+  frameLine: { fontSize: 12, marginTop: 6 },
+  // Frame equip card in the My Profile detail view.
+  frameHead: { borderBottomColor: '#e5e7eb', borderBottomWidth: 1, paddingHorizontal: 14, paddingVertical: 10 },
+  frameHeadTitle: { fontSize: 16, fontWeight: 'bold' },
+  frameHeadSub: { fontSize: 12, marginTop: 2 },
+  frameList: { paddingHorizontal: 8, paddingVertical: 6 },
+  frameItem: { borderRadius: 10, paddingHorizontal: 10, paddingVertical: 9 },
+  frameItemOn: { backgroundColor: '#ede9fe' },
+  frameItemTxt: { fontSize: 14, fontWeight: 'bold' },
+  frameItemSub: { fontSize: 12, marginTop: 2 },
+  // Delete-account two-step confirm (Settings).
+  deleteBox: { borderRadius: 12, borderWidth: 1.5, marginHorizontal: 16, marginTop: 16, padding: 14 },
+  deleteTitle: { fontSize: 16, fontWeight: 'bold' },
+  deleteText: { fontSize: 13, lineHeight: 19, marginTop: 6 },
+  deleteBtns: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  deleteConfirmBtn: { backgroundColor: '#ef4444', borderRadius: 10, flex: 1, paddingVertical: 11 },
+  deleteConfirmTxt: { color: '#fff', fontSize: 14, fontWeight: 'bold', textAlign: 'center' },
+  deleteCancelBtn: { backgroundColor: '#e5e7eb', borderRadius: 10, flex: 1, paddingVertical: 11 },
+  deleteCancelTxt: { color: '#111827', fontSize: 14, fontWeight: 'bold', textAlign: 'center' },
+  deleteBtn: { alignItems: 'center', marginTop: 20, paddingVertical: 8 },
+  deleteBtnTxt: { color: '#ef4444', fontSize: 14, fontWeight: 'bold' },
   taskEmoji: { fontSize: 20 },
   taskIcon: { alignItems: 'center', borderRadius: 10, height: 44, justifyContent: 'center', width: 44 },
   taskReward: { color: '#b45309', fontSize: 13, fontWeight: 'bold' },
