@@ -61,9 +61,7 @@
   },
   "updates": {
     "checkAutomatically": "ON_LOAD",
-    "runtimeVersion": {
-      "policy": "sdkVersion"
-    },
+    "runtimeVersion": "52.0.0",
     "url": "https://u.expo.dev/f856b1d6-e464-47ff-a6a8-98322772f8dd",
     "requestHeaders": {
       "expo-channel-name": "production"
