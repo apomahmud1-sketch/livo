@@ -40,8 +40,12 @@ function Toast() {
 // (https://livo-puce.vercel.app): 5 equal columns, 50px items,
 // 9px labels, 20px lucide icons (stroke 1.9 inactive / 2.5 active),
 // active #20a64b, centre raised 49px #84e34d circle with Video icon,
-// Messages badge 2. Tab order: Home / Moments / Live / Messages / Me.
+// Messages badge shows the real unread count from the store.
+// Tab order: Home / Moments / Live / Messages / Me.
 function MainTabs() {
+  // Real unread badge: unreadTotal comes from the store (another
+  // pass adds it); undefined until then means "no badge".
+  const { unreadTotal } = useApp();
   return (
     <Tab.Navigator
       screenOptions={{
@@ -85,7 +89,7 @@ function MainTabs() {
         options={{
           tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>Messages</Text>,
           tabBarIcon: ({ focused }) => <MessageCircle size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? '#20a64b' : '#9aa39c'} />,
-          tabBarBadge: 2,
+          tabBarBadge: unreadTotal > 0 ? unreadTotal : undefined,
           tabBarBadgeStyle: styles.msgBadge,
         }}
       />
@@ -269,7 +273,7 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     width: 49,
   },
-  // Messages badge — 14px red circle with white "2".
+  // Messages badge — 14px red circle with the unread count.
   msgBadge: {
     backgroundColor: '#f04f4b',
     borderColor: '#f9fffa',
