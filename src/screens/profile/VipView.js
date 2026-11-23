@@ -1,36 +1,49 @@
 // Livo — VIP Member Centre (black & gold), from the web preview.
 // VIP1 Baron / VIP2 Earl / VIP3 Marquis / VIP4 Duke / VIP5 King.
-// Prices: 60,000 / 120,000 / 300,000 Diamond per 30 days for VIP1-3
-// (VIP4 600,000 and VIP5 1,200,000 are preview samples).
-// Buying deducts Diamonds from the shared store balance and binds the
-// VIP tier to the user ID for 30 days.
+//
+// VIP status comes ONLY from the store (store.vipLevel /
+// store.vipUntil, set from the profiles row by a real Play purchase).
+// There is NO diamond buy here: the old local buy() that deducted
+// real Diamonds and set local-only state is deleted. The diamond
+// prices shown per tier are preview values with no purchase path,
+// so no Buy button is offered for them — buying Premium goes through
+// the VIP screen's Play packs (store.buyVip) via onBuyPremium.
+// The "binds to your ID — works on any device" note stays because
+// the status shown is store-driven (the profiles row, not the device).
+// Badge "Wear" buttons are removed: badge wearing has no persisted
+// store path (no profiles.frame_id wear state in the store).
 import React from 'react';
 import { Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { BADGES_ACTIVITY, BADGES_ACH, PROFILE, VIP_IDENT, VIP_PRIV, VIP_TIERS } from './levelData';
+import { useApp } from '../store';
+import { BADGES_ACTIVITY, BADGES_ACH, VIP_IDENT, VIP_PRIV, VIP_TIERS } from './levelData';
+
+// store vipLevel is a pack id such as 'vip1' — the matching tier
+// index is 0-based (vip1 → VIP_TIERS[0]).
+function ownedTierIndex(vipLevel) {
+  if (!vipLevel) return -1;
+  const m = String(vipLevel).match(/^vip\s?(\d+)$/i);
+  if (!m) return -1;
+  const idx = parseInt(m[1], 10) - 1;
+  return idx >= 0 && idx < VIP_TIERS.length ? idx : -1;
+}
+
+function vipLabel(v) {
+  if (!v) return null;
+  const m = String(v).match(/^vip\s?(\d+)$/i);
+  return m ? `VIP ${m[1]}` : String(v);
+}
 
 export default function VipView({
-  diamonds, spendDiamonds, showToast, onBack, onTopUp,
-  vipOwned, setVipOwned, vipDaysLeft, setVipDaysLeft,
+  showToast, onBack, onTopUp, onBuyPremium,
 }) {
+  const { diamonds, vipLevel, vipUntil } = useApp();
   const [vipSel, setVipSel] = React.useState(0);
   const [pop, setPop] = React.useState(null); // {t, note, key} | null
-  const [worn, setWorn] = React.useState({});
   const tier = VIP_TIERS[vipSel];
-  const isActive = vipSel === vipOwned;
-  const isUpgrade = vipOwned >= 0 && vipSel > vipOwned;
-
-  const buy = () => {
-    if (isActive) return;
-    if (diamonds < tier.price) {
-      showToast(`Diamonds যথেষ্ট নেই — তোমার আছে ${diamonds.toLocaleString()}, লাগবে ${tier.price.toLocaleString()}। আগে Recharge করো`);
-      setTimeout(onTopUp, 650);
-      return;
-    }
-    spendDiamonds(tier.price);
-    setVipOwned(vipSel);
-    setVipDaysLeft(30);
-    showToast(`${tier.name} VIP চালু হয়েছে! তোমার ID-তে ${tier.name} ব্যাজ বসে গেছে · 30 days`);
-  };
+  const ownedIdx = ownedTierIndex(vipLevel);
+  const daysLeft = vipUntil
+    ? Math.max(0, Math.ceil((new Date(vipUntil).getTime() - Date.now()) / 86400000))
+    : 0;
 
   const renderBenefit = (bn, num) => {
     const on = num >= bn.unlock;
@@ -60,7 +73,7 @@ export default function VipView({
     } else if (pop.key === 'entrance') {
       VIP_TIERS.forEach((t) => rows.push(
         <View key={t.name} style={[styles.popRow, { backgroundColor: t.grad[0] }]}>
-          <Text style={styles.popRowTxt}>👤 Mr.lee entered the room</Text>
+          <Text style={styles.popRowTxt}>👤 You entered the room</Text>
           <Text style={styles.popTier}>{t.name}</Text>
         </View>
       ));
@@ -78,16 +91,12 @@ export default function VipView({
         </View>
       ));
     } else if (pop.key === 'badgeslots') {
+      // Badges are shown here for reference only — there is no
+      // persisted "wear" state, so no Wear button is offered.
       [...BADGES_ACTIVITY, ...BADGES_ACH].forEach((b) => rows.push(
         <View key={b.n} style={styles.popWearRow}>
           <Text style={styles.popWearTxt}>{b.icon} {b.n}</Text>
-          <TouchableOpacity
-            style={[styles.wearBtn, worn[b.n] && styles.wearBtnOn]}
-            disabled={!!worn[b.n]}
-            onPress={() => { setWorn((w) => ({ ...w, [b.n]: true })); showToast(`${b.n} পরা হয়েছে — তোমার প্রোফাইলে দেখাবে`); }}
-          >
-            <Text style={styles.wearTxt}>{worn[b.n] ? 'Wearing' : 'Wear'}</Text>
-          </TouchableOpacity>
+          <Text style={styles.popWearTxt}>{b.p}</Text>
         </View>
       ));
     } else if (pop.key === 'seat') {
@@ -104,9 +113,11 @@ export default function VipView({
       <View>
         {rows}
         <Text style={styles.popNote}>{pop.note}</Text>
-        <TouchableOpacity style={styles.joinBtn} onPress={() => { setPop(null); if (!isActive) buy(); }}>
-          <Text style={styles.joinTxt}>Join VIP</Text>
-        </TouchableOpacity>
+        {ownedIdx < 0 ? (
+          <TouchableOpacity style={styles.joinBtn} onPress={() => { setPop(null); if (onBuyPremium) onBuyPremium(); }}>
+            <Text style={styles.joinTxt}>See Premium packs</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
     );
   };
@@ -124,10 +135,10 @@ export default function VipView({
           {VIP_TIERS.map((t, i) => (
             <TouchableOpacity
               key={t.name}
-              style={[styles.tab, vipSel === i && styles.tabOn, vipOwned === i && styles.tabOwned]}
+              style={[styles.tab, vipSel === i && styles.tabOn, ownedIdx === i && styles.tabOwned]}
               onPress={() => setVipSel(i)}
             >
-              <Text style={[styles.tabTxt, vipSel === i && styles.tabTxtOn]}>{t.name}{vipOwned === i ? ' ●' : ''}</Text>
+              <Text style={[styles.tabTxt, vipSel === i && styles.tabTxtOn]}>{t.name}{ownedIdx === i ? ' ●' : ''}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
@@ -143,13 +154,16 @@ export default function VipView({
         </View>
 
         <View style={styles.userCard}>
-          <View style={styles.userAva}><Text style={styles.userAvaTxt}>M</Text></View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.userName}>{PROFILE.name}</Text>
-            <Text style={styles.userId}>ID: {PROFILE.id}</Text>
+            <Text style={styles.userName}>{vipLevel ? vipLabel(vipLevel) : 'Not a VIP member yet'}</Text>
+            <Text style={styles.userId}>
+              {vipLevel && vipUntil
+                ? `Active until ${new Date(vipUntil).toLocaleDateString()} · ${daysLeft} day${daysLeft === 1 ? '' : 's'} left`
+                : 'Your VIP status lives on your account — buy Premium to activate it.'}
+            </Text>
           </View>
-          <Text style={[styles.userStatus, vipOwned >= 0 && styles.userStatusOn]}>
-            {vipOwned >= 0 ? `${VIP_TIERS[vipOwned].name} · ${vipDaysLeft} days left` : 'Not activated yet'}
+          <Text style={[styles.userStatus, vipLevel && styles.userStatusOn]}>
+            {vipLevel ? 'Active' : 'Not activated yet'}
           </Text>
         </View>
 
@@ -160,27 +174,26 @@ export default function VipView({
         <View style={styles.grid}>{VIP_PRIV.map((bn) => renderBenefit(bn, vipSel + 1))}</View>
 
         <Text style={styles.note}>
-          যেকোনো সুবিধায় চাপ দিলে সেটা কেমন দেখায়, পপআপে দেখা যাবে। VIP কিনলে সেটা তোমার ID-র সাথে বাঁধা থাকবে — যেকোনো ডিভাইসে লগইন করলেই কাজ করবে।
+          যেকোনো সুবিধায় চাপ দিলে সেটা কেমন দেখায়, পপআপে দেখা যাবে। VIP কিনলে সেটা তোমার ID-র সাথে বাঁধা থাকবে — যেকোনো ডিভাইসে লগইন করলেই কাজ করবে। Tier prices below are preview values — Premium is bought with real money from the Premium packs, not with Diamonds.
         </Text>
-        <View style={{ height: 110 }} />
-      </ScrollView>
 
-      {/* Bottom price + buy bar */}
-      <View style={styles.buyBar}>
-        <View>
-          <Text style={styles.buyAmt}>💎 {tier.price.toLocaleString()}</Text>
-          <Text style={styles.buySub}>Diamond / 30 Days</Text>
+        <View style={styles.buyRow}>
+          <View>
+            <Text style={styles.buyAmt}>💎 {tier.price.toLocaleString()}</Text>
+            <Text style={styles.buySub}>Diamond / 30 Days — preview price, not buyable</Text>
+          </View>
+          {ownedIdx < 0 ? (
+            <TouchableOpacity style={styles.buyBtn} onPress={() => { if (onBuyPremium) onBuyPremium(); else if (onTopUp) onTopUp(); }}>
+              <Text style={styles.buyTxt}>See Premium packs</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={[styles.buyBtn, styles.buyBtnActive]}>
+              <Text style={styles.buyTxt}>{vipLabel(vipLevel)} Active · {daysLeft} days left</Text>
+            </View>
+          )}
         </View>
-        <TouchableOpacity
-          style={[styles.buyBtn, isActive && styles.buyBtnActive]}
-          onPress={buy}
-          disabled={isActive}
-        >
-          <Text style={styles.buyTxt}>
-            {isActive ? `${tier.name} Active · ${vipDaysLeft} days left` : isUpgrade ? `Upgrade to ${tier.name}` : 'Become VIP'}
-          </Text>
-        </TouchableOpacity>
-      </View>
+        <View style={{ height: 24 }} />
+      </ScrollView>
 
       {/* Benefit detail popup */}
       <Modal visible={!!pop} transparent animationType="slide" onRequestClose={() => setPop(null)}>
@@ -212,6 +225,7 @@ const styles = StyleSheet.create({
   buyBar: { alignItems: 'center', backgroundColor: '#17171d', borderTopColor: '#2a2a33', borderTopWidth: 1, bottom: 0, flexDirection: 'row', justifyContent: 'space-between', left: 0, padding: 14, position: 'absolute', right: 0 },
   buyBtn: { backgroundColor: '#f5b93f', borderRadius: 24, paddingHorizontal: 22, paddingVertical: 12 },
   buyBtnActive: { backgroundColor: '#374151' },
+  buyRow: { alignItems: 'center', backgroundColor: '#17171d', borderRadius: 14, flexDirection: 'row', justifyContent: 'space-between', marginHorizontal: 16, marginTop: 16, padding: 14 },
   buySub: { color: '#9ca3af', fontSize: 12, marginTop: 2 },
   buyTxt: { color: '#1f2937', fontSize: 14, fontWeight: 'bold' },
   grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', marginTop: 6 },
