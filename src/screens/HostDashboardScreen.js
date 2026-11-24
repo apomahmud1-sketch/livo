@@ -9,8 +9,10 @@
 // The signed-in user comes from the local session via
 // getSessionUser() (src/supabase/auth.js); user.id
 // equals profiles.id. With no session the screen prompts login
-// instead of showing anyone else's data. A host row is created on
-// demand with status 'pending' — only the Mother Panel / an admin
+// instead of showing anyone else's data. A host row is created
+// ONLY when the user taps "Apply to Become a Host" on this screen
+// — opening the dashboard no longer creates one on its own. The
+// new row has status 'pending' — only the Mother Panel / an admin
 // can approve it, so a pending host sees "Approval Pending" and
 // cannot go live until then.
 //
@@ -33,6 +35,7 @@ import {
   fetchHostEarnings,
   fetchMyWithdrawals,
   getCurrentUser,
+  getMyHostRow,
   getMyProfile,
   requestWithdrawal,
   setHostOnline,
@@ -53,6 +56,7 @@ export default function HostDashboardScreen({ navigation }) {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [hostRow, setHostRow] = useState(null);
+  const [applying, setApplying] = useState(false);
   const [earnings, setEarnings] = useState(null);
   const [withdrawals, setWithdrawals] = useState([]);
   const [online, setOnline] = useState(false);
@@ -99,9 +103,12 @@ export default function HostDashboardScreen({ navigation }) {
       // getMyProfile (host.js) does not select gender/country, so
       // merge the auth.js profile row (which does) for the Go Live
       // gender gate and any other real profile values.
+      // Read-only check on mount: the host row is created ONLY by
+      // the Apply button below, never automatically on opening this
+      // screen.
       const [prof, row, authProf] = await Promise.all([
         getMyProfile(u.id),
-        ensureHostRow(u),
+        getMyHostRow(u.id),
         fetchMyProfile(u.id),
       ]);
       if (cancelled) return;
@@ -143,6 +150,27 @@ export default function HostDashboardScreen({ navigation }) {
     ]);
     setEarnings(earn);
     setWithdrawals(wds);
+  };
+
+  // Explicit Apply step: the only way a host row gets created.
+  // The new row has status 'pending'; the Mother Panel approves it.
+  const applyToBecomeHost = async () => {
+    if (!user || applying) return;
+    setApplying(true);
+    const row = await ensureHostRow(user);
+    setApplying(false);
+    if (!row) {
+      showToast('Apply was not submitted — please try again');
+      return;
+    }
+    setHostRow(row);
+    setOnline(!!row.is_online);
+    setMyTier(row.rate_tier || 'tier2');
+    setEarnings({
+      todayCoins: 0, todayDiamonds: 0, todayCalls: 0, todayMinutes: 0,
+      totalCoins: 0, totalDiamonds: 0, totalCalls: 0, totalMinutes: 0, week: [],
+    });
+    showToast('Application sent — the Mother Panel will review it');
   };
 
   const toggleOnline = async () => {
@@ -249,6 +277,37 @@ export default function HostDashboardScreen({ navigation }) {
           <Text style={styles.loginBtnText}>Sign in</Text>
         </TouchableOpacity>
       </View>
+    );
+  }
+
+  // No host row yet: explicit Apply step. Nothing is created
+  // until the user taps Apply.
+  if (!hostRow) {
+    return (
+      <ScrollView style={styles.bg} contentContainerStyle={styles.wrap}>
+        <View style={styles.head}>
+          <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={12}>
+            <Text style={styles.back}>‹</Text>
+          </TouchableOpacity>
+          <Text style={styles.title}>Host Dashboard</Text>
+          <View style={styles.headSpacer} />
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Become a Host</Text>
+          <Text style={styles.applyText}>
+            Earn coins from video calls. Tap Apply and the Mother Panel will review your application — you can
+            go live once it is approved. Go Live is for female hosts only.
+          </Text>
+          <TouchableOpacity
+            style={[styles.goLiveBtn, applying && styles.goLiveDisabled]}
+            onPress={applyToBecomeHost}
+            disabled={applying}
+          >
+            <Text style={styles.goLiveText}>{applying ? 'Applying…' : '📝  Apply to Become a Host'}</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
     );
   }
 
@@ -478,6 +537,7 @@ export default function HostDashboardScreen({ navigation }) {
 const styles = StyleSheet.create({
   approvedBadge: { alignSelf: 'flex-start', backgroundColor: '#dcfce7', borderRadius: 12, marginTop: 6, paddingHorizontal: 10, paddingVertical: 3 },
   approvedText: { color: '#15803d', fontSize: 12, fontWeight: 'bold' },
+  applyText: { color: COLORS.dark, fontSize: 14, lineHeight: 21 },
   back: { color: COLORS.dark, fontSize: 32, fontWeight: 'bold', lineHeight: 34, width: 28 },
   balanceNote: { color: COLORS.dark, fontSize: 15, marginBottom: 12 },
   bar: { backgroundColor: '#c4b5fd', borderRadius: 4, width: '100%' },
