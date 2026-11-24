@@ -7,6 +7,7 @@ import { StatusBar } from 'expo-status-bar';
 import { House, MessageCircle, Play, UserRound, Video } from 'lucide-react-native';
 import { AppProvider, useApp } from './src/store';
 import { supabase } from './src/supabase/client';
+import { withTimeout } from './src/supabase/timeout';
 import { checkAccess, ensureProfile, fetchMyProfile, signOut } from './src/supabase/auth';
 import { getOrCreateDeviceId, registerDevice } from './src/supabase/device';
 import { useIncomingCallListener } from './src/calls/signalling';
@@ -251,20 +252,34 @@ function Root() {
       return undefined;
     }
     let mounted = true;
+    // Startup watchdog (2026-11-24): the purple loader must NEVER
+    // spin forever. If the session is still unresolved after 10s
+    // (stalled token refresh, stalled device/access check, …), fail
+    // open to the Login screen. A late-arriving session (listener
+    // / restore) still flips the gate to Main afterwards, so nobody
+    // gets locked out.
+    const watchdog = setTimeout(() => {
+      if (mounted) setSession((s) => (s === undefined ? null : s));
+    }, 10000);
     // Restore the saved session, but run the access checks BEFORE
     // showing Main — a banned/deleted account must never flash the
-    // app for a moment on launch.
-    supabase.auth.getSession().then(async ({ data }) => {
+    // app for a moment on launch. The restore is raced against a
+    // timeout: getSession() can stall on a phone when the stored
+    // token needs a network refresh, and the gate must not hang.
+    (async () => {
+      const restore = await withTimeout(supabase.auth.getSession());
       if (!mounted) return;
-      const restored = data && data.session ? data.session : null;
+      const restored = restore && restore.data && restore.data.session
+        ? restore.data.session
+        : null;
       if (!restored) { setSession(null); return; }
-      const admitted = await admitSession(restored);
+      const admitted = (await withTimeout(admitSession(restored))) === true;
       if (!mounted) return;
       if (admitted && (await resolveNeedsGender(restored.user))) {
         setNeedsGender(true);
       }
       setSession(admitted ? restored : null);
-    });
+    })();
     const { data: listener } = supabase.auth.onAuthStateChange(async (event, newSession) => {
       if (!mounted) return;
       if (event === 'SIGNED_OUT') {
@@ -288,7 +303,9 @@ function Root() {
         }
         // Device registration + ban/delete gate (best-effort: a
         // failed check lets the user in — see checkAccess).
-        const admitted = await admitSession(newSession);
+        // Timeout-raced: a stalled access check must not hang the
+        // startup gate — the watchdog below fails open to Login.
+        const admitted = (await withTimeout(admitSession(newSession))) === true;
         if (!mounted) return;
         if (admitted && (await resolveNeedsGender(newSession.user))) {
           setNeedsGender(true);
@@ -300,6 +317,7 @@ function Root() {
     });
     return () => {
       mounted = false;
+      clearTimeout(watchdog);
       listener.subscription.unsubscribe();
     };
   }, [admitSession, resolveNeedsGender]);
