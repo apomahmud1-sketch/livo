@@ -191,10 +191,14 @@ export default function HomeScreen({ navigation }) {
     <HostCard host={item} viewers={viewerCounts[item.id] ?? null} navigation={navigation} />
   ), [navigation, viewerCounts]);
 
-  // Commission banner + "Live now" header scroll with the list
-  // (hidden while searching, like the v0 phone screen).
-  const listHeader = searching ? null : (
-    <View>
+  // Commission banner — fixed directly under the region filter row
+  // (hidden while searching, like the v0 phone screen). It used to
+  // live in the FlatList header, but the region chips ScrollView
+  // carries flexGrow: 1 from RN's ScrollView base style, so it
+  // stretched tall and pushed the banner far down the screen when
+  // no hosts were live.
+  const commissionBanner = searching ? null : (
+    <View style={styles.bannerWrap}>
       <TouchableOpacity style={styles.commissionBanner} onPress={() => navigation.navigate('HostDashboard')} activeOpacity={0.9}>
         <LinearGradient
           colors={['#ff9b3f', '#ff743a', '#f7543d']}
@@ -230,21 +234,26 @@ export default function HomeScreen({ navigation }) {
           </View>
         </LinearGradient>
       </TouchableOpacity>
+    </View>
+  );
 
-      <View style={styles.liveNowRow}>
-        <View style={styles.liveNowLeft}>
-          <View style={styles.liveDot} />
-          <Text style={styles.liveNowText}>Live now</Text>
-          {/* Total pill only when at least one real viewer count is
-              known — hidden otherwise, never an invented total. */}
-          {totalLiveViewers != null ? (
-            <View style={styles.totalPill}>
-              <Text style={styles.totalPillText}>{totalLiveViewers}</Text>
-            </View>
-          ) : null}
-        </View>
-        <Text style={styles.seeAll}>See all ›</Text>
+  // "Live now" header scrolls with the list (hidden while
+  // searching). The empty state below it has no fixed height, so
+  // with no hosts live it collapses right under the banner.
+  const listHeader = searching ? null : (
+    <View style={styles.liveNowRow}>
+      <View style={styles.liveNowLeft}>
+        <View style={styles.liveDot} />
+        <Text style={styles.liveNowText}>Live now</Text>
+        {/* Total pill only when at least one real viewer count is
+            known — hidden otherwise, never an invented total. */}
+        {totalLiveViewers != null ? (
+          <View style={styles.totalPill}>
+            <Text style={styles.totalPillText}>{totalLiveViewers}</Text>
+          </View>
+        ) : null}
       </View>
+      <Text style={styles.seeAll}>See all ›</Text>
     </View>
   );
 
@@ -294,8 +303,11 @@ export default function HomeScreen({ navigation }) {
         </View>
       )}
 
-      {/* Region chips — horizontal scroll, like the v0 preview. */}
-      <ScrollView ref={regionScrollRef} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.regionList}>
+      {/* Region chips — horizontal scroll, like the v0 preview.
+          Fixed height 52: RN's horizontal ScrollView has
+          flexGrow: 1 by default and would otherwise stretch tall
+          and centre the chips far down the screen. */}
+      <ScrollView ref={regionScrollRef} horizontal showsHorizontalScrollIndicator={false} style={styles.regionScroll} contentContainerStyle={styles.regionList}>
         {regionOptions.map((r) => (
           <TouchableOpacity
             key={r.code || 'all'}
@@ -314,8 +326,11 @@ export default function HomeScreen({ navigation }) {
         </TouchableOpacity>
       </ScrollView>
 
+      {commissionBanner}
+
       <FlatList
         data={hosts}
+        style={{ flex: 1 }}
         keyExtractor={(h) => h.id}
         numColumns={2}
         columnWrapperStyle={styles.row}
@@ -365,8 +380,13 @@ const styles = StyleSheet.create({
   searchBar: { alignItems: 'center', backgroundColor: '#fff', borderRadius: 20, elevation: 2, flexDirection: 'row', marginHorizontal: 16, marginTop: 10, paddingHorizontal: 14, paddingVertical: 8 },
   searchInput: { flex: 1, fontSize: 14 },
   searchClose: { color: COLORS.grey, fontSize: 18, fontWeight: '700', marginLeft: 8 },
-  // Region chips.
+  // Region chips. Fixed height (8 + 31 chip + 13 = 52): the
+  // horizontal ScrollView's RN base style has flexGrow: 1, so
+  // without this it stretches tall and pushes the banner down.
+  regionScroll: { flexGrow: 0, flexShrink: 0, height: 52 },
   regionList: { alignItems: 'center', paddingBottom: 13, paddingHorizontal: 9, paddingTop: 8 },
+  // Banner wrapper: same 16px side inset as the list content.
+  bannerWrap: { paddingHorizontal: 16 },
   regionChip: { alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.74)', borderColor: '#e9eeea', borderRadius: 999, borderWidth: 1, flexDirection: 'row', gap: 4, height: 31, marginRight: 8, paddingHorizontal: 7 },
   regionChipActive: { backgroundColor: '#dcfce7', borderColor: '#dcfce7' },
   regionChipText: { color: '#59615b', fontSize: 10, fontWeight: '600' },
