@@ -55,6 +55,7 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { AGORA_APP_ID, AGORA_APP_ID_IS_PLACEHOLDER, COLORS } from '../config';
+import { requestCallPermissions } from '../permissions';
 
 // ── Token ──────────────────────────────────────────────────────
 // Token server base URL (no trailing slash). Empty = not deployed
@@ -561,6 +562,18 @@ export default function LiveVideo({
     let cancelled = false;
     (async () => {
       try {
+        // Permissions (Hapa-style: ask at the moment of use, never
+        // at launch): a publisher — Go Live or answering a call —
+        // is asked for mic (+ camera for video) BEFORE joining.
+        // Viewers (audience) are never asked. A denial never
+        // blocks the join — the call still connects for receiving.
+        if (role === 'host') {
+          try {
+            await requestCallPermissions({ audioOnly });
+          } catch (e) {
+            // Best-effort — join anyway.
+          }
+        }
         // Token fetch happens BEFORE joinChannel: a token is
         // minted per call, per channel (role publisher for the
         // host side, subscriber for the audience side).
