@@ -7,10 +7,11 @@ import { StatusBar } from 'expo-status-bar';
 import { House, MessageCircle, Play, UserRound, Video } from 'lucide-react-native';
 import { AppProvider, useApp } from './src/store';
 import { supabase } from './src/supabase/client';
-import { checkAccess, ensureProfile, signOut } from './src/supabase/auth';
+import { checkAccess, ensureProfile, fetchMyProfile, signOut } from './src/supabase/auth';
 import { getOrCreateDeviceId, registerDevice } from './src/supabase/device';
 import { useIncomingCallListener } from './src/calls/signalling';
 import LoginScreen from './src/screens/LoginScreen';
+import GenderScreen from './src/screens/GenderScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import VideoCallScreen from './src/screens/VideoCallScreen';
 import MessagesScreen from './src/screens/MessagesScreen';
@@ -174,6 +175,12 @@ function Root() {
   // until the user goes back to sign-in (the next sign-in re-runs
   // the check, so a restored account gets in again).
   const [blocked, setBlocked] = React.useState(null);
+  // First-login gender step: true while the signed-in profile has
+  // no gender saved — the GenderScreen shows instead of Main.
+  const [needsGender, setNeedsGender] = React.useState(false);
+  // One gender check per user id per app run (same dedupe as the
+  // access check above); cleared on sign-out.
+  const genderCheckedFor = React.useRef(null);
   // One access check per user id per app run: the initial
   // getSession() restore and the INITIAL_SESSION event describe the
   // same session, so the second one must not re-run the checks
@@ -222,6 +229,22 @@ function Root() {
     return true;
   }, [runAccessChecks]);
 
+  // First-login gender step: a profile with no gender (null/empty)
+  // must pick Male/Female before entering Main. Fail-open on a
+  // failed lookup (no network / timeout) — the prompt re-appears
+  // on the next launch instead of locking the user out.
+  const resolveNeedsGender = React.useCallback(async (user) => {
+    if (!user || genderCheckedFor.current === user.id) return false;
+    genderCheckedFor.current = user.id;
+    try {
+      const { profile, error } = await fetchMyProfile(user.id);
+      if (error || !profile) return false;
+      return !String(profile.gender || '').trim();
+    } catch (e) {
+      return false;
+    }
+  }, []);
+
   useEffect(() => {
     if (!supabase) {
       setSession(null);
@@ -237,12 +260,17 @@ function Root() {
       if (!restored) { setSession(null); return; }
       const admitted = await admitSession(restored);
       if (!mounted) return;
+      if (admitted && (await resolveNeedsGender(restored.user))) {
+        setNeedsGender(true);
+      }
       setSession(admitted ? restored : null);
     });
     const { data: listener } = supabase.auth.onAuthStateChange(async (event, newSession) => {
       if (!mounted) return;
       if (event === 'SIGNED_OUT') {
         accessCheckedFor.current = null;
+        genderCheckedFor.current = null;
+        setNeedsGender(false);
         setSession(null);
         return;
       }
@@ -262,6 +290,9 @@ function Root() {
         // failed check lets the user in — see checkAccess).
         const admitted = await admitSession(newSession);
         if (!mounted) return;
+        if (admitted && (await resolveNeedsGender(newSession.user))) {
+          setNeedsGender(true);
+        }
         setSession(admitted ? newSession : null);
         return;
       }
@@ -271,7 +302,7 @@ function Root() {
       mounted = false;
       listener.subscription.unsubscribe();
     };
-  }, [admitSession]);
+  }, [admitSession, resolveNeedsGender]);
 
   // ── Incoming-call listener (real Realtime signalling, 2026-11-22) ──
   // Subscribes to ringing calls rows for the signed-in user and
@@ -312,6 +343,17 @@ function Root() {
           <Text style={styles.blockedBtnTxt}>Back to sign-in</Text>
         </TouchableOpacity>
       </View>
+    );
+  }
+
+  // First-login gender step: the user picks Male/Female once;
+  // the screen only appears when the profile has no gender saved.
+  if (session && needsGender) {
+    return (
+      <AuthContext.Provider value={authValue}>
+        <GenderScreen onDone={() => setNeedsGender(false)} />
+        <StatusBar style="auto" />
+      </AuthContext.Provider>
     );
   }
 
