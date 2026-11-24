@@ -10,6 +10,7 @@ import { supabase } from './src/supabase/client';
 import { withTimeout } from './src/supabase/timeout';
 import { checkAccess, ensureProfile, fetchMyProfile, signOut } from './src/supabase/auth';
 import { getOrCreateDeviceId, registerDevice } from './src/supabase/device';
+import { requestNotificationPermission } from './src/permissions';
 import { useIncomingCallListener } from './src/calls/signalling';
 import LoginScreen from './src/screens/LoginScreen';
 import GenderScreen from './src/screens/GenderScreen';
@@ -311,6 +312,12 @@ function Root() {
           setNeedsGender(true);
         }
         setSession(admitted ? newSession : null);
+        if (event === 'SIGNED_IN' && admitted && newSession.user) {
+          // First-login notification prompt (Hapa-style: asked
+          // once, right after sign-in — never at launch).
+          // Fire-and-forget: the dialog must never block the gate.
+          requestNotificationPermission(newSession.user.id).catch(() => {});
+        }
         return;
       }
       setSession(newSession || null);
