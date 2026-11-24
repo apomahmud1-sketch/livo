@@ -128,6 +128,11 @@ export function AppProvider({ children }) {
   // Dashboard changes a host's online state and call-rate tier here,
   // so Home re-renders with the change. Supabase replaces this later.
   const [hosts, setHosts] = useState(HOSTS);
+  // True only once the host list verifiably came from Supabase
+  // (fetchLiveHosts returned usable rows). While false the list is
+  // still the local demo fallback — Home must never show those as
+  // live (see HomeScreen live-only filter, 2026-11-24).
+  const [liveHostsLoaded, setLiveHostsLoaded] = useState(false);
   // [Live] Catalog values from Supabase (null = not loaded / failed
   // → the config.js demo defaults below are used instead). Each
   // table is applied independently, so a missing gifts table never
@@ -165,6 +170,7 @@ export function AppProvider({ children }) {
         let usedLive = false;
         if (hostsLive && hostsLive.length > 0) {
           setHosts(hostsLive);
+          setLiveHostsLoaded(true);
           usedLive = true;
         }
         if (catalog) {
@@ -958,8 +964,8 @@ export function AppProvider({ children }) {
     // active panel frames; unreadTotal counts unread messages;
     // levelInfo is { level, points, progress } from real
     // transactions on the LV_ROWS ladder.
-    () => ({ coins, diamonds, following, toggleFollow, sendGift, spendDiamonds, buyCoinPack, buyDiamondPack, chargeCall, chargeVoiceCall, callHistory, toast, showToast, hosts, setHostOnline, setHostRate, userCountry /* [F3] */, addRewardCoins, recordSpin, recordCheckin, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, claimTask, vipLevel, vipUntil, buyVip /* [Vero] */, callRates, coinPacks, gifts, vipPacks, diamondPacks, frames, getLiveCallRate, getLiveVoiceCallRate, liveSource /* [Live] */, signedIn, walletStatus, iapStatus, transactions, refreshWallet, refreshTransactions /* [Wallet] */, unreadTotal, refreshUnreadTotal, levelInfo, updateMyProfile }),
-    [coins, diamonds, following, callHistory, toast, hosts, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, vipLevel, vipUntil, callRates, coinPacks, gifts, vipPacks, diamondPacks, frames, liveSource, signedIn, walletStatus, iapStatus, transactions, userCountry, unreadTotal, levelInfo]
+    () => ({ coins, diamonds, following, toggleFollow, sendGift, spendDiamonds, buyCoinPack, buyDiamondPack, chargeCall, chargeVoiceCall, callHistory, toast, showToast, hosts, setHostOnline, setHostRate, userCountry /* [F3] */, addRewardCoins, recordSpin, recordCheckin, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, claimTask, vipLevel, vipUntil, buyVip /* [Vero] */, callRates, coinPacks, gifts, vipPacks, diamondPacks, frames, getLiveCallRate, getLiveVoiceCallRate, liveSource /* [Live] */, liveHostsLoaded /* [Live-only Home] */, signedIn, walletStatus, iapStatus, transactions, refreshWallet, refreshTransactions /* [Wallet] */, unreadTotal, refreshUnreadTotal, levelInfo, updateMyProfile }),
+    [coins, diamonds, following, callHistory, toast, hosts, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, vipLevel, vipUntil, callRates, coinPacks, gifts, vipPacks, diamondPacks, frames, liveSource, liveHostsLoaded, signedIn, walletStatus, iapStatus, transactions, userCountry, unreadTotal, levelInfo]
     // [/F1]
   );
 
