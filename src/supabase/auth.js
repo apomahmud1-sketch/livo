@@ -257,7 +257,10 @@ export function onAuthStateChange(callback) {
 
 export async function signOut() {
   if (!supabase) return;
-  await supabase.auth.signOut();
+  // Timeout-raced: the startup gate awaits this on the banned /
+  // deleted path, and a stalled network sign-out must not hang the
+  // app on the loading screen (2026-11-24).
+  await withTimeout(supabase.auth.signOut());
 }
 
 // The public Livo user id: the Google account's "sub" (stable across
