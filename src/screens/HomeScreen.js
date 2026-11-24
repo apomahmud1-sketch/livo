@@ -5,8 +5,10 @@
 // "Live now" header, 2-column portrait live cards (Live pill with
 // green bars, name + flag + chevron on the photo, name + viewers +
 // location below, NO phone button), mint background #f0fdf4.
-// Hosts are HIS data from src/data.js (Ruma, Nusrat, Arif, Sadia,
-// Rakib offline, Priya) — v0's placeholder hosts are NOT used.
+// Hosts are the live Supabase rows (fetchLiveHosts) — Home shows
+// ONLY hosts who are really live on video (is_online + fresh
+// heartbeat). Offline hosts are hidden entirely; when nobody is
+// live the honest "No hosts live right now." empty state shows.
 // Icons are lucide-react-native (the same icon set v0 uses).
 // Behaviour kept: Stream = all hosts, Follow = followed hosts
 // (store.following, default ['2']); region chips filter by country;
@@ -88,7 +90,21 @@ const HostCard = React.memo(function HostCard({ host, viewers, navigation }) {
 export default function HomeScreen({ navigation }) {
   const [feed, setFeed] = useState('stream'); // stream | follow
   const [region, setRegion] = useState(null); // null = All, else 'BGD' / 'IND' / 'PAK'
-  const { coins, hosts: allHosts, following } = useApp();
+  const { coins, hosts: allHosts, following, liveHostsLoaded } = useApp();
+
+  // Live-only Home (2026-11-24): only hosts who are really live on
+  // video appear here. "Live" means hosts.is_online AND a fresh
+  // heartbeat (isHostOnlineNow, live.js) — the same source the Host
+  // Dashboard writes when a host toggles Online. Offline hosts are
+  // hidden entirely, never dimmed cards. liveHostsLoaded is false
+  // while the list is still the local demo fallback, so demo hosts
+  // can never show as live. Search / Follow / region all filter
+  // from this live list, so an offline host never surfaces anywhere
+  // on Home. Empty list -> the honest "No hosts live right now."
+  const liveHosts = React.useMemo(
+    () => (liveHostsLoaded ? allHosts.filter((h) => h.online) : []),
+    [allHosts, liveHostsLoaded],
+  );
 
   // [Search] Search bar — by host name or user ID.
   const regionScrollRef = useRef(null);
@@ -97,14 +113,14 @@ export default function HomeScreen({ navigation }) {
   const closeSearch = () => { setSearchText(''); setSearchOpen(false); };
   const searching = searchText.trim().length > 0;
 
-  // Region chips, derived from the real host list.
+  // Region chips, derived from the real live host list.
   const regionOptions = React.useMemo(() => {
     const seen = {};
-    allHosts.forEach((h) => { if (!seen[h.country]) seen[h.country] = true; });
+    liveHosts.forEach((h) => { if (!seen[h.country]) seen[h.country] = true; });
     return [{ code: null, label: 'All' }].concat(
       Object.keys(seen).map((c) => ({ code: c, label: COUNTRY_NAMES[c] || c }))
     );
-  }, [allHosts]);
+  }, [liveHosts]);
 
   // Live viewer counts per visible host id (null = unknown yet —
   // no count is shown until Realtime presence reports one).
@@ -116,7 +132,7 @@ export default function HomeScreen({ navigation }) {
   const totalLiveViewers = React.useMemo(() => {
     let total = 0;
     let known = false;
-    allHosts.forEach((h) => {
+    liveHosts.forEach((h) => {
       if (!h.online) return;
       const c = viewerCounts[h.id];
       if (typeof c === 'number') {
@@ -125,27 +141,27 @@ export default function HomeScreen({ navigation }) {
       }
     });
     return known ? formatTotal(total) : null;
-  }, [allHosts, viewerCounts]);
+  }, [liveHosts, viewerCounts]);
 
-  // Stream = all hosts (region filter on top, online first);
-  // Follow = only the hosts the user follows (store.following holds
-  // host ids). Searching filters by name, store id, or the host's
-  // real user id (h.userId, from profiles.user_id) instead.
+  // Stream = live hosts only (region filter on top);
+  // Follow = only the live hosts the user follows (store.following
+  // holds host ids). Searching filters by name, store id, or the
+  // host's real user id (h.userId, from profiles.user_id) instead.
   const hosts = React.useMemo(() => {
     const q = searchText.trim().toLowerCase();
     if (q) {
-      return allHosts.filter((h) =>
+      return liveHosts.filter((h) =>
         h.name.toLowerCase().includes(q) ||
         String(h.id).includes(q) ||
         (h.userId && String(h.userId).toLowerCase().includes(q))
       );
     }
     let list = feed === 'follow'
-      ? allHosts.filter((h) => following.includes(String(h.id)))
-      : allHosts;
+      ? liveHosts.filter((h) => following.includes(String(h.id)))
+      : liveHosts;
     if (region) list = list.filter((h) => h.country === region);
     return [...list].sort((a, b) => (b.online ? 1 : 0) - (a.online ? 1 : 0));
-  }, [feed, region, allHosts, following, searchText]);
+  }, [feed, region, liveHosts, following, searchText]);
 
   // Subscribe to Realtime presence for each visible host so the
   // cards show live viewer counts. Re-subscribes when the visible
