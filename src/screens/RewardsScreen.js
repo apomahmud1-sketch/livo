@@ -30,6 +30,7 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS } from '../config';
+import { useAppConfig } from '../appConfig';
 import { useApp } from '../store';
 import {
   CHECKIN_CYCLE_DAYS,
@@ -54,6 +55,9 @@ const SPIN_TURNS = 5;
 const SPIN_DURATION_MS = 4000;
 
 export default function RewardsScreen({ navigation }) {
+  // Panel toggle (app_config features.my_tasks): the Daily Tasks
+  // button below is hidden when tasks are OFF.
+  const { features } = useAppConfig();
   const {
     coins,
     addRewardCoins,
@@ -280,14 +284,17 @@ export default function RewardsScreen({ navigation }) {
           </Text>
         </TouchableOpacity>
 
-        {/* [Vero] Daily Tasks — finish tasks, earn coins. */}
-        <TouchableOpacity
-          style={styles.tasksButton}
-          onPress={() => navigation.navigate('Tasks')}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.tasksButtonText}>🎯 Daily Tasks — Earn Coins</Text>
-        </TouchableOpacity>
+        {/* [Vero] Daily Tasks — finish tasks, earn coins.
+            Hidden when the panel turns my_tasks OFF. */}
+        {features.my_tasks ? (
+          <TouchableOpacity
+            style={styles.tasksButton}
+            onPress={() => navigation.navigate('Tasks')}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.tasksButtonText}>🎯 Daily Tasks — Earn Coins</Text>
+          </TouchableOpacity>
+        ) : null}
         {/* [/Vero] */}
 
         <Text style={styles.note}>
