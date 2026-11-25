@@ -1,11 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, BackHandler, Dimensions, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, BackHandler, Dimensions, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { COLORS, PLATFORM_COMMISSION_PERCENT } from '../config';
+import { StatusBar } from 'expo-status-bar';
+import { Camera, Ellipsis, Gift, Mic, MicOff, Phone, RefreshCw, Video, Volume2, VolumeX } from 'lucide-react-native';
+import { COLORS, PLATFORM_COMMISSION_PERCENT, THEME } from '../config';
 import { useApp } from '../store';
 import { supabase } from '../supabase/client';
 import { fetchMyProfile, getSessionUser } from '../supabase/auth';
 import { joinLiveRoom, leaveLiveRoom } from '../supabase/presence';
+import GiftSheet from '../components/GiftSheet';
 // [Calls] Real signalling over Supabase Realtime (src/calls/signalling.js):
 // an OUTGOING call places its ringing row at once (no self-accept
 // step — see placeOutgoingCall); the callee's app (listening via
@@ -28,7 +31,9 @@ import LiveVideo, {
   getAgoraEngine,
   leaveAgoraChannel,
   setAgoraBeauty,
+  setAgoraCameraEnabled,
   setAgoraMuted,
+  setAgoraSpeakerphone,
   switchAgoraCamera,
 } from '../agora/LiveVideo';
 import VoiceCallScreen from './VoiceCallScreen'; // [F2] audio-only variant
@@ -129,7 +134,7 @@ export default function VideoCallScreen({ route, navigation }) {
       finishCallRef.current();
     }
   }, []);
-  const { coins, chargeCall, sendGift, showToast, vipLevel, gifts, getLiveCallRate, getLiveVoiceCallRate } = useApp();
+  const { coins, chargeCall, showToast, vipLevel, getLiveCallRate, getLiveVoiceCallRate } = useApp();
   // [Live] Rates + gifts come from the store (live Supabase rows
   // when the setup SQL is pasted, config.js demo values otherwise).
   const rate = getLiveCallRate(host ? host.rateTier : 'tier2');
@@ -167,6 +172,10 @@ export default function VideoCallScreen({ route, navigation }) {
   const [muted, setMuted] = useState(false);
   const [beauty, setBeauty] = useState(false);
   const [frontCamera, setFrontCamera] = useState(true);
+  // [New UI 2026-11-25] Camera on/off + speaker on/off + gift sheet.
+  const [cameraOn, setCameraOn] = useState(true);
+  const [speakerOn, setSpeakerOn] = useState(true);
+  const [giftOpen, setGiftOpen] = useState(false);
   // [F5] Gift currently playing the full-screen animation (null = none).
   // Only expensive gifts (price >= EXPENSIVE_GIFT_MIN_COINS) ever set this.
   const [bigGift, setBigGift] = useState(null);
@@ -472,26 +481,36 @@ export default function VideoCallScreen({ route, navigation }) {
     switchAgoraCamera();
   };
 
+  // [New UI] Camera on/off (preview control row) + speaker on/off.
+  const toggleCameraEnabled = () => {
+    const next = !cameraOn;
+    setCameraOn(next);
+    setAgoraCameraEnabled(next);
+    showToast(next ? 'Camera on' : 'Camera off');
+  };
+
+  const toggleSpeaker = () => {
+    const next = !speakerOn;
+    setSpeakerOn(next);
+    setAgoraSpeakerphone(next);
+    showToast(next ? 'Speaker on' : 'Speaker off');
+  };
+
   const toggleBeauty = () => {
     setBeauty(!beauty);
     setAgoraBeauty(!beauty);
   };
 
-  // [F5] Send a gift: charge coins via the store first, then show the
-  // full-screen animation ONLY for expensive gifts. Cheap gifts keep
-  // the old toast-only behaviour (sendGift already toasted).
+  // [F5] Expensive gifts (>= EXPENSIVE_GIFT_MIN_COINS) play the
+  // full-screen animation when sent from the Gift sheet (see the
+  // GiftSheet onSent callback below). Cheap gifts keep the
+  // toast-only behaviour (sendGift already toasted).
   // Threshold from the real gift data (gifts from the store — live
   // Supabase rows when the setup SQL is pasted, config.js demo
   // values otherwise):
   // the expensive gifts are Sports Car 2999, Rocket 4999 and
   // Castle 9999 — everything at or below Diamond Ring (999) is cheap.
   const EXPENSIVE_GIFT_MIN_COINS = 1000;
-  const handleSendGift = (gift) => {
-    if (!sendGift(gift, host)) return; // not enough coins — toast already shown
-    if (gift.price >= EXPENSIVE_GIFT_MIN_COINS) {
-      setBigGift(gift);
-    }
-  };
   // [/F5]
   // [F7] Apply a voice preset to the live Agora engine. If the engine
   // is not ready (no native module / not joined yet) the helper
@@ -516,25 +535,44 @@ export default function VideoCallScreen({ route, navigation }) {
     // screen — their real photo + name from profiles. Outgoing
     // (local) calls keep showing the host, as before. Photo, name
     // and Accept / Decline only — no rate line, no extra text.
+    // [New UI 2026-11-25] Preview style: blurred photo backdrop,
+    // 172px avatar with a violet ring, two 66px round buttons
+    // (red Reject / green Accept) with labels underneath.
     const incomingName = (isCallee && caller && caller.name) || host.name;
     const incomingPhoto = (isCallee && caller && caller.photo) || null;
     return (
-      <LinearGradient colors={[COLORS.purpleDark, COLORS.purple, COLORS.pink]} style={styles.center}>
+      <View style={styles.incomingBg}>
+        <StatusBar style="light" />
         {incomingPhoto ? (
-          <Image source={incomingPhoto} style={styles.avatarImg} />
-        ) : (
-          <Text style={styles.avatarBig}>{incomingName ? incomingName[0] : '?'}</Text>
-        )}
-        <Text style={styles.title}>{incomingName}</Text>
-        <View style={styles.row}>
-          <TouchableOpacity style={[styles.btn, styles.btnDecline]} onPress={decline}>
-            <Text style={styles.btnText}>✕ Decline</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.btn, styles.btnAccept]} onPress={accept}>
-            <Text style={styles.btnText}>✓ Accept</Text>
-          </TouchableOpacity>
+          <Image source={incomingPhoto} style={styles.incomingBgPhoto} resizeMode="cover" />
+        ) : null}
+        <LinearGradient
+          colors={['rgba(21,3,41,0.82)', 'rgba(42,17,82,0.78)', 'rgba(18,2,31,0.88)']}
+          style={styles.incomingShade}
+        />
+        <View style={styles.incomingContent}>
+          {incomingPhoto ? (
+            <Image source={incomingPhoto} style={styles.avatarImg} />
+          ) : (
+            <Text style={styles.avatarBig}>{incomingName ? incomingName[0] : '?'}</Text>
+          )}
+          <Text style={styles.incomingTitle}>{incomingName}</Text>
+          <View style={styles.incomingRow}>
+            <View style={styles.incomingBtnWrap}>
+              <TouchableOpacity style={[styles.incomingCircle, styles.btnDecline]} onPress={decline} activeOpacity={0.85}>
+                <Phone size={26} color="#fff" strokeWidth={2.2} style={{ transform: [{ rotate: '135deg' }] }} />
+              </TouchableOpacity>
+              <Text style={styles.incomingBtnLabel}>Reject</Text>
+            </View>
+            <View style={styles.incomingBtnWrap}>
+              <TouchableOpacity style={[styles.incomingCircle, styles.btnAccept]} onPress={accept} activeOpacity={0.85}>
+                <Video size={26} color="#fff" strokeWidth={2.2} />
+              </TouchableOpacity>
+              <Text style={styles.incomingBtnLabel}>Accept</Text>
+            </View>
+          </View>
         </View>
-      </LinearGradient>
+      </View>
     );
   }
 
@@ -560,13 +598,21 @@ export default function VideoCallScreen({ route, navigation }) {
   }
   // [/F2]
 
-  // calling
+  // calling — [New UI 2026-11-25] preview Video Call screen:
+  // full-screen video, timer + spent pills top-left, host name +
+  // rate pill + Camera / Mute / Speaker / Flip controls at the
+  // bottom, gift FAB + red hangup + ••• (beauty). Billing, the
+  // voice changer, the VIP vehicle entrance and the expensive-gift
+  // animation all work exactly as before. Gifts now open the
+  // shared Gift sheet instead of the inline row.
   return (
     <View style={styles.callBg}>
+      <StatusBar style="light" />
       <LiveVideo
         channel={buildChannelName(host.id)}
         role="host"
         style={styles.video}
+        showLiveChip={false}
         onJoin={() => {
           joinedRef.current = true;
           // Host going live has no accept step — talk starts when
@@ -581,118 +627,275 @@ export default function VideoCallScreen({ route, navigation }) {
         onTokenExpiring={() => showToast('Call token expiring — the call may end soon.')}
         onTokenRenewalFailed={() => showToast('Could not renew the call token — the call may drop soon.')}
       />
-      <Text style={styles.timer}>{mm}:{ss} · 🪙 {liveCost} coins</Text>
-      <Text style={styles.callName}>{host.name} · {rate.label}</Text>
+
+      {/* Top overlay: call timer + coins spent so far */}
+      <View style={styles.topOverlay} pointerEvents="box-none">
+        <View style={styles.timerPill}>
+          <View style={styles.timerDot} />
+          <Text style={styles.timerTxt}>{mm}:{ss}</Text>
+        </View>
+        <View style={styles.spentPill}>
+          <Text style={styles.spentTxt}>🪙 -{liveCost.toLocaleString()}</Text>
+        </View>
+      </View>
       {vipLevel && (
         <Animated.View style={[styles.vehicle, { transform: [{ translateX: vehicleX }] }]}>
           <Text style={styles.vehicleText}>🏎️</Text>
         </Animated.View>
       )}
 
-      {/* All gifts, horizontally scrollable — the expensive gifts
-          (>= 1000 coins, which trigger the full-screen animation)
-          used to be cut off by gifts.slice(0, 4). */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.giftRow}>
-        {gifts.map((g) => (
-          <TouchableOpacity key={g.id} style={styles.gift} onPress={() => handleSendGift(g)}>
-            <Text style={styles.giftEmoji}>{g.emoji}</Text>
-            <Text style={styles.giftPrice}>{g.price}</Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      {/* [F7] Voice changer: a pill button opens the preset panel.
-          The pill sits above the call controls so the existing
-          4-button controls row is untouched. Tapping a preset
-          applies it to the live Agora engine at once. */}
-      <TouchableOpacity
-        style={styles.voicePill}
-        onPress={() => setVoicePanelOpen(!voicePanelOpen)}
-      >
-        <Text style={styles.voicePillText}>
-          🎤 Voice: {getVoicePresetLabel(voicePreset)} {voicePanelOpen ? '▴' : '▾'}
-        </Text>
-      </TouchableOpacity>
-      {voicePanelOpen ? (
-        <View style={styles.voicePanel}>
-          {VOICE_PRESETS.map((p) => (
-            <TouchableOpacity
-              key={p.id}
-              style={[styles.voiceChip, voicePreset === p.id && styles.voiceChipOn]}
-              onPress={() => selectVoice(p.id)}
-            >
-              <Text style={styles.voiceChipEmoji}>{p.emoji}</Text>
-              <Text style={[styles.voiceChipText, voicePreset === p.id && styles.voiceChipTextOn]}>
-                {p.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
+      {/* Bottom overlay: host, rate, controls, actions */}
+      <View style={styles.bottomOverlay} pointerEvents="box-none">
+        <View style={styles.callNameRow}>
+          <Text style={styles.callName}>{host.name}</Text>
+          <Text style={styles.callFemale}>♀</Text>
+          {host.country ? <Text style={styles.callFlag}>{host.country}</Text> : null}
         </View>
-      ) : null}
-      {/* [/F7] */}
+        <View style={styles.ratePill}>
+          <Text style={styles.ratePillTxt}>🪙 {rate.coinsPerMinute} Coins / Min</Text>
+        </View>
 
-      <View style={styles.controls}>
-        <TouchableOpacity style={[styles.ctrl, muted && styles.ctrlOff]} onPress={toggleMute}>
-          <Text style={styles.ctrlText}>{muted ? '🔇' : '🎙️'}</Text>
+        {/* [F7] Voice changer: a pill button opens the preset panel. */}
+        <TouchableOpacity
+          style={styles.voicePill}
+          onPress={() => setVoicePanelOpen(!voicePanelOpen)}
+        >
+          <Text style={styles.voicePillText}>
+            🎤 Voice: {getVoicePresetLabel(voicePreset)} {voicePanelOpen ? '▴' : '▾'}
+          </Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.ctrl} onPress={toggleCamera}>
-          <Text style={styles.ctrlText}>🔄</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.ctrl, beauty && styles.ctrlOn]} onPress={toggleBeauty}>
-          <Text style={styles.ctrlText}>✨</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.ctrl, styles.endBtn]} onPress={endCall}>
-          <Text style={styles.ctrlText}>📞</Text>
-        </TouchableOpacity>
+        {voicePanelOpen ? (
+          <View style={styles.voicePanel}>
+            {VOICE_PRESETS.map((p) => (
+              <TouchableOpacity
+                key={p.id}
+                style={[styles.voiceChip, voicePreset === p.id && styles.voiceChipOn]}
+                onPress={() => selectVoice(p.id)}
+              >
+                <Text style={styles.voiceChipEmoji}>{p.emoji}</Text>
+                <Text style={[styles.voiceChipText, voicePreset === p.id && styles.voiceChipTextOn]}>
+                  {p.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : null}
+        {/* [/F7] */}
+
+        <View style={styles.controls}>
+          <View style={styles.ctrlWrap}>
+            <TouchableOpacity style={[styles.ctrl, !cameraOn && styles.ctrlOff]} onPress={toggleCameraEnabled}>
+              <Camera size={22} color={cameraOn ? '#fff' : '#22103f'} strokeWidth={2.2} />
+            </TouchableOpacity>
+            <Text style={styles.ctrlLabel}>Camera</Text>
+          </View>
+          <View style={styles.ctrlWrap}>
+            <TouchableOpacity style={[styles.ctrl, muted && styles.ctrlOff]} onPress={toggleMute}>
+              {muted
+                ? <MicOff size={22} color="#22103f" strokeWidth={2.2} />
+                : <Mic size={22} color="#fff" strokeWidth={2.2} />}
+            </TouchableOpacity>
+            <Text style={styles.ctrlLabel}>Mute</Text>
+          </View>
+          <View style={styles.ctrlWrap}>
+            <TouchableOpacity style={[styles.ctrl, !speakerOn && styles.ctrlOff]} onPress={toggleSpeaker}>
+              {speakerOn
+                ? <Volume2 size={22} color="#fff" strokeWidth={2.2} />
+                : <VolumeX size={22} color="#22103f" strokeWidth={2.2} />}
+            </TouchableOpacity>
+            <Text style={styles.ctrlLabel}>Speaker</Text>
+          </View>
+          <View style={styles.ctrlWrap}>
+            <TouchableOpacity style={styles.ctrl} onPress={toggleCamera}>
+              <RefreshCw size={22} color="#fff" strokeWidth={2.2} />
+            </TouchableOpacity>
+            <Text style={styles.ctrlLabel}>Flip</Text>
+          </View>
+        </View>
+
+        <View style={styles.actionRow}>
+          <TouchableOpacity onPress={() => setGiftOpen(true)} activeOpacity={0.85}>
+            <LinearGradient colors={['#a855f7', '#7b2ff7']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.giftFab}>
+              <Gift size={24} color="#fff" strokeWidth={2.2} />
+            </LinearGradient>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.hangupBtn} onPress={endCall} activeOpacity={0.85}>
+            <Phone size={28} color="#fff" strokeWidth={2.2} style={{ transform: [{ rotate: '135deg' }] }} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.moreBtn, beauty && styles.moreBtnOn]}
+            onPress={() => {
+              toggleBeauty();
+              showToast(!beauty ? 'Beauty on' : 'Beauty off');
+            }}
+            activeOpacity={0.85}
+          >
+            <Ellipsis size={22} color="#fff" strokeWidth={2.4} />
+          </TouchableOpacity>
+        </View>
+        {/* [F7] Voice label added to the existing hint line. */}
+        <Text style={styles.hint}>Beauty {beauty ? 'on' : 'off'} · Mic {muted ? 'muted' : 'on'} · Voice {getVoicePresetLabel(voicePreset)} · Live video via Agora</Text>
+        {/* [/F7] */}
       </View>
       {/* [F5] Full-screen animation overlay for an expensive gift (pointerEvents="none" inside — never blocks the call controls). senderName is the signed-in user's real username (fetched from their profiles row), not demo data. */}
       <FullScreenGift gift={bigGift} senderName={senderName || 'You'} visible={!!bigGift} onDone={() => setBigGift(null)} />
       {/* [/F5] */}
-      {/* [F7] Voice label added to the existing hint line. */}
-      <Text style={styles.hint}>Beauty {beauty ? 'on' : 'off'} · Mic {muted ? 'muted' : 'on'} · Voice {getVoicePresetLabel(voicePreset)} · Live video via Agora</Text>
-      {/* [/F7] */}
+      {/* [New UI] Shared Gift sheet: sending charges real coins via
+          the store; expensive gifts also play the full-screen
+          animation above. */}
+      <GiftSheet
+        visible={giftOpen}
+        host={host}
+        onClose={() => setGiftOpen(false)}
+        onSent={(gift) => {
+          if (gift.price >= EXPENSIVE_GIFT_MIN_COINS) setBigGift(gift);
+        }}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  avatarBig: { backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 60, color: '#fff', fontSize: 64, fontWeight: 'bold', height: 120, lineHeight: 120, overflow: 'hidden', textAlign: 'center', width: 120 },
+  avatarBig: { backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 86, color: '#fff', fontSize: 72, fontWeight: 'bold', height: 172, lineHeight: 172, overflow: 'hidden', textAlign: 'center', width: 172 },
   // [Calls] Real caller photo on the incoming screen (from profiles).
-  avatarImg: { borderRadius: 60, height: 120, width: 120 },
+  avatarImg: {
+    borderColor: '#c084fc',
+    borderRadius: 86,
+    borderWidth: 3,
+    height: 172,
+    width: 172,
+  },
   btn: { backgroundColor: COLORS.purple, borderRadius: 24, marginTop: 16, paddingHorizontal: 24, paddingVertical: 12 },
-  btnAccept: { backgroundColor: COLORS.green, marginLeft: 12 },
-  btnDecline: { backgroundColor: '#ef4444' },
+  btnAccept: { backgroundColor: '#1fc457' },
+  btnDecline: { backgroundColor: '#ef2b3c' },
   btnText: { color: '#fff', fontWeight: 'bold' },
-  callBg: { backgroundColor: '#111827', flex: 1, padding: 16, paddingTop: 48 },
-  callName: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginTop: 8, textAlign: 'center' },
+  // [New UI] Incoming call: blurred photo backdrop + violet shade.
+  incomingBg: { backgroundColor: '#12021f', flex: 1 },
+  incomingBgPhoto: { height: '100%', position: 'absolute', width: '100%' },
+  incomingShade: { bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 },
+  incomingContent: { alignItems: 'center', flex: 1, justifyContent: 'center', padding: 24 },
+  incomingTitle: { color: '#fff', fontSize: 27, fontWeight: '900', marginTop: 18, textAlign: 'center' },
+  incomingRow: { flexDirection: 'row', gap: 56, marginTop: 64 },
+  incomingBtnWrap: { alignItems: 'center' },
+  incomingCircle: {
+    alignItems: 'center',
+    borderRadius: 33,
+    elevation: 8,
+    height: 66,
+    justifyContent: 'center',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.5,
+    shadowRadius: 26,
+    width: 66,
+  },
+  incomingBtnLabel: { color: '#fff', fontSize: 14, fontWeight: '800', marginTop: 8 },
   center: { alignItems: 'center', flex: 1, justifyContent: 'center', padding: 24 },
-  controls: { flexDirection: 'row', justifyContent: 'center', marginTop: 20 },
-  ctrl: { alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 30, height: 60, justifyContent: 'center', marginHorizontal: 8, width: 60 },
-  ctrlOff: { backgroundColor: '#ef4444' },
-  ctrlOn: { backgroundColor: COLORS.pink },
-  ctrlText: { fontSize: 24 },
-  endBtn: { backgroundColor: '#ef4444' },
-  gift: { alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 12, marginHorizontal: 6, padding: 8, width: 64 },
-  giftEmoji: { fontSize: 26 },
-  giftPrice: { color: '#fff', fontSize: 12 },
-  giftRow: { flexDirection: 'row', justifyContent: 'center', marginTop: 16 },
-  hint: { color: '#9ca3af', fontSize: 12, marginTop: 16, textAlign: 'center' },
-  row: { flexDirection: 'row', marginTop: 8 },
-  timer: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginTop: 12, textAlign: 'center' },
+  // [New UI] Calling: full-screen video, overlays float on top.
+  callBg: { backgroundColor: '#000', flex: 1 },
+  video: { borderRadius: 0, flex: 1 },
+  topOverlay: { left: 16, position: 'absolute', top: 48 },
+  timerPill: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(10,0,20,0.5)',
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 11,
+    paddingVertical: 5,
+  },
+  timerDot: { backgroundColor: '#2ee66b', borderRadius: 4, height: 8, width: 8 },
+  timerTxt: { color: '#fff', fontSize: 13.5, fontWeight: '900' },
+  spentPill: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(10,0,20,0.5)',
+    borderRadius: 999,
+    marginTop: 6,
+    paddingHorizontal: 11,
+    paddingVertical: 5,
+  },
+  spentTxt: { color: THEME.gold2, fontSize: 13.5, fontWeight: '900' },
+  bottomOverlay: { bottom: 0, left: 0, paddingBottom: 20, paddingHorizontal: 16, position: 'absolute', right: 0 },
+  callNameRow: { alignItems: 'center', flexDirection: 'row', gap: 6 },
+  callName: { color: '#fff', fontSize: 16, fontWeight: '900', textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 8 },
+  callFemale: { color: THEME.pinkLight, fontSize: 14, fontWeight: '800' },
+  callFlag: { backgroundColor: 'rgba(255,255,255,0.18)', borderRadius: 5, color: '#fff', fontSize: 10, fontWeight: '900', letterSpacing: 0.4, overflow: 'hidden', paddingHorizontal: 5, paddingVertical: 2 },
+  ratePill: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(20,4,40,0.66)',
+    borderColor: 'rgba(247,183,51,0.4)',
+    borderRadius: 999,
+    borderWidth: 1,
+    marginTop: 8,
+    paddingHorizontal: 13,
+    paddingVertical: 6,
+  },
+  ratePillTxt: { color: '#ffe9a8', fontSize: 13.5, fontWeight: '900' },
+  controls: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 16, maxWidth: 320, width: '100%' },
+  ctrlWrap: { alignItems: 'center' },
+  ctrl: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(20,4,40,0.55)',
+    borderColor: 'rgba(255,255,255,0.25)',
+    borderRadius: 25,
+    borderWidth: 1,
+    height: 50,
+    justifyContent: 'center',
+    width: 50,
+  },
+  ctrlOff: { backgroundColor: '#fff' },
+  ctrlLabel: { color: '#fff', fontSize: 11.5, fontWeight: '800', marginTop: 5 },
+  actionRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginTop: 16, maxWidth: 320, width: '100%' },
+  giftFab: {
+    alignItems: 'center',
+    borderRadius: 16,
+    elevation: 6,
+    height: 52,
+    justifyContent: 'center',
+    shadowColor: '#8b3dff',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.55,
+    shadowRadius: 20,
+    width: 52,
+  },
+  hangupBtn: {
+    alignItems: 'center',
+    backgroundColor: '#ef2b3c',
+    borderRadius: 32,
+    elevation: 8,
+    height: 64,
+    justifyContent: 'center',
+    shadowColor: '#ef2b3c',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.55,
+    shadowRadius: 26,
+    width: 64,
+  },
+  moreBtn: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(20,4,40,0.55)',
+    borderColor: 'rgba(255,255,255,0.25)',
+    borderRadius: 26,
+    borderWidth: 1,
+    height: 52,
+    justifyContent: 'center',
+    width: 52,
+  },
+  moreBtnOn: { backgroundColor: THEME.pink },
+  hint: { color: 'rgba(255,255,255,0.55)', fontSize: 11.5, marginTop: 14, textAlign: 'center' },
   title: { color: COLORS.dark, fontSize: 26, fontWeight: 'bold', marginTop: 16, textAlign: 'center' },
-  video: { height: 300 },
   // [Vero] Rare Vehicle entrance effect.
   vehicle: { position: 'absolute', top: 64, zIndex: 5 },
   vehicleText: { fontSize: 48 },
   // [/Vero]
   // [F7] Voice changer panel styles.
-  voiceChip: { alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 12, margin: 4, paddingVertical: 8, width: 96 },
+  voiceChip: { alignItems: 'center', backgroundColor: 'rgba(20,4,40,0.55)', borderRadius: 12, margin: 4, paddingVertical: 8, width: 96 },
   voiceChipEmoji: { fontSize: 22 },
-  voiceChipOn: { backgroundColor: COLORS.pink },
+  voiceChipOn: { backgroundColor: THEME.pink },
   voiceChipText: { color: '#fff', fontSize: 12, fontWeight: 'bold', marginTop: 2 },
   voiceChipTextOn: { color: '#fff' },
   voicePanel: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', marginTop: 12 },
-  voicePill: { alignSelf: 'center', backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 16, marginTop: 12, paddingHorizontal: 16, paddingVertical: 8 },
+  voicePill: { alignSelf: 'center', backgroundColor: 'rgba(20,4,40,0.55)', borderRadius: 16, marginTop: 12, paddingHorizontal: 16, paddingVertical: 8 },
   voicePillText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
   // [/F7]
 });
