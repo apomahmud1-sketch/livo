@@ -208,6 +208,7 @@ export async function fetchLiveHosts() {
     return {
       id: String(row.host_id),
       userId: prof.user_id || null,
+      profileId: row.profile_id || null, // [New UI] profiles.id — lets Matching exclude yourself
       name: prof.username || (demo && demo.name) || `Host ${row.host_id}`,
       country,
       flag: FLAG_FOR_COUNTRY[country] || '🌍',
