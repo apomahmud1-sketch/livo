@@ -1112,7 +1112,7 @@ const styles = StyleSheet.create({
   menuEmoji: { fontSize: 16 },
   menuIcon: { alignItems: 'center', borderRadius: 9, height: 32, justifyContent: 'center', width: 32 },
   menuLabel: { flex: 1, fontSize: 14, marginLeft: 10 },
-  menuRow: { alignItems: 'center', borderBottomWidth: 1, flex: 1, flexDirection: 'row', paddingVertical: 10 },
+  menuRow: { alignItems: 'center', borderBottomWidth: 1, flexDirection: 'row', paddingVertical: 10 },
   moonBtn: { alignItems: 'center', justifyContent: 'center' },
   moonEmoji: { fontSize: 20 },
   myBeans: { fontSize: 15, fontWeight: 'bold', marginHorizontal: 16, marginTop: 16 },
@@ -1237,5 +1237,5 @@ const styles = StyleSheet.create({
   headerCard: { borderRadius: 16, padding: 14 },
   incomeVal: { color: '#b45309', fontSize: 13, fontWeight: 'bold' },
   mainPad: { flex: 1, paddingHorizontal: 14, paddingTop: 12 },
-  menuCard: { borderRadius: 16, flex: 1, marginTop: 12, overflow: 'hidden', paddingHorizontal: 4 },
+  menuCard: { borderRadius: 16, flex: 1, justifyContent: 'space-evenly', marginTop: 12, overflow: 'hidden', paddingHorizontal: 4 },
 });
