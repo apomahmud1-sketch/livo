@@ -18,6 +18,25 @@ export const AGORA_APP_ID =
 
 export const AGORA_APP_ID_IS_PLACEHOLDER = !AGORA_APP_ID;
 
+// ── Google Sign-In (native) ───────────────────────────────────────
+// The Web OAuth client ID of the Google Cloud project that owns the
+// Supabase Google provider (the same project as the Android OAuth
+// client for com.livo.app). The native Google Sign-In module mints
+// an ID token for THIS client; Supabase validates it against the
+// provider config in the dashboard. The value lives in app.json
+// extra.googleOAuth.webClientId. Until the real value is pasted
+// there, the app silently uses the browser Google flow — login
+// never breaks.
+export const GOOGLE_WEB_CLIENT_ID =
+  (Constants.expoConfig &&
+    Constants.expoConfig.extra &&
+    Constants.expoConfig.extra.googleOAuth &&
+    Constants.expoConfig.extra.googleOAuth.webClientId) ||
+  '';
+
+export const GOOGLE_WEB_CLIENT_ID_IS_CONFIGURED =
+  !!GOOGLE_WEB_CLIENT_ID && !GOOGLE_WEB_CLIENT_ID.startsWith('REPLACE_WITH');
+
 // ── 5 call-rate tiers (coins per minute) ─────────────────────────
 // Admin can rename tiers, change any price, add or remove tiers
 // from the admin panel at any time. Demo prices below.
