@@ -22,6 +22,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { THEME } from '../config';
+import { useAppConfig } from '../appConfig';
 import { useApp } from '../store';
 import { AuthContext } from '../../App';
 import { supabase } from '../supabase/client';
@@ -37,14 +38,17 @@ import {
   LANGUAGES, PRICE_OPTS, PROFILE_MEDALS,
 } from './profile/levelData';
 
-function themeFor(dark) {
-  return dark
-    ? { bg: '#111827', surface: '#1f2937', surface2: '#374151', text: '#f9fafb', muted: '#9ca3af', border: '#374151', cardBg: '#1f2937' }
-    // [New UI 2026-11-25] Default theme is now the preview's dark
-    // purple + gold (bg deep purple, panels #1e0a3d / #2a1152,
-    // lavender text, gold accents). The dark toggle still switches
-    // to the old grey-dark theme above.
-    : { bg: '#150329', surface: '#1e0a3d', surface2: '#2a1152', text: '#f6f1ff', muted: '#b9a8d9', border: 'rgba(255,255,255,0.09)', cardBg: '#1e0a3d' };
+// Panel theme (app_config): cfg is the full THEME-shaped object
+// from useAppConfig(). The dark toggle still switches to the old
+// grey-dark theme; the default purple theme now follows the panel:
+// background -> bg/surface, card -> surface2, primary -> violet,
+// gold -> gold. Colours only — layout is untouched.
+function themeFor(dark, cfg) {
+  if (dark) {
+    return { bg: '#111827', surface: '#1f2937', surface2: '#374151', text: '#f9fafb', muted: '#9ca3af', border: '#374151', cardBg: '#1f2937', gold: '#f5b93f', violet: '#7c3aed' };
+  }
+  const t = cfg || THEME;
+  return { bg: t.page, surface: t.panel, surface2: t.panel2, text: t.text, muted: t.dim, border: t.line, cardBg: t.panel, gold: t.gold, violet: t.violet };
 }
 
 // store vipLevel is a pack id such as 'vip1' — display it as 'VIP 1'.
@@ -56,6 +60,8 @@ function vipLabel(v) {
 
 export default function ProfileScreen({ navigation }) {
   const { coins, diamonds, showToast, vipLevel, vipUntil, following, levelInfo, updateMyProfile, frames } = useApp();
+  // Panel-driven config (app_config): theme colours + feature toggles.
+  const { theme: cfgTheme, features } = useAppConfig();
 
   // ── Real signed-in user ──
   // user = Supabase auth user (Google account); profile = the user's
@@ -221,7 +227,7 @@ export default function ProfileScreen({ navigation }) {
   // Delete-account two-step confirm (Settings section).
   const [confirmDelete, setConfirmDelete] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
-  const t = themeFor(dark);
+  const t = themeFor(dark, cfgTheme);
 
   const myLevelLabel = levelInfo && typeof levelInfo.level === 'number' ? `Lv${levelInfo.level}` : '—';
   const vipDaysLeft = vipUntil ? Math.max(0, Math.ceil((new Date(vipUntil).getTime() - Date.now()) / 86400000)) : 0;
@@ -478,7 +484,7 @@ export default function ProfileScreen({ navigation }) {
   const avatarView = (size, radius) => (avatarUri
     ? <Image source={{ uri: avatarUri }} style={{ width: size, height: size, borderRadius: radius }} />
     : (
-      <View style={[styles.avatarFallback, { width: size, height: size, borderRadius: radius }]}>
+      <View style={[styles.avatarFallback, { backgroundColor: t.violet, width: size, height: size, borderRadius: radius }]}>
         <Text style={styles.avatarFallbackTxt}>{(PROFILE.name || '?').charAt(0).toUpperCase()}</Text>
       </View>
     ));
@@ -519,7 +525,7 @@ export default function ProfileScreen({ navigation }) {
           <View style={[styles.headerCard, { backgroundColor: t.surface }]}>
             <View style={styles.idHead}>
               <TouchableOpacity onPress={() => setView('profile')} activeOpacity={0.8} accessibilityLabel="Tap the photo to open the My Profile page">
-                {vipLevel ? (
+                {vipLevel && features.vip ? (
                   <VipFrame frame="gold" size={78}>
                     {avatarView(64, 32)}
                   </VipFrame>
@@ -530,8 +536,8 @@ export default function ProfileScreen({ navigation }) {
               <View style={styles.idMain}>
                 <View style={styles.nameRow}>
                   <Text style={[styles.name, { color: t.text }]}>{PROFILE.name || 'Not set'}</Text>
-                  {vipLevel ? (
-                    <TouchableOpacity style={styles.vipBadge} onPress={() => setView('vip')}>
+                  {vipLevel && features.vip ? (
+                    <TouchableOpacity style={[styles.vipBadge, { backgroundColor: t.gold }]} onPress={() => setView('vip')}>
                       <Text style={styles.vipBadgeTxt}>👑 {vipLabel(vipLevel)}</Text>
                     </TouchableOpacity>
                   ) : null}
@@ -595,7 +601,7 @@ export default function ProfileScreen({ navigation }) {
             </Text>
           )}
 
-          <TouchableOpacity style={styles.goldBanner} onPress={goWallet} activeOpacity={0.85}>
+          <TouchableOpacity style={[styles.goldBanner, { backgroundColor: t.gold }]} onPress={goWallet} activeOpacity={0.85}>
             <Text style={styles.goldBannerIcon}>🪙</Text>
             <View style={{ flex: 1 }}>
               <Text style={styles.goldBannerTitle}>My Wallet</Text>
@@ -605,22 +611,24 @@ export default function ProfileScreen({ navigation }) {
           </TouchableOpacity>
 
           <View style={styles.darkRow}>
-            <TouchableOpacity style={styles.darkCard} onPress={() => setView('level')} activeOpacity={0.85}>
-              <Text style={styles.darkCardTitle}>My Level</Text>
+            <TouchableOpacity style={[styles.darkCard, { backgroundColor: t.panel2 }]} onPress={() => setView('level')} activeOpacity={0.85}>
+              <Text style={[styles.darkCardTitle, { color: t.gold }]}>My Level</Text>
               <Text style={styles.darkCardValue}>{myLevelLabel}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.darkCard} onPress={() => setView('vip')} activeOpacity={0.85}>
-              <Text style={styles.darkCardTitle}>VIP</Text>
-              <Text style={styles.darkCardValue}>{vipLevel ? `${vipLabel(vipLevel)}${vipDaysLeft > 0 ? ` · ${vipDaysLeft}d left` : ''}` : 'Member Centre'}</Text>
-            </TouchableOpacity>
+            {features.vip ? (
+              <TouchableOpacity style={[styles.darkCard, { backgroundColor: t.panel2 }]} onPress={() => setView('vip')} activeOpacity={0.85}>
+                <Text style={[styles.darkCardTitle, { color: t.gold }]}>VIP</Text>
+                <Text style={styles.darkCardValue}>{vipLevel ? `${vipLabel(vipLevel)}${vipDaysLeft > 0 ? ` · ${vipDaysLeft}d left` : ''}` : 'Member Centre'}</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
 
           <View style={[styles.menuCard, { backgroundColor: t.surface }]}>
             {menuRow('💬', '#fde7f1', 'Messages', null, () => navigation.navigate('MessagesTab'))}
-            {menuRow('🎥', '#fde7f1', 'Host Dashboard', <Text style={styles.tagGreen}>Approved</Text>, () => navigation.navigate('HostDashboard'))}
-            {menuRow('✅', '#e2f5ec', 'My Tasks', <Text style={styles.tagPink}>New Reward</Text>, () => navigation.navigate('Tasks'))}
-            {menuRow('🎡', '#fef3c7', 'Lucky Spin', <Text style={styles.tagPink}>Free spin</Text>, () => navigation.navigate('Rewards'))}
-            {menuRow('💬', '#e0f5fa', 'Chat Price', <Text style={styles.chatPriceVal}>{chatPrice ? `${chatPrice.toLocaleString()}/min` : 'Not set'}</Text>, () => setView('chatprice'))}
+            {features.host_dashboard ? menuRow('🎥', '#fde7f1', 'Host Dashboard', <Text style={styles.tagGreen}>Approved</Text>, () => navigation.navigate('HostDashboard')) : null}
+            {features.my_tasks ? menuRow('✅', '#e2f5ec', 'My Tasks', <Text style={styles.tagPink}>New Reward</Text>, () => navigation.navigate('Tasks')) : null}
+            {features.lucky_spin ? menuRow('🎡', '#fef3c7', 'Lucky Spin', <Text style={styles.tagPink}>Free spin</Text>, () => navigation.navigate('Rewards')) : null}
+            {features.chat_price ? menuRow('💬', '#e0f5fa', 'Chat Price', <Text style={styles.chatPriceVal}>{chatPrice ? `${chatPrice.toLocaleString()}/min` : 'Not set'}</Text>, () => setView('chatprice')) : null}
             {menuRow('👤', '#e0f5fa', 'My Profile', null, () => setView('profile'))}
             {menuRow('⚙️', '#eef0f4', 'Settings', null, () => setView('settings'))}
           </View>
@@ -645,7 +653,7 @@ export default function ProfileScreen({ navigation }) {
                   {PRICE_OPTS.map((v) => (
                     <TouchableOpacity
                       key={v}
-                      style={[styles.priceOpt, chatPrice === v && styles.priceOptSel]}
+                      style={[styles.priceOpt, chatPrice === v && { backgroundColor: t.violet, borderColor: t.violet }]}
                       onPress={() => { setChatPrice(v); showToast(`Video Call Price set: ${v.toLocaleString()}/min`); }}
                     >
                       <Text style={[styles.priceOptTxt, chatPrice === v && styles.priceOptTxtSel]}>{v.toLocaleString()}/min</Text>
@@ -678,7 +686,7 @@ export default function ProfileScreen({ navigation }) {
           <View style={styles.heroWrap}>
             {avatarUri
               ? <Image source={{ uri: avatarUri }} style={styles.heroImg} />
-              : <View style={[styles.heroImg, styles.heroFallback]} />}
+              : <View style={[styles.heroImg, styles.heroFallback, { backgroundColor: t.violet }]} />}
             <TouchableOpacity onPress={() => setView('main')} style={styles.heroBack}>
               <Text style={styles.heroBackTxt}>‹</Text>
             </TouchableOpacity>
@@ -692,8 +700,8 @@ export default function ProfileScreen({ navigation }) {
               <View style={{ flex: 1 }}>
                 <View style={styles.pfNameRow}>
                   <Text style={[styles.pfName, { color: t.text }]}>{PROFILE.name || 'Not set'}</Text>
-                  <Text style={styles.onlineBadge}>● Online</Text>
-                  {vipLevel ? <Text style={styles.vipBadge2}>👑 {vipLabel(vipLevel)}</Text> : null}
+                  <Text style={[styles.onlineBadge, { backgroundColor: t.violet }]}>● Online</Text>
+                  {vipLevel && features.vip ? <Text style={[styles.vipBadge2, { backgroundColor: t.gold }]}>👑 {vipLabel(vipLevel)}</Text> : null}
                 </View>
                 <Text style={[styles.pfStats, { color: t.muted }]}>Follow <Text style={{ fontWeight: 'bold', color: t.text }}>{following.length}</Text>   Fans <Text style={{ fontWeight: 'bold', color: t.text }}>—</Text></Text>
               </View>
@@ -751,7 +759,7 @@ export default function ProfileScreen({ navigation }) {
             ) : null}
 
             <View style={[styles.pfCard, { backgroundColor: t.surface2 }]}>
-              <TouchableOpacity style={styles.pfBannerGold} onPress={() => setView('badge')}>
+              <TouchableOpacity style={[styles.pfBannerGold, { backgroundColor: t.gold }]} onPress={() => setView('badge')}>
                 <Text style={styles.pfBannerTitle}>Badge</Text>
                 <Text style={styles.pfBannerIcon}>🏆</Text>
                 <Text style={styles.pfBannerChev}>›</Text>
@@ -794,7 +802,7 @@ export default function ProfileScreen({ navigation }) {
           <Text style={[styles.sec, { color: t.text }]}>Activity Medal</Text>
           <View style={styles.badgeGrid}>
             {BADGES_ACTIVITY.map((b) => (
-              <TouchableOpacity key={b.n} style={[styles.badgeItem, { backgroundColor: t.surface }, badgeDetail && badgeDetail.n === b.n && styles.badgeSel]} onPress={() => setBadgeDetail(b)}>
+              <TouchableOpacity key={b.n} style={[styles.badgeItem, { backgroundColor: t.surface }, badgeDetail && badgeDetail.n === b.n && { borderColor: t.gold, borderWidth: 2 }]} onPress={() => setBadgeDetail(b)}>
                 <View style={[styles.badgeIcon, { backgroundColor: b.bg }]}><Text style={styles.badgeEmoji}>{b.icon}</Text></View>
                 <Text style={[styles.badgeName, { color: t.text }]}>{b.n}</Text>
                 <Text style={[styles.badgeProg, { color: t.muted }]}>{b.p}</Text>
@@ -804,7 +812,7 @@ export default function ProfileScreen({ navigation }) {
           <Text style={[styles.sec, { color: t.text }]}>Achievement</Text>
           <View style={styles.badgeGrid}>
             {BADGES_ACH.map((b) => (
-              <TouchableOpacity key={b.n} style={[styles.badgeItem, { backgroundColor: t.surface }, badgeDetail && badgeDetail.n === b.n && styles.badgeSel]} onPress={() => setBadgeDetail(b)}>
+              <TouchableOpacity key={b.n} style={[styles.badgeItem, { backgroundColor: t.surface }, badgeDetail && badgeDetail.n === b.n && { borderColor: t.gold, borderWidth: 2 }]} onPress={() => setBadgeDetail(b)}>
                 <View style={[styles.badgeIcon, { backgroundColor: b.bg }]}><Text style={styles.badgeEmoji}>{b.icon}</Text></View>
                 <Text style={[styles.badgeName, { color: t.text }]}>{b.n}</Text>
                 <Text style={[styles.badgeProg, { color: t.muted }]}>{b.p}</Text>
@@ -874,7 +882,7 @@ export default function ProfileScreen({ navigation }) {
               {['male', 'female'].map((g) => (
                 <TouchableOpacity
                   key={g}
-                  style={[styles.genderBtn, gender === g && styles.genderBtnOn]}
+                  style={[styles.genderBtn, gender === g && { backgroundColor: t.violet, borderColor: t.violet }]}
                   onPress={() => persistGender(g)}
                 >
                   <Text style={[styles.genderBtnTxt, gender === g && styles.genderBtnTxtOn]}>{g === 'male' ? 'Male' : 'Female'}</Text>
@@ -923,7 +931,7 @@ export default function ProfileScreen({ navigation }) {
               placeholderTextColor={t.muted}
               multiline
             />
-            <TouchableOpacity style={[styles.bigGradBtn, saving && { opacity: 0.5 }]} onPress={saveProfile} disabled={saving}>
+            <TouchableOpacity style={[styles.bigGradBtn, { backgroundColor: t.violet }, saving && { opacity: 0.5 }]} onPress={saveProfile} disabled={saving}>
               <Text style={styles.bigGradTxt}>{saving ? 'Saving…' : 'Save Profile'}</Text>
             </TouchableOpacity>
           </View>
@@ -942,7 +950,7 @@ export default function ProfileScreen({ navigation }) {
                 onPress={() => pickSecondLang(en)}
               >
                 <Text style={[styles.langName, { color: t.text }]}>{en} <Text style={{ color: t.muted }}>{native}</Text></Text>
-                {secondLang === en && <Text style={styles.langTick}>✓</Text>}
+                {secondLang === en && <Text style={[styles.langTick, { color: t.gold }]}>✓</Text>}
               </TouchableOpacity>
             ))}
           </View>
