@@ -14,7 +14,8 @@ import { FlatList, Image, StyleSheet, Text, TouchableOpacity, View } from 'react
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 import { Bell, Crown, Eye, Users, Video, Zap } from 'lucide-react-native';
-import { THEME, formatViewers } from '../config';
+import { formatViewers } from '../config';
+import { shadeColor, useAppConfig } from '../appConfig';
 import { useApp } from '../store';
 import { subscribeRoomViewers } from '../supabase/presence';
 import { CoinIcon } from '../components/GiftSheet';
@@ -22,7 +23,7 @@ import { CoinIcon } from '../components/GiftSheet';
 // Live host card, like the preview: full-bleed photo, LIVE badge
 // top-left, gold rate pill top-right, name + pink ♀ + country code
 // + real viewer count at the bottom. Tapping opens the Live Room.
-const HostCard = React.memo(function HostCard({ host, viewers, rate, navigation }) {
+const HostCard = React.memo(function HostCard({ host, viewers, rate, navigation, styles }) {
   return (
     <TouchableOpacity
       style={styles.card}
@@ -72,6 +73,9 @@ const HostCard = React.memo(function HostCard({ host, viewers, rate, navigation 
 
 export default function HomeScreen({ navigation }) {
   const { coins, hosts: allHosts, liveHostsLoaded, unreadTotal, getLiveCallRate, showToast } = useApp();
+  // Panel-driven config (app_config): theme colours, hero text, notice.
+  const { theme: T, homeHero, noticeText } = useAppConfig();
+  const styles = React.useMemo(() => makeStyles(T), [T]);
 
   // Live-only Home: only hosts who are really live on video appear
   // here. "Live" means hosts.is_online AND a fresh heartbeat
@@ -118,25 +122,33 @@ export default function HomeScreen({ navigation }) {
       viewers={viewerCounts[item.id] ?? null}
       rate={getLiveCallRate(item.rateTier).coinsPerMinute}
       navigation={navigation}
+      styles={styles}
     />
-  ), [navigation, viewerCounts, getLiveCallRate]);
+  ), [navigation, viewerCounts, getLiveCallRate, styles]);
 
   const goMatching = () => navigation.navigate('Matching');
 
   const listHeader = (
     <View>
-      {/* Hero banner */}
+      {/* App notice from the Mother Panel (app_config notice.text).
+          Empty text = no banner at all. */}
+      {noticeText ? (
+        <View style={styles.noticeBanner}>
+          <Text style={styles.noticeText}>{noticeText}</Text>
+        </View>
+      ) : null}
+      {/* Hero banner — title + subtitle come from app_config home_hero. */}
       <LinearGradient
-        colors={['#5b21b6', '#9333ea', '#db2777']}
+        colors={[T.violet, T.purple, T.pink]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.hero}
       >
-        <Text style={styles.heroTitle}>1v1 Video Call</Text>
-        <Text style={styles.heroSub}>Find your best match!</Text>
+        <Text style={styles.heroTitle}>{homeHero.title}</Text>
+        <Text style={styles.heroSub}>{homeHero.subtitle}</Text>
         <TouchableOpacity onPress={goMatching} activeOpacity={0.85}>
           <LinearGradient
-            colors={['#ff5da2', '#f43f9e']}
+            colors={[T.pinkLight, T.pink]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 0 }}
             style={styles.startMatchBtn}
@@ -149,7 +161,7 @@ export default function HomeScreen({ navigation }) {
       {/* Three tiles */}
       <View style={styles.tiles}>
         <TouchableOpacity onPress={goMatching} activeOpacity={0.85} style={styles.tileWrap}>
-          <LinearGradient colors={['#8b3dff', '#6d28d9']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.tile}>
+          <LinearGradient colors={[T.violet, T.violetDark]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.tile}>
             <View style={styles.tileIcon}><Zap size={20} color="#ffd23e" strokeWidth={2.4} /></View>
             <Text style={styles.tileTitle}>Quick Match</Text>
             <Text style={styles.tileSub}>1v1 Chat</Text>
@@ -188,11 +200,11 @@ export default function HomeScreen({ navigation }) {
   );
 
   return (
-    <LinearGradient colors={['#341064', '#1c0538', '#12021f']} style={styles.bg}>
+    <LinearGradient colors={[T.panel2, T.deep, shadeColor(T.page, -45)]} style={styles.bg}>
       <StatusBar style="light" />
       <View style={styles.topBar}>
         <View style={styles.logo}>
-          <Crown size={19} color={THEME.gold} strokeWidth={2.4} />
+          <Crown size={19} color={T.gold} strokeWidth={2.4} />
           <Text style={styles.logoTxt}>Livo</Text>
         </View>
         <TouchableOpacity
@@ -209,7 +221,7 @@ export default function HomeScreen({ navigation }) {
           onPress={() => navigation.navigate('MessagesTab')}
           activeOpacity={0.8}
         >
-          <Bell size={19} color={THEME.text} strokeWidth={2} />
+          <Bell size={19} color={T.text} strokeWidth={2} />
           {unreadTotal > 0 ? (
             <View style={styles.bellBadge}>
               <Text style={styles.bellBadgeTxt}>{unreadTotal > 9 ? '9+' : unreadTotal}</Text>
@@ -236,7 +248,7 @@ export default function HomeScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (t) => StyleSheet.create({
   bg: { flex: 1, paddingTop: 40 },
   // Top bar: crown + Livo wordmark, coin pill, bell.
   topBar: { alignItems: 'center', flexDirection: 'row', paddingBottom: 10, paddingHorizontal: 16, paddingTop: 8 },
@@ -255,8 +267,8 @@ const styles = StyleSheet.create({
     paddingRight: 6,
     paddingTop: 5,
   },
-  coinText: { color: THEME.text, fontSize: 14.5, fontWeight: '900' },
-  coinPlus: { alignItems: 'center', backgroundColor: THEME.violet, borderRadius: 12, height: 24, justifyContent: 'center', width: 24 },
+  coinText: { color: t.text, fontSize: 14.5, fontWeight: '900' },
+  coinPlus: { alignItems: 'center', backgroundColor: t.violet, borderRadius: 12, height: 24, justifyContent: 'center', width: 24 },
   coinPlusTxt: { color: '#fff', fontSize: 15, fontWeight: '900', lineHeight: 17 },
   bellBtn: {
     alignItems: 'center',
@@ -269,7 +281,7 @@ const styles = StyleSheet.create({
   },
   bellBadge: {
     alignItems: 'center',
-    backgroundColor: THEME.red,
+    backgroundColor: t.red,
     borderRadius: 8,
     height: 16,
     justifyContent: 'center',
@@ -282,6 +294,9 @@ const styles = StyleSheet.create({
   bellBadgeTxt: { color: '#fff', fontSize: 9.5, fontWeight: '900' },
   // Hero banner.
   hero: { borderRadius: 20, marginHorizontal: 14, marginTop: 2, minHeight: 158, paddingHorizontal: 18, paddingVertical: 18 },
+  // App notice banner (Mother Panel) — gold bg, dark text.
+  noticeBanner: { backgroundColor: t.gold, borderRadius: 12, marginHorizontal: 14, marginTop: 2, paddingHorizontal: 14, paddingVertical: 10 },
+  noticeText: { color: '#1f2937', fontSize: 13.5, fontWeight: '700' },
   heroTitle: { color: '#ffe259', fontSize: 21, fontWeight: '900', textShadowColor: 'rgba(0,0,0,0.35)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 10 },
   heroSub: { color: '#fff', fontSize: 13.5, fontWeight: '700', marginTop: 4 },
   startMatchBtn: { alignSelf: 'flex-start', borderRadius: 999, marginTop: 16, minHeight: 40, paddingHorizontal: 17, paddingVertical: 9 },
@@ -295,17 +310,17 @@ const styles = StyleSheet.create({
   tileSub: { color: 'rgba(255,255,255,0.85)', fontSize: 11, fontWeight: '600', marginTop: 1 },
   // Section header.
   sectionHead: { alignItems: 'center', flexDirection: 'row', gap: 8, marginBottom: 11, marginHorizontal: 16, marginTop: 19 },
-  sectionTitle: { color: THEME.text, fontSize: 17, fontWeight: '900' },
-  seeAll: { color: THEME.dim, fontSize: 13, fontWeight: '800' },
+  sectionTitle: { color: t.text, fontSize: 17, fontWeight: '900' },
+  seeAll: { color: t.dim, fontSize: 13, fontWeight: '800' },
   // Host grid.
   list: { paddingBottom: 24, paddingHorizontal: 14 },
   row: { gap: 11 },
   card: { flex: 1, marginBottom: 11 },
-  photo: { alignItems: 'center', aspectRatio: 3 / 3.9, backgroundColor: THEME.panel2, borderRadius: 17, justifyContent: 'center', overflow: 'hidden' },
+  photo: { alignItems: 'center', aspectRatio: 3 / 3.9, backgroundColor: t.panel2, borderRadius: 17, justifyContent: 'center', overflow: 'hidden' },
   photoImg: { height: '100%', position: 'absolute', width: '100%' },
   photoShade: { bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 },
   avatar: { color: '#fff', fontSize: 56, fontWeight: '700' },
-  liveBadge: { alignItems: 'center', backgroundColor: THEME.red, borderRadius: 6, flexDirection: 'row', gap: 4, left: 8, paddingHorizontal: 7, paddingVertical: 3, position: 'absolute', top: 8 },
+  liveBadge: { alignItems: 'center', backgroundColor: t.red, borderRadius: 6, flexDirection: 'row', gap: 4, left: 8, paddingHorizontal: 7, paddingVertical: 3, position: 'absolute', top: 8 },
   liveDot: { backgroundColor: '#fff', borderRadius: 3, height: 6, width: 6 },
   liveText: { color: '#fff', fontSize: 10, fontWeight: '900', letterSpacing: 0.6 },
   ratePill: {
@@ -322,14 +337,14 @@ const styles = StyleSheet.create({
     right: 8,
     top: 8,
   },
-  rateText: { color: THEME.gold2, fontSize: 10.5, fontWeight: '900' },
+  rateText: { color: t.gold2, fontSize: 10.5, fontWeight: '900' },
   cardBottom: { bottom: 10, left: 10, position: 'absolute', right: 10 },
   nameRow: { alignItems: 'center', flexDirection: 'row', gap: 4 },
   name: { color: '#fff', fontSize: 14.5, fontWeight: '800' },
-  female: { color: THEME.pinkLight, fontSize: 12, fontWeight: '800' },
+  female: { color: t.pinkLight, fontSize: 12, fontWeight: '800' },
   metaRow: { alignItems: 'center', flexDirection: 'row', gap: 6, marginTop: 4 },
   flagChip: { backgroundColor: 'rgba(255,255,255,0.18)', borderRadius: 5, color: '#fff', fontSize: 10, fontWeight: '900', letterSpacing: 0.4, overflow: 'hidden', paddingHorizontal: 5, paddingVertical: 2 },
   viewers: { alignItems: 'center', flexDirection: 'row', gap: 3 },
   viewersText: { color: '#e7dcff', fontSize: 11.5, fontWeight: '700' },
-  empty: { color: THEME.dim, fontSize: 14, marginTop: 40, textAlign: 'center' },
+  empty: { color: t.dim, fontSize: 14, marginTop: 40, textAlign: 'center' },
 });
