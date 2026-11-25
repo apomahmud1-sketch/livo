@@ -3,25 +3,28 @@ import { Alert, Image, ImageBackground, SafeAreaView, StyleSheet, Text, Touchabl
 import { Video } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Path, Svg } from 'react-native-svg';
-import { COLORS } from '../config';
 import { signInWithGoogle } from '../supabase/auth';
+import { useAppConfig } from '../appConfig';
 
 // Real login: Google (Gmail) via Supabase Auth. On success the App.js
 // auth gate switches to Main automatically — this screen never
 // navigates itself. (The old fake goHome() that just jumped to Main
 // is gone.)
 //
-// Design (Hapa-style, 2026-11-25): full-screen looping muted
-// background VIDEO (assets/login-bg.mp4 — free Pexels stock, young
-// woman dancing with headphones) with login-poster.jpg underneath
-// as the fallback if the video cannot play; Livo icon + title in
-// the middle; gold/cream "Continue with Google" button with the
-// real multicolour Google G; Terms of Service / Privacy Policy
-// links below. Google-only login — NO "Continue with Password"
-// button (his decision: Google-only; password login is a separate
-// step if he ever asks). 18+ Agree stays mandatory before sign-in.
-// The Agree text wraps in its own flex:1 container so it can never
-// clip at the right edge. Safe-area aware, 360dp-safe.
+// Login design comes from the Mother Panel (app_config login_style):
+// 'neon' | 'white' | 'pink' | 'blue'. EVERY variant is Google-only
+// login with the 18+ agreement mandatory before sign-in — the design
+// changes, the rules never do. Legal pages open INSIDE the app
+// (LegalScreen) — never a browser.
+//
+//   neon  — Neon Party (default): looping background video + poster,
+//           purple/pink overlay, gold "Continue with Google" button.
+//   white — Clean White: plain professional white, panel-primary
+//           title + button, dark text.
+//   pink  — Party Pink (Bigo/Chamet-style): pink gradient, white
+//           button, white text.
+//   blue  — Ocean Blue: light-blue image background, white card at
+//           the bottom holding the button + agreement.
 function GoogleG({ size = 22 }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 48 48">
@@ -45,12 +48,65 @@ function GoogleG({ size = 22 }) {
   );
 }
 
+// Colours per login variant. `primary` is the panel theme primary
+// (app_config theme.primary); `gold` the panel gold.
+function paletteFor(style, primary) {
+  switch (style) {
+    case 'white':
+      return {
+        bg: 'plain', bgColor: '#ffffff',
+        title: primary, subtitle: '#111827', tagline: '#6b7280', rule: primary,
+        btnBg: primary, btnText: '#ffffff',
+        agree: '#374151', link: primary, footnote: '#9ca3af',
+        terms: '#6b7280', termsDot: '#9ca3af',
+        checkBorder: '#9ca3af', checkOn: primary, checkMark: '#ffffff',
+        cardBg: null,
+      };
+    case 'pink':
+      return {
+        bg: 'gradient', gradient: ['#f9a8d4', '#ec4899', '#be185d'],
+        title: '#ffffff', subtitle: '#ffffff', tagline: 'rgba(255,255,255,0.9)', rule: '#ffffff',
+        btnBg: '#ffffff', btnText: '#be185d',
+        agree: '#ffffff', link: '#ffffff', footnote: 'rgba(255,255,255,0.75)',
+        terms: 'rgba(255,255,255,0.85)', termsDot: 'rgba(255,255,255,0.7)',
+        checkBorder: '#ffffff', checkOn: '#ffffff', checkMark: '#ec4899',
+        cardBg: null,
+      };
+    case 'blue':
+      return {
+        bg: 'image-blue',
+        overlay: ['rgba(186,230,253,0.30)', 'rgba(125,211,252,0.35)', 'rgba(59,130,246,0.50)'],
+        title: '#ffffff', subtitle: '#ffffff', tagline: 'rgba(255,255,255,0.9)', rule: '#ffffff',
+        btnBg: primary, btnText: '#ffffff',
+        agree: '#374151', link: primary, footnote: '#9ca3af',
+        terms: '#6b7280', termsDot: '#9ca3af',
+        checkBorder: '#9ca3af', checkOn: primary, checkMark: '#ffffff',
+        cardBg: '#ffffff',
+      };
+    case 'neon':
+    default:
+      return {
+        bg: 'video',
+        overlay: ['rgba(30,27,75,0.55)', 'rgba(124,58,237,0.25)', 'rgba(236,72,153,0.55)'],
+        title: '#ffffff', subtitle: '#ffffff', tagline: 'rgba(255,255,255,0.85)', rule: '#ec4899',
+        btnBg: '#fff6cf', btnText: '#1e293b',
+        agree: '#f3f4f6', link: '#ffffff', footnote: 'rgba(255,255,255,0.65)',
+        terms: 'rgba(255,255,255,0.75)', termsDot: 'rgba(255,255,255,0.7)',
+        checkBorder: '#ffffff', checkOn: '#ec4899', checkMark: '#ffffff',
+        cardBg: null,
+      };
+  }
+}
+
 export default function LoginScreen({ navigation }) {
   const [agreed, setAgreed] = useState(true);
   const [busy, setBusy] = useState(false);
   // Video failed to load/play — hide it so the poster underneath
   // shows instead of a black box.
   const [videoFailed, setVideoFailed] = useState(false);
+  // Login design + panel primary colour (app_config).
+  const { loginStyle, theme } = useAppConfig();
+  const p = paletteFor(loginStyle, theme.violet);
   // Legal pages open INSIDE the app (LegalScreen) — never a browser.
   const openLegal = (kind) => {
     if (navigation) navigation.navigate('Legal', { kind });
@@ -84,33 +140,50 @@ export default function LoginScreen({ navigation }) {
 
   return (
     <View style={styles.bg}>
-      {/* Poster fallback layer — always underneath the video. */}
-      <ImageBackground source={require('../../assets/login-poster.jpg')} resizeMode="cover" style={StyleSheet.absoluteFill} />
-      {!videoFailed && (
-        <Video
-          source={require('../../assets/login-bg.mp4')}
-          style={StyleSheet.absoluteFill}
-          resizeMode={Video.RESIZE_MODE_COVER}
-          shouldPlay
-          isLooping
-          isMuted
-          onError={() => setVideoFailed(true)}
-        />
+      {/* Background layer — depends on the selected login design. */}
+      {p.bg === 'video' && (
+        <>
+          {/* Poster fallback layer — always underneath the video. */}
+          <ImageBackground source={require('../../assets/login-poster.jpg')} resizeMode="cover" style={StyleSheet.absoluteFill} />
+          {!videoFailed && (
+            <Video
+              source={require('../../assets/login-bg.mp4')}
+              style={StyleSheet.absoluteFill}
+              resizeMode={Video.RESIZE_MODE_COVER}
+              shouldPlay
+              isLooping
+              isMuted
+              onError={() => setVideoFailed(true)}
+            />
+          )}
+          <LinearGradient colors={p.overlay} style={StyleSheet.absoluteFill} />
+        </>
       )}
-      <LinearGradient colors={['rgba(30,27,75,0.55)', 'rgba(124,58,237,0.25)', 'rgba(236,72,153,0.55)']} style={StyleSheet.absoluteFill} />
+      {p.bg === 'plain' && (
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: p.bgColor }]} />
+      )}
+      {p.bg === 'gradient' && (
+        <LinearGradient colors={p.gradient} style={StyleSheet.absoluteFill} />
+      )}
+      {p.bg === 'image-blue' && (
+        <>
+          <ImageBackground source={require('../../assets/login-poster.jpg')} resizeMode="cover" style={StyleSheet.absoluteFill} />
+          <LinearGradient colors={p.overlay} style={StyleSheet.absoluteFill} />
+        </>
+      )}
       <SafeAreaView style={styles.safe}>
         <View style={styles.content}>
           <View style={styles.hero}>
             <Image source={require('../../assets/icon.png')} style={styles.appIcon} />
-            <Text style={styles.title}>Livo</Text>
-            <View style={styles.rule} />
-            <Text style={styles.subtitle}>Premium 1-to-1 video calls</Text>
-            <Text style={styles.tagline}>Meet real hosts, live — anytime.</Text>
+            <Text style={[styles.title, { color: p.title }]}>Livo</Text>
+            <View style={[styles.rule, { backgroundColor: p.rule }]} />
+            <Text style={[styles.subtitle, { color: p.subtitle }]}>Premium 1-to-1 video calls</Text>
+            <Text style={[styles.tagline, { color: p.tagline }]}>Meet real hosts, live — anytime.</Text>
           </View>
 
-          <View style={styles.bottom}>
+          <View style={[styles.bottom, p.cardBg && styles.bottomCard]}>
             <TouchableOpacity
-              style={[styles.googleBtn, busy && styles.btnDisabled]}
+              style={[styles.googleBtn, { backgroundColor: p.btnBg }, busy && styles.btnDisabled]}
               onPress={signIn}
               disabled={busy}
               activeOpacity={0.85}
@@ -118,28 +191,28 @@ export default function LoginScreen({ navigation }) {
               <View style={styles.gIcon}>
                 <GoogleG size={22} />
               </View>
-              <Text style={styles.googleBtnText}>{busy ? 'Signing in…' : 'Continue with Google'}</Text>
+              <Text style={[styles.googleBtnText, { color: p.btnText }]}>{busy ? 'Signing in…' : 'Continue with Google'}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.agreeRow} onPress={() => setAgreed(!agreed)} activeOpacity={0.8}>
-              <View style={[styles.checkbox, agreed && styles.checkboxOn]}>
-                {agreed && <Text style={styles.check}>✓</Text>}
+              <View style={[styles.checkbox, { borderColor: p.checkBorder }, agreed && { backgroundColor: p.checkOn, borderColor: p.checkOn }]}>
+                {agreed && <Text style={[styles.check, { color: p.checkMark }]}>✓</Text>}
               </View>
               <View style={styles.agreeTextWrap}>
-                <Text style={styles.agreeText}>
-                  Agree to <Text style={styles.link} onPress={() => openLegal('terms')}>User Agreement</Text> &amp; <Text style={styles.link} onPress={() => openLegal('privacy')}>Privacy Policy</Text> and confirm I'm over 18
+                <Text style={[styles.agreeText, { color: p.agree }]}>
+                  Agree to <Text style={[styles.link, { color: p.link }]} onPress={() => openLegal('terms')}>User Agreement</Text> &amp; <Text style={[styles.link, { color: p.link }]} onPress={() => openLegal('privacy')}>Privacy Policy</Text> and confirm I'm over 18
                 </Text>
               </View>
             </TouchableOpacity>
 
-            <Text style={styles.termsLine}>By continuing, you agree to our</Text>
+            <Text style={[styles.termsLine, { color: p.terms }]}>By continuing, you agree to our</Text>
             <Text style={styles.termsLinks}>
-              <Text style={styles.link} onPress={() => openLegal('terms')}>Terms of Service</Text>
-              <Text style={styles.termsDot}>  ·  </Text>
-              <Text style={styles.link} onPress={() => openLegal('privacy')}>Privacy Policy</Text>
+              <Text style={[styles.link, { color: p.link }]} onPress={() => openLegal('terms')}>Terms of Service</Text>
+              <Text style={[styles.termsDot, { color: p.termsDot }]}>  ·  </Text>
+              <Text style={[styles.link, { color: p.link }]} onPress={() => openLegal('privacy')}>Privacy Policy</Text>
             </Text>
 
-            <Text style={styles.footnote}>18+ only · Sign in with your Google account</Text>
+            <Text style={[styles.footnote, { color: p.footnote }]}>18+ only · Sign in with your Google account</Text>
           </View>
         </View>
       </SafeAreaView>
@@ -151,16 +224,18 @@ const styles = StyleSheet.create({
   agreeRow: { alignItems: 'flex-start', flexDirection: 'row', marginTop: 18, paddingHorizontal: 6 },
   // The Text lives in its own flex:1 wrapper so it always wraps
   // inside the screen — never clipped at the right edge.
-  agreeText: { color: '#f3f4f6', flexShrink: 1, flexWrap: 'wrap', fontSize: 12.5, lineHeight: 18 },
+  agreeText: { flexShrink: 1, flexWrap: 'wrap', fontSize: 12.5, lineHeight: 18 },
   agreeTextWrap: { flex: 1, flexShrink: 1 },
   appIcon: { borderRadius: 22, height: 92, marginBottom: 10, width: 92 },
   bg: { flex: 1 },
   bottom: { marginTop: 'auto', paddingBottom: 8 },
+  // Ocean Blue variant: the bottom section sits in a white card
+  // that stretches full-width to the bottom edge of the screen.
+  bottomCard: { backgroundColor: '#ffffff', borderTopLeftRadius: 28, borderTopRightRadius: 28, marginBottom: -24, marginHorizontal: -28, paddingBottom: 8, paddingHorizontal: 28, paddingTop: 22 },
   btnDisabled: { opacity: 0.65 },
-  check: { color: '#fff', fontSize: 13, fontWeight: 'bold', lineHeight: 15 },
+  check: { fontSize: 13, fontWeight: 'bold', lineHeight: 15 },
   checkbox: {
     alignItems: 'center',
-    borderColor: '#fff',
     borderRadius: 6,
     borderWidth: 2,
     flexShrink: 0,
@@ -170,14 +245,14 @@ const styles = StyleSheet.create({
     marginTop: 1,
     width: 22,
   },
-  checkboxOn: { backgroundColor: COLORS.pink, borderColor: COLORS.pink },
   content: { flex: 1, paddingBottom: 24, paddingHorizontal: 28, paddingTop: 24 },
-  footnote: { color: 'rgba(255,255,255,0.65)', fontSize: 11, marginTop: 14, textAlign: 'center' },
+  footnote: { fontSize: 11, marginTop: 14, textAlign: 'center' },
   gIcon: { marginRight: 12 },
-  // Hapa-style gold/cream button: pale gold background, dark text.
+  // Google button: background + text colour come from the selected
+  // login design (gold/cream on neon, panel primary on white/blue,
+  // white on pink).
   googleBtn: {
     alignItems: 'center',
-    backgroundColor: '#fff6cf',
     borderRadius: 30,
     elevation: 4,
     flexDirection: 'row',
@@ -189,18 +264,17 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 6,
   },
-  googleBtnText: { color: '#1e293b', fontSize: 16, fontWeight: '700' },
+  googleBtnText: { fontSize: 16, fontWeight: '700' },
   hero: { alignItems: 'center', flex: 1, justifyContent: 'center' },
-  link: { color: '#fff', fontWeight: '600', textDecorationLine: 'underline' },
-  rule: { backgroundColor: '#ec4899', borderRadius: 2, height: 3, marginTop: 14, width: 48 },
+  link: { fontWeight: '600', textDecorationLine: 'underline' },
+  rule: { borderRadius: 2, height: 3, marginTop: 14, width: 48 },
   safe: { flex: 1 },
-  subtitle: { color: '#fff', fontSize: 16, fontWeight: '600', marginTop: 14, textAlign: 'center' },
-  tagline: { color: 'rgba(255,255,255,0.85)', fontSize: 13, marginTop: 6, textAlign: 'center' },
-  termsDot: { color: 'rgba(255,255,255,0.7)' },
-  termsLine: { color: 'rgba(255,255,255,0.75)', fontSize: 12, marginTop: 16, textAlign: 'center' },
+  subtitle: { fontSize: 16, fontWeight: '600', marginTop: 14, textAlign: 'center' },
+  tagline: { fontSize: 13, marginTop: 6, textAlign: 'center' },
+  termsDot: {},
+  termsLine: { fontSize: 12, marginTop: 16, textAlign: 'center' },
   termsLinks: { fontSize: 13, marginTop: 4, textAlign: 'center' },
   title: {
-    color: '#fff',
     fontSize: 58,
     fontWeight: '800',
     letterSpacing: 2,
