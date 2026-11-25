@@ -45,12 +45,16 @@ function GoogleG({ size = 22 }) {
   );
 }
 
-export default function LoginScreen() {
+export default function LoginScreen({ navigation }) {
   const [agreed, setAgreed] = useState(true);
   const [busy, setBusy] = useState(false);
   // Video failed to load/play — hide it so the poster underneath
   // shows instead of a black box.
   const [videoFailed, setVideoFailed] = useState(false);
+  // Legal pages open INSIDE the app (LegalScreen) — never a browser.
+  const openLegal = (kind) => {
+    if (navigation) navigation.navigate('Legal', { kind });
+  };
   // The App.js gate unmounts this screen the moment sign-in
   // succeeds — never setState after unmount.
   const mountedRef = useRef(true);
@@ -123,16 +127,16 @@ export default function LoginScreen() {
               </View>
               <View style={styles.agreeTextWrap}>
                 <Text style={styles.agreeText}>
-                  Agree to <Text style={styles.link}>User Agreement</Text> &amp; <Text style={styles.link}>Privacy Policy</Text> and confirm I'm over 18
+                  Agree to <Text style={styles.link} onPress={() => openLegal('terms')}>User Agreement</Text> &amp; <Text style={styles.link} onPress={() => openLegal('privacy')}>Privacy Policy</Text> and confirm I'm over 18
                 </Text>
               </View>
             </TouchableOpacity>
 
             <Text style={styles.termsLine}>By continuing, you agree to our</Text>
             <Text style={styles.termsLinks}>
-              <Text style={styles.link}>Terms of Service</Text>
+              <Text style={styles.link} onPress={() => openLegal('terms')}>Terms of Service</Text>
               <Text style={styles.termsDot}>  ·  </Text>
-              <Text style={styles.link}>Privacy Policy</Text>
+              <Text style={styles.link} onPress={() => openLegal('privacy')}>Privacy Policy</Text>
             </Text>
 
             <Text style={styles.footnote}>18+ only · Sign in with your Google account</Text>
