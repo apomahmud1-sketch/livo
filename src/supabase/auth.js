@@ -1,45 +1,36 @@
 // ─────────────────────────────────────────────────────────────────
 // Livo — real Google (Gmail) sign-in via Supabase Auth.
 //
-// TWO ways in, same Supabase session at the end:
+// NATIVE ONLY (2026-11-25) — the user wants sign-in to stay 100%
+// inside the app: NO browser opens during login, ever. The old
+// browser fallback (Supabase signInWithOAuth + expo-web-browser)
+// was REMOVED 2026-11-25.
 //
-//   A. NATIVE (Hapa-style, 2026-11-25) —
-//      @react-native-google-signin/google-signin shows the native
-//      Android account picker ("to continue to Livo") and returns
-//      an ID token; supabase.auth.signInWithIdToken({ provider:
-//      'google', token }) turns it into a Supabase session. No
-//      browser opens at all. Needs (a) an APK built WITH the
-//      native module and (b) the real Web client ID in app.json
-//      extra.googleOAuth.webClientId, from the Google Cloud project
-//      that owns the Supabase Google provider — with an Android
-//      OAuth client for com.livo.app + the signing SHA-1 in that
-//      project, or Google answers DEVELOPER_ERROR.
-//   B. BROWSER (fallback) — signInWithOAuth({ provider: 'google',
-//      skipBrowserRedirect: true }) returns the Google consent URL;
-//      expo-web-browser opens it; Google shows "to continue to
-//      wpqtynqtbmcwsoscnyih.supabase.co"; after the user picks
-//      their Gmail account, Google redirects back into the app via
-//      the "livo://" scheme and we exchange the PKCE code for a
-//      session. Used whenever the native path is unavailable
-//      (no native module in this APK, no client ID configured yet,
-//      or the native attempt fails) — login never breaks.
+//   @react-native-google-signin/google-signin shows the native
+//   Android account picker ("to continue to Livo") and returns
+//   an ID token; supabase.auth.signInWithIdToken({ provider:
+//   'google', token }) turns it into a Supabase session. Needs
+//   (a) an APK built WITH the native module and (b) the real Web
+//   client ID in app.json extra.googleOAuth.webClientId, from the
+//   Google Cloud project that owns the Supabase Google provider
+//   — with an Android OAuth client for com.livo.app + the signing
+//   SHA-1 in that project, or Google answers DEVELOPER_ERROR and
+//   the login screen shows "Google sign-in isn't set up for this
+//   app yet." There is NO browser fallback any more: until the
+//   Android OAuth client exists, login cannot succeed — the
+//   Google Cloud console step is the only fix.
 //
 // The native module is LAZY-required inside signInWithGoogleNative
 // (never a top-level import): the library calls
 // TurboModuleRegistry.getEnforcing('RNGoogleSignin') at import
 // time, which throws on APKs built before the module was added —
-// an OTA carrying this file to an older APK must fall back to the
-// browser flow, not crash the app.
+// an OTA carrying this file to an older APK returns the "isn't
+// set up yet" error instead of crashing the app.
 //
-// expo-auth-session and expo-web-browser ARE installed and the
-// browser Google sign-in works (verified on device 2026-11-23).
-//
-// CONSOLE SETUP (done 2026-11-23, browser flow):
+// CONSOLE SETUP (done 2026-11-23):
 //   • Google Cloud Console → OAuth client (Android + iOS + Web) →
 //     Client ID + Client Secret into Supabase Dashboard →
 //     Authentication → Providers → Google.
-//   • Supabase Dashboard → Authentication → URL Configuration →
-//     Redirect URLs: add  livo://**
 // NATIVE SETUP (still to do, 2026-11-25):
 //   • Same Google Cloud project → Credentials → Create OAuth
 //     client ID → Android → package com.livo.app + SHA-1 of the
@@ -49,42 +40,25 @@
 //     extra.googleOAuth.webClientId (the same Web client already
 //     configured in the Supabase Google provider).
 // ─────────────────────────────────────────────────────────────────
-import * as AuthSession from 'expo-auth-session';
-import * as WebBrowser from 'expo-web-browser';
 import { supabase } from './client';
 import { withTimeout } from './timeout';
 import { GOOGLE_WEB_CLIENT_ID, GOOGLE_WEB_CLIENT_ID_IS_CONFIGURED } from '../config';
 
-WebBrowser.maybeCompleteAuthSession();
-
-// Must match app.json "scheme": "livo".
-const REDIRECT_SCHEME = 'livo';
-
-export function getRedirectUrl() {
-  return AuthSession.makeRedirectUri({ scheme: REDIRECT_SCHEME });
-}
-
-// Parse the URL the browser hands back to the app after Google.
-// PKCE flow → ?code=… ; implicit flow → #access_token=…&refresh_token=…
-function parseAuthResult(url) {
-  try {
-    const parsed = new URL(url);
-    const code = parsed.searchParams.get('code');
-    if (code) return { code };
-    const hash = new URLSearchParams((parsed.hash || '').replace(/^#/, ''));
-    const access_token = hash.get('access_token');
-    const refresh_token = hash.get('refresh_token');
-    if (access_token && refresh_token) return { access_token, refresh_token };
-    return { error: new Error('Google sign-in finished but no code or tokens came back.') };
-  } catch (e) {
-    return { error: e };
-  }
-}
+// Login is NATIVE-ONLY (2026-11-25): no browser opens during
+// sign-in, ever. The two user-facing error strings:
+//   • "Google sign-in isn't set up for this app yet." — native
+//     module missing / no Web client ID / DEVELOPER_ERROR.
+//   • "Google sign-in failed. Please try again." — any other
+//     native failure. (Cancellation stays silent — LoginScreen
+//     hides the "Google sign-in was cancelled." message.)
+const NOT_SET_UP_MESSAGE = "Google sign-in isn't set up for this app yet.";
+const FAILED_MESSAGE = 'Google sign-in failed. Please try again.';
 
 // Lazy-load the native Google Sign-In library. NEVER a top-level
 // import: the library's spec calls getEnforcing('RNGoogleSignin')
 // at import time, which throws on APKs built before the module was
-// added. Caught here so those APKs fall back to the browser flow.
+// added. Caught here so those APKs show the setup error instead
+// of crashing.
 function loadGoogleSignin() {
   try {
     // eslint-disable-next-line global-require
@@ -94,12 +68,18 @@ function loadGoogleSignin() {
   }
 }
 
-// Native Google sign-in (Hapa-style). Returns null when the native
-// path is unavailable — the caller then uses the browser flow.
-// Returns { data, error } otherwise (including a real cancellation).
+// Native Google sign-in (Hapa-style) — the ONLY sign-in path.
+// Always returns { data, error }; never null, never a browser.
+// Cancellation returns the "cancelled" error, which LoginScreen
+// hides silently. DEVELOPER_ERROR / missing module / missing
+// client ID return the "isn't set up yet" error; every other
+// failure returns the generic "try again" error (the real cause
+// is logged to console for diagnosis).
 async function signInWithGoogleNative() {
   const lib = loadGoogleSignin();
-  if (!lib || !GOOGLE_WEB_CLIENT_ID_IS_CONFIGURED) return null;
+  if (!lib || !GOOGLE_WEB_CLIENT_ID_IS_CONFIGURED) {
+    return { data: null, error: new Error(NOT_SET_UP_MESSAGE) };
+  }
   const { GoogleSignin, statusCodes } = lib;
   try {
     await GoogleSignin.configure({ webClientId: GOOGLE_WEB_CLIENT_ID, offlineAccess: false });
@@ -114,13 +94,19 @@ async function signInWithGoogleNative() {
       idToken = tokens && tokens.idToken;
     }
     if (!idToken) {
-      return { data: null, error: new Error('Google sign-in did not return an ID token.') };
+      // eslint-disable-next-line no-console
+      console.log('[Livo] native Google sign-in returned no ID token.');
+      return { data: null, error: new Error(FAILED_MESSAGE) };
     }
     const sessionResult = await supabase.auth.signInWithIdToken({
       provider: 'google',
       token: idToken,
     });
-    if (sessionResult.error) return { data: null, error: sessionResult.error };
+    if (sessionResult.error) {
+      // eslint-disable-next-line no-console
+      console.log('[Livo] signInWithIdToken failed:', sessionResult.error.message);
+      return { data: null, error: new Error(FAILED_MESSAGE) };
+    }
 
     // First sign-in: make sure the user has a profiles row.
     // Best-effort — a profiles write failure must not break the login.
@@ -139,85 +125,29 @@ async function signInWithGoogleNative() {
     }
     if (e && e.code === statusCodes.DEVELOPER_ERROR) {
       // The app is not registered in Google Cloud yet (missing
-      // Android OAuth client for this package + SHA-1) — fall back
-      // to the browser flow instead of failing the login.
+      // Android OAuth client for this package + SHA-1). No browser
+      // fallback any more — the login screen shows the setup error.
       // eslint-disable-next-line no-console
-      console.log('[Livo] native Google sign-in not registered (DEVELOPER_ERROR); using browser flow.');
-      return null;
+      console.log('[Livo] native Google sign-in not registered (DEVELOPER_ERROR).');
+      return { data: null, error: new Error(NOT_SET_UP_MESSAGE) };
     }
-    if (e && e.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
-      return { data: null, error: new Error('Google Play services is not available on this phone.') };
-    }
-    // Any other native failure → browser fallback, never a dead login.
+    // Any other native failure (incl. PLAY_SERVICES_NOT_AVAILABLE):
+    // no browser fallback — show the generic error.
     // eslint-disable-next-line no-console
     console.log('[Livo] native Google sign-in failed:', e && e.message);
-    return null;
+    return { data: null, error: new Error(FAILED_MESSAGE) };
   }
 }
 
 // Open Google sign-in and return { data: sessionData, error }.
-// Native account picker first (Hapa-style); browser flow whenever
-// the native path is unavailable. On success the App.js auth gate
+// NATIVE-ONLY: the native account picker, inside the app — no
+// browser opens at any point. On success the App.js auth gate
 // switches from Login to Main.
 export async function signInWithGoogle() {
   if (!supabase) {
     return { data: null, error: new Error('Supabase is not configured.') };
   }
-  const native = await signInWithGoogleNative();
-  if (native) return native;
-  return signInWithGoogleBrowser();
-}
-
-// Browser Google sign-in (fallback): Supabase OAuth URL in a Chrome
-// tab, PKCE code exchanged for a session on return.
-async function signInWithGoogleBrowser() {
-  const redirectTo = getRedirectUrl();
-  const { data, error } = await supabase.auth.signInWithOAuth({
-    provider: 'google',
-    options: { redirectTo, skipBrowserRedirect: true },
-  });
-  if (error) return { data: null, error };
-  if (!data || !data.url) {
-    return { data: null, error: new Error('Google sign-in did not return a URL.') };
-  }
-
-  const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
-  if (result.type !== 'success' || !result.url) {
-    return {
-      data: null,
-      error: new Error(
-        result.type === 'cancel'
-          ? 'Google sign-in was cancelled.'
-          : 'Google sign-in did not complete.'
-      ),
-    };
-  }
-
-  const parsed = parseAuthResult(result.url);
-  if (parsed.error) return { data: null, error: parsed.error };
-
-  let sessionResult;
-  if (parsed.code) {
-    sessionResult = await supabase.auth.exchangeCodeForSession(parsed.code);
-  } else {
-    sessionResult = await supabase.auth.setSession({
-      access_token: parsed.access_token,
-      refresh_token: parsed.refresh_token,
-    });
-  }
-  if (sessionResult.error) return { data: null, error: sessionResult.error };
-
-  // First sign-in: make sure the user has a profiles row.
-  // Best-effort — a profiles write failure must not break the login.
-  try {
-    if (sessionResult.data && sessionResult.data.user) {
-      await ensureProfile(sessionResult.data.user);
-    }
-  } catch (e) {
-    // eslint-disable-next-line no-console
-    console.log('[Livo] ensureProfile after sign-in failed:', e && e.message);
-  }
-  return { data: sessionResult.data, error: null };
+  return signInWithGoogleNative();
 }
 
 export async function getSession() {
