@@ -7,6 +7,7 @@ import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import { House, MessageCircle, Play, UserRound, Video } from 'lucide-react-native';
 import { THEME } from './src/config';
+import { AppConfigProvider, useAppConfig } from './src/appConfig';
 import { AppProvider, useApp } from './src/store';
 import { supabase } from './src/supabase/client';
 import { withTimeout } from './src/supabase/timeout';
@@ -66,38 +67,43 @@ function MainTabs() {
   // Real unread badge: unreadTotal comes from the store (another
   // pass adds it); undefined until then means "no badge".
   const { unreadTotal } = useApp();
+  // Panel-driven config (app_config): theme colours + the Moments
+  // feature toggle. When moments is OFF the tab is hidden entirely.
+  const { theme: T, features } = useAppConfig();
   return (
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: THEME.tabActive,
-        tabBarInactiveTintColor: THEME.tabInactive,
-        tabBarStyle: styles.tabBar,
+        tabBarActiveTintColor: T.tabActive,
+        tabBarInactiveTintColor: T.tabInactive,
+        tabBarStyle: [styles.tabBar, { backgroundColor: T.page, borderTopColor: T.line }],
       }}
     >
       <Tab.Screen
         name="HomeTab"
         component={HomeScreen}
         options={{
-          tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>Home</Text>,
-          tabBarIcon: ({ focused }) => <House size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? THEME.tabActive : THEME.tabInactive} />,
+          tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, { color: focused ? T.tabActive : T.tabInactive }, focused && styles.tabLabelActive]}>Home</Text>,
+          tabBarIcon: ({ focused }) => <House size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? T.tabActive : T.tabInactive} />,
         }}
       />
-      <Tab.Screen
-        name="MomentsTab"
-        component={MomentsScreen}
-        options={{
-          tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>Moments</Text>,
-          tabBarIcon: ({ focused }) => <Play size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? THEME.tabActive : THEME.tabInactive} />,
-        }}
-      />
+      {features.moments ? (
+        <Tab.Screen
+          name="MomentsTab"
+          component={MomentsScreen}
+          options={{
+            tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, { color: focused ? T.tabActive : T.tabInactive }, focused && styles.tabLabelActive]}>Moments</Text>,
+            tabBarIcon: ({ focused }) => <Play size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? T.tabActive : T.tabInactive} />,
+          }}
+        />
+      ) : null}
       <Tab.Screen
         name="LiveTab"
         component={HostDashboardScreen}
         options={{
           tabBarLabel: () => null,
           tabBarIcon: () => (
-            <LinearGradient colors={['#a855f7', '#7b2ff7']} style={styles.liveBtn}>
+            <LinearGradient colors={[T.violet, T.violetDark]} style={styles.liveBtn}>
               <Video size={23} color="#fff" strokeWidth={2.2} />
             </LinearGradient>
           ),
@@ -107,8 +113,8 @@ function MainTabs() {
         name="MessagesTab"
         component={MessagesScreen}
         options={{
-          tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>Messages</Text>,
-          tabBarIcon: ({ focused }) => <MessageCircle size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? THEME.tabActive : THEME.tabInactive} />,
+          tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, { color: focused ? T.tabActive : T.tabInactive }, focused && styles.tabLabelActive]}>Messages</Text>,
+          tabBarIcon: ({ focused }) => <MessageCircle size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? T.tabActive : T.tabInactive} />,
           tabBarBadge: unreadTotal > 0 ? unreadTotal : undefined,
           tabBarBadgeStyle: styles.msgBadge,
         }}
@@ -117,8 +123,8 @@ function MainTabs() {
         name="ProfileTab"
         component={ProfileScreen}
         options={{
-          tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>Me</Text>,
-          tabBarIcon: ({ focused }) => <UserRound size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? THEME.tabActive : THEME.tabInactive} />,
+          tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, { color: focused ? T.tabActive : T.tabInactive }, focused && styles.tabLabelActive]}>Me</Text>,
+          tabBarIcon: ({ focused }) => <UserRound size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? T.tabActive : T.tabInactive} />,
         }}
       />
     </Tab.Navigator>
@@ -441,7 +447,9 @@ function Root() {
 export default function App() {
   return (
     <AppProvider>
-      <Root />
+      <AppConfigProvider>
+        <Root />
+      </AppConfigProvider>
     </AppProvider>
   );
 }
