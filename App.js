@@ -4,7 +4,9 @@ import { NavigationContainer, createNavigationContainerRef } from '@react-naviga
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
+import { LinearGradient } from 'expo-linear-gradient';
 import { House, MessageCircle, Play, UserRound, Video } from 'lucide-react-native';
+import { THEME } from './src/config';
 import { AppProvider, useApp } from './src/store';
 import { supabase } from './src/supabase/client';
 import { withTimeout } from './src/supabase/timeout';
@@ -17,6 +19,8 @@ import LegalScreen from './src/screens/LegalScreen';
 import GenderScreen from './src/screens/GenderScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import VideoCallScreen from './src/screens/VideoCallScreen';
+import MatchingScreen from './src/screens/MatchingScreen'; // [New UI] Match flow
+import LiveRoomScreen from './src/screens/LiveRoomScreen'; // [New UI] Public live room
 import MessagesScreen from './src/screens/MessagesScreen';
 import ChatDetailScreen from './src/screens/ChatDetailScreen';
 import WalletScreen from './src/screens/WalletScreen';
@@ -53,8 +57,10 @@ function Toast() {
 // Bottom nav rebuilt 2026-11-21 to match the v0 preview
 // (https://livo-puce.vercel.app): 5 equal columns, 50px items,
 // 9px labels, 20px lucide icons (stroke 1.9 inactive / 2.5 active),
-// active #20a64b, centre raised 49px #84e34d circle with Video icon,
+// centre raised 49px circle with Video icon,
 // Messages badge shows the real unread count from the store.
+// [New UI 2026-11-25] Purple-gold theme: dark purple bar,
+// active #c99aff, inactive #9d8bc4, centre FAB purple gradient.
 // Tab order: Home / Moments / Live / Messages / Me.
 function MainTabs() {
   // Real unread badge: unreadTotal comes from the store (another
@@ -64,8 +70,8 @@ function MainTabs() {
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: '#20a64b',
-        tabBarInactiveTintColor: '#9aa39c',
+        tabBarActiveTintColor: THEME.tabActive,
+        tabBarInactiveTintColor: THEME.tabInactive,
         tabBarStyle: styles.tabBar,
       }}
     >
@@ -74,7 +80,7 @@ function MainTabs() {
         component={HomeScreen}
         options={{
           tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>Home</Text>,
-          tabBarIcon: ({ focused }) => <House size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? '#20a64b' : '#9aa39c'} />,
+          tabBarIcon: ({ focused }) => <House size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? THEME.tabActive : THEME.tabInactive} />,
         }}
       />
       <Tab.Screen
@@ -82,7 +88,7 @@ function MainTabs() {
         component={MomentsScreen}
         options={{
           tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>Moments</Text>,
-          tabBarIcon: ({ focused }) => <Play size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? '#20a64b' : '#9aa39c'} />,
+          tabBarIcon: ({ focused }) => <Play size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? THEME.tabActive : THEME.tabInactive} />,
         }}
       />
       <Tab.Screen
@@ -91,9 +97,9 @@ function MainTabs() {
         options={{
           tabBarLabel: () => null,
           tabBarIcon: () => (
-            <View style={styles.liveBtn}>
+            <LinearGradient colors={['#a855f7', '#7b2ff7']} style={styles.liveBtn}>
               <Video size={23} color="#fff" strokeWidth={2.2} />
-            </View>
+            </LinearGradient>
           ),
         }}
       />
@@ -102,7 +108,7 @@ function MainTabs() {
         component={MessagesScreen}
         options={{
           tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>Messages</Text>,
-          tabBarIcon: ({ focused }) => <MessageCircle size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? '#20a64b' : '#9aa39c'} />,
+          tabBarIcon: ({ focused }) => <MessageCircle size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? THEME.tabActive : THEME.tabInactive} />,
           tabBarBadge: unreadTotal > 0 ? unreadTotal : undefined,
           tabBarBadgeStyle: styles.msgBadge,
         }}
@@ -112,7 +118,7 @@ function MainTabs() {
         component={ProfileScreen}
         options={{
           tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>Me</Text>,
-          tabBarIcon: ({ focused }) => <UserRound size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? '#20a64b' : '#9aa39c'} />,
+          tabBarIcon: ({ focused }) => <UserRound size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? THEME.tabActive : THEME.tabInactive} />,
         }}
       />
     </Tab.Navigator>
@@ -407,6 +413,8 @@ function Root() {
           <>
             <Stack.Screen name="Main" component={MainTabs} />
             <Stack.Screen name="VideoCall" component={VideoCallScreen} />
+            <Stack.Screen name="Matching" component={MatchingScreen} />
+            <Stack.Screen name="LiveRoom" component={LiveRoomScreen} />
             <Stack.Screen name="ChatDetail" component={ChatDetailScreen} />
             <Stack.Screen name="WalletTab" component={WalletScreen} />
             <Stack.Screen name="HostDashboard" component={HostDashboardScreen} />
@@ -447,10 +455,10 @@ const styles = StyleSheet.create({
   blockedText: { color: '#ede9fe', fontSize: 15, lineHeight: 22, textAlign: 'center' },
   blockedBtn: { backgroundColor: '#fff', borderRadius: 24, marginTop: 28, paddingHorizontal: 24, paddingVertical: 12 },
   blockedBtnTxt: { color: '#7c3aed', fontSize: 15, fontWeight: 'bold' },
-  // Bottom nav — v0 design: mint-white bar, 70px total (8 + 50 + 12).
+  // Bottom nav — [New UI] dark purple bar, 70px total (8 + 50 + 12).
   tabBar: {
-    backgroundColor: '#f9fffaf7',
-    borderTopColor: 'rgba(47,74,51,0.06)',
+    backgroundColor: '#100320',
+    borderTopColor: 'rgba(255,255,255,0.09)',
     borderTopWidth: 1,
     elevation: 8,
     height: 70,
@@ -462,20 +470,19 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 8,
   },
-  tabLabel: { color: '#9aa39c', fontSize: 9, fontWeight: '500' },
-  tabLabelActive: { color: '#20a64b', fontWeight: '700' },
-  // Centre "Live" button — raised lime-green circle, like the v0 preview.
+  tabLabel: { color: THEME.tabInactive, fontSize: 9, fontWeight: '500' },
+  tabLabelActive: { color: THEME.tabActive, fontWeight: '700' },
+  // Centre "Live" button — raised purple gradient circle.
   liveBtn: {
     alignItems: 'center',
-    backgroundColor: '#84e34d',
-    borderColor: '#f9fffa',
+    borderColor: '#100320',
     borderRadius: 25,
-    borderWidth: 4,
+    borderWidth: 3,
     elevation: 6,
     height: 49,
     justifyContent: 'center',
     marginTop: -19,
-    shadowColor: '#51af31',
+    shadowColor: '#7b2ff7',
     shadowOffset: { width: 0, height: 5 },
     shadowOpacity: 0.27,
     shadowRadius: 12,
