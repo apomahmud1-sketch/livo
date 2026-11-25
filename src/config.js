@@ -85,6 +85,9 @@ export const MIN_WITHDRAW_DIAMONDS = 10000;
 // `purple` is the main accent everywhere (logo, buttons, active
 // tab), so changing it here re-themes the whole app at once.
 // Pink stays for the LIVE badge / gift accents, like Vero's.
+// NOTE: COLORS stays as-is — older screens (Messages, Moments,
+// Wallet, Host Dashboard, …) still use it. The new purple-gold
+// redesign uses THEME below instead.
 export const COLORS = {
   purple: '#16a34a',
   purpleDark: '#14532d',
@@ -99,6 +102,47 @@ export const COLORS = {
   lavender: '#f0fdf4',
   mint: '#dcfce7',
   green: '#22c55e',
+};
+
+// ── New UI theme (2026-11-25) ────────────────────────────────────
+// Dark purple + gold, taken exactly from the approved preview
+// (livo-new-ui-preview). Used by Home, Matching, Live Room,
+// Video Call, the Gift sheet and Profile. Screen background is a
+// vertical gradient #341064 → #1c0538 → #12021f (see HomeScreen).
+export const THEME = {
+  page: '#0d0219',
+  deep: '#150329',
+  panel: '#1e0a3d',
+  panel2: '#2a1152',
+  sheet: '#1d0a3e',
+  line: 'rgba(255,255,255,0.09)',
+  text: '#f6f1ff',
+  dim: '#b9a8d9',
+  purple: '#8b3dff',
+  violet: '#7b2ff7',
+  violetDark: '#6d28d9',
+  pink: '#f43f9e',
+  pinkLight: '#ff5da2',
+  gold: '#f7b733',
+  gold2: '#ffd76a',
+  goldDark: '#3d2400',
+  red: '#ef2b3c',
+  green: '#1fc457',
+  blue: '#38bdf8',
+  tabActive: '#c99aff',
+  tabInactive: '#9d8bc4',
+};
+
+// Viewer counts abbreviate like the preview: 1240 → "1.2K".
+export const formatViewers = (n) => {
+  const v = Number(n) || 0;
+  return v >= 1000 ? `${(v / 1000).toFixed(1).replace(/\.0$/, '')}K` : `${v}`;
+};
+
+// Gift prices abbreviate like the preview: 1000 → "1K".
+export const formatGiftPrice = (p) => {
+  const v = Number(p) || 0;
+  return v >= 1000 ? `${Math.round(v / 1000)}K` : `${v}`;
 };
 
 export const GIFTS = [
