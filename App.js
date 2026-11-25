@@ -13,6 +13,7 @@ import { getOrCreateDeviceId, registerDevice } from './src/supabase/device';
 import { requestNotificationPermission } from './src/permissions';
 import { useIncomingCallListener } from './src/calls/signalling';
 import LoginScreen from './src/screens/LoginScreen';
+import LegalScreen from './src/screens/LegalScreen';
 import GenderScreen from './src/screens/GenderScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import VideoCallScreen from './src/screens/VideoCallScreen';
@@ -413,9 +414,13 @@ function Root() {
             <Stack.Screen name="VIP" component={VIPScreen} />
             <Stack.Screen name="Rewards" component={RewardsScreen} />
             <Stack.Screen name="Tasks" component={TasksScreen} />
+            <Stack.Screen name="Legal" component={LegalScreen} />
           </>
         ) : (
-          <Stack.Screen name="Login" component={LoginScreen} options={{ animation: 'none' }} />
+          <>
+            <Stack.Screen name="Login" component={LoginScreen} options={{ animation: 'none' }} />
+            <Stack.Screen name="Legal" component={LegalScreen} />
+          </>
         )}
       </Stack.Navigator>
       <Toast />
