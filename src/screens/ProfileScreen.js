@@ -20,7 +20,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { COLORS } from '../config';
+import { StatusBar } from 'expo-status-bar';
+import { THEME } from '../config';
 import { useApp } from '../store';
 import { AuthContext } from '../../App';
 import { supabase } from '../supabase/client';
@@ -39,7 +40,11 @@ import {
 function themeFor(dark) {
   return dark
     ? { bg: '#111827', surface: '#1f2937', surface2: '#374151', text: '#f9fafb', muted: '#9ca3af', border: '#374151', cardBg: '#1f2937' }
-    : { bg: '#f5f3ff', surface: '#ffffff', surface2: '#f3f4f6', text: '#111827', muted: '#6b7280', border: '#e5e7eb', cardBg: '#ffffff' };
+    // [New UI 2026-11-25] Default theme is now the preview's dark
+    // purple + gold (bg deep purple, panels #1e0a3d / #2a1152,
+    // lavender text, gold accents). The dark toggle still switches
+    // to the old grey-dark theme above.
+    : { bg: '#150329', surface: '#1e0a3d', surface2: '#2a1152', text: '#f6f1ff', muted: '#b9a8d9', border: 'rgba(255,255,255,0.09)', cardBg: '#1e0a3d' };
 }
 
 // store vipLevel is a pack id such as 'vip1' — display it as 'VIP 1'.
@@ -50,7 +55,7 @@ function vipLabel(v) {
 }
 
 export default function ProfileScreen({ navigation }) {
-  const { diamonds, showToast, vipLevel, vipUntil, following, levelInfo, updateMyProfile, frames } = useApp();
+  const { coins, diamonds, showToast, vipLevel, vipUntil, following, levelInfo, updateMyProfile, frames } = useApp();
 
   // ── Real signed-in user ──
   // user = Supabase auth user (Google account); profile = the user's
@@ -507,6 +512,7 @@ export default function ProfileScreen({ navigation }) {
 
   return (
     <ScrollView style={[styles.bg, { backgroundColor: t.bg }]} contentContainerStyle={styles.wrap}>
+      <StatusBar style="light" />
       {/* ── Me main ── */}
       {view === 'main' && (
         <View style={styles.mainPad}>
@@ -593,7 +599,7 @@ export default function ProfileScreen({ navigation }) {
             <Text style={styles.goldBannerIcon}>🪙</Text>
             <View style={{ flex: 1 }}>
               <Text style={styles.goldBannerTitle}>My Wallet</Text>
-              <Text style={styles.goldBannerValue}>💎 {diamonds.toLocaleString()} Diamonds</Text>
+              <Text style={styles.goldBannerValue}>🪙 {Number(coins || 0).toLocaleString()} Coins · 💎 {diamonds.toLocaleString()} Diamonds</Text>
             </View>
             <Text style={styles.goldBannerChev}>›</Text>
           </TouchableOpacity>
@@ -1004,12 +1010,12 @@ const styles = StyleSheet.create({
   badgeItem: { alignItems: 'center', borderRadius: 12, marginBottom: 10, padding: 12, width: '31%' },
   badgeName: { fontSize: 12, fontWeight: 'bold', marginTop: 6, textAlign: 'center' },
   badgeProg: { fontSize: 11, marginTop: 2, textAlign: 'center' },
-  badgeSel: { borderColor: COLORS.purple, borderWidth: 2 },
+  badgeSel: { borderColor: THEME.gold, borderWidth: 2 },
   bang: { color: '#ef4444', fontWeight: 'bold' },
   bg: { flex: 1 },
   bigDarkBtn: { backgroundColor: '#111827', borderRadius: 12, marginHorizontal: 16, marginTop: 16, paddingVertical: 14 },
   bigDarkTxt: { color: '#fff', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
-  bigGradBtn: { backgroundColor: COLORS.purple, borderRadius: 12, marginHorizontal: 16, marginTop: 16, paddingVertical: 14 },
+  bigGradBtn: { backgroundColor: THEME.violet, borderRadius: 12, marginHorizontal: 16, marginTop: 16, paddingVertical: 14 },
   bigGradTxt: { color: '#fff', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
   calBtn: { alignSelf: 'flex-end', marginRight: 16, marginTop: 12 },
   calEmoji: { fontSize: 24 },
@@ -1086,14 +1092,14 @@ const styles = StyleSheet.create({
   idMain: { flex: 1, marginLeft: 12 },
   idRow: { alignItems: 'center', flexDirection: 'row', marginTop: 4 },
   idTxt: { fontSize: 12 },
-  infoTab: { borderBottomColor: '#7c3aed', borderBottomWidth: 2, color: '#7c3aed', fontSize: 15, fontWeight: 'bold', marginTop: 16, paddingBottom: 6, width: 96 },
+  infoTab: { borderBottomColor: '#ffd76a', borderBottomWidth: 2, color: '#ffd76a', fontSize: 15, fontWeight: 'bold', marginTop: 16, paddingBottom: 6, width: 96 },
   input: { borderRadius: 10, borderWidth: 1, fontSize: 15, marginHorizontal: 16, marginTop: 6, paddingHorizontal: 12, paddingVertical: 10 },
   inputMulti: { minHeight: 72, textAlignVertical: 'top' },
   inviteCode: { fontSize: 18, fontWeight: 'bold' },
   inviteCodeRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginTop: 14 },
   langName: { fontSize: 15 },
   langRow: { alignItems: 'center', borderBottomWidth: 1, flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 13 },
-  langTick: { color: '#7c3aed', fontSize: 18, fontWeight: 'bold' },
+  langTick: { color: THEME.gold2, fontSize: 18, fontWeight: 'bold' },
   logoutBtn: { backgroundColor: '#ef4444', borderRadius: 12, marginHorizontal: 16, marginTop: 20, paddingVertical: 13 },
   logoutTxt: { color: '#fff', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
   lvChip: { backgroundColor: '#ede9fe', borderRadius: 10, color: '#7c3aed', fontSize: 12, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
@@ -1143,7 +1149,7 @@ const styles = StyleSheet.create({
   priceOptTxtSel: { color: '#fff' },
   priceOpts: { flexDirection: 'row', flexWrap: 'wrap' },
   pricePer: { color: '#6b7280', fontSize: 14, fontWeight: 'normal' },
-  recordLink: { color: '#7c3aed', fontSize: 13, fontWeight: 'bold' },
+  recordLink: { color: THEME.gold2, fontSize: 13, fontWeight: 'bold' },
   redDot: { backgroundColor: '#ef4444', borderRadius: 5, height: 10, position: 'absolute', right: 0, top: 0, width: 10 },
   sec: { fontSize: 16, fontWeight: 'bold', marginHorizontal: 16, marginTop: 16 },
   sendTile: { alignItems: 'center', justifyContent: 'center' },
@@ -1211,7 +1217,7 @@ const styles = StyleSheet.create({
   wdOptHead: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginHorizontal: 16, marginTop: 14 },
   wdOptTitle: { fontSize: 15, fontWeight: 'bold' },
   wrap: { paddingBottom: 32 },
-  darkCard: { backgroundColor: '#1f2937', borderRadius: 14, flex: 1, padding: 14 },
+  darkCard: { backgroundColor: '#2a1152', borderRadius: 14, flex: 1, padding: 14 },
   darkCardTitle: { color: '#fbbf24', fontSize: 13, fontWeight: 'bold' },
   darkCardValue: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginTop: 4 },
   darkRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
