@@ -130,6 +130,34 @@ export async function fetchMoments({ limit = 10, before = null } = {}) {
   }
 }
 
+// Delete one server moment: remove its file from the `moments`
+// bucket (best effort — needs a DELETE policy on storage.objects
+// for authenticated users) and delete the moments row. Returns
+// true when the row is gone. Never throws.
+export async function deleteMoment(moment) {
+  if (!supabase || !moment || !moment.id) return false;
+  try {
+    // Best effort: delete the stored file. The public URL ends
+    // with /moments/<fileName> — strip everything before it.
+    const url = typeof moment.mediaUri === 'string' ? moment.mediaUri : '';
+    const marker = '/moments/';
+    const idx = url.indexOf(marker);
+    if (idx >= 0) {
+      const fileName = decodeURIComponent(url.slice(idx + marker.length).split('?')[0]);
+      if (fileName) {
+        await withTimeout(supabase.storage.from('moments').remove([fileName]));
+      }
+    }
+    const delRes = await withTimeout(
+      supabase.from('moments').delete().eq('id', moment.id),
+    );
+    if (!delRes) return false;
+    return !delRes.error;
+  } catch (e) {
+    return false;
+  }
+}
+
 // Upload one moment: storage bucket `moments` + a row in the
 // moments table attributed to the real signed-in user
 // (host_id = userId, host_name = username). Returns the inserted
@@ -141,26 +169,35 @@ export async function uploadMoment({ userId, username, mediaUri, mediaType, capt
     const fileName = `moment-${userId}-${Date.now()}.${ext}`;
     const res = await fetch(mediaUri);
     const blob = await res.blob();
-    const { error: upErr } = await supabase.storage.from('moments').upload(fileName, blob, {
-      contentType: mediaType === 'video' ? 'video/mp4' : 'image/jpeg',
-      upsert: true,
-    });
-    if (upErr) return null;
+    // Fail-fast: a stalled upload resolves to null instead of
+    // hanging the post sheet forever (see timeout.js). 60s gives a
+    // video time on a slow connection. A timeout is a failure —
+    // never insert a row for a file that may not exist.
+    const upRes = await withTimeout(
+      supabase.storage.from('moments').upload(fileName, blob, {
+        contentType: mediaType === 'video' ? 'video/mp4' : 'image/jpeg',
+        upsert: true,
+      }),
+      60000,
+    );
+    if (!upRes || upRes.error) return null;
     const { data: urlData } = supabase.storage.from('moments').getPublicUrl(fileName);
     const videoUrl = (urlData && urlData.publicUrl) || '';
-    const { data, error: insErr } = await supabase
-      .from('moments')
-      .insert({
-        host_id: userId,
-        host_name: username || 'Livo user',
-        caption: String(caption || '').trim(),
-        video_url: videoUrl,
-        likes: 0,
-      })
-      .select('id,host_id,host_name,caption,video_url,likes,is_active,created_at')
-      .single();
-    if (insErr || !data) return null;
-    return mapMoment(data, new Map(), new Map());
+    const insRes = await withTimeout(
+      supabase
+        .from('moments')
+        .insert({
+          host_id: userId,
+          host_name: username || 'Livo user',
+          caption: String(caption || '').trim(),
+          video_url: videoUrl,
+          likes: 0,
+        })
+        .select('id,host_id,host_name,caption,video_url,likes,is_active,created_at')
+        .single(),
+    );
+    if (!insRes || insRes.error || !insRes.data) return null;
+    return mapMoment(insRes.data, new Map(), new Map());
   } catch (e) {
     return null;
   }
