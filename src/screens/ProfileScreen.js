@@ -1112,7 +1112,7 @@ const styles = StyleSheet.create({
   menuEmoji: { fontSize: 16 },
   menuIcon: { alignItems: 'center', borderRadius: 9, height: 32, justifyContent: 'center', width: 32 },
   menuLabel: { flex: 1, fontSize: 14, marginLeft: 10 },
-  menuRow: { alignItems: 'center', borderBottomWidth: 1, flexDirection: 'row', paddingVertical: 10 },
+  menuRow: { alignItems: 'center', borderBottomWidth: 1, flex: 1, flexDirection: 'row', paddingVertical: 10 },
   moonBtn: { alignItems: 'center', justifyContent: 'center' },
   moonEmoji: { fontSize: 20 },
   myBeans: { fontSize: 15, fontWeight: 'bold', marginHorizontal: 16, marginTop: 16 },
@@ -1216,7 +1216,15 @@ const styles = StyleSheet.create({
   wdNote: { fontSize: 12, lineHeight: 18, marginHorizontal: 16, marginTop: 12 },
   wdOptHead: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginHorizontal: 16, marginTop: 14 },
   wdOptTitle: { fontSize: 15, fontWeight: 'bold' },
-  wrap: { paddingBottom: 32 },
+  // [Flex fill 2026-11-26] The Me screen must fill the whole
+  // height above the tab bar on EVERY phone (tall or small) — no
+  // empty gap at the bottom. flexGrow makes the content container
+  // at least as tall as the screen; mainPad (flex:1) and the menu
+  // card (flex:1, rows flex:1) then absorb the extra space, so the
+  // 7 menu rows grow evenly on tall phones and stay natural on
+  // small ones (where the ScrollView simply scrolls). Never put a
+  // fixed height here tuned to one phone.
+  wrap: { flexGrow: 1, paddingBottom: 32 },
   darkCard: { backgroundColor: '#2a1152', borderRadius: 14, flex: 1, padding: 14 },
   darkCardTitle: { color: '#fbbf24', fontSize: 13, fontWeight: 'bold' },
   darkCardValue: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginTop: 4 },
@@ -1228,6 +1236,6 @@ const styles = StyleSheet.create({
   goldBannerValue: { color: '#78350f', fontSize: 13, fontWeight: 'bold', marginTop: 2 },
   headerCard: { borderRadius: 16, padding: 14 },
   incomeVal: { color: '#b45309', fontSize: 13, fontWeight: 'bold' },
-  mainPad: { paddingHorizontal: 14, paddingTop: 12 },
-  menuCard: { borderRadius: 16, marginTop: 12, overflow: 'hidden', paddingHorizontal: 4 },
+  mainPad: { flex: 1, paddingHorizontal: 14, paddingTop: 12 },
+  menuCard: { borderRadius: 16, flex: 1, marginTop: 12, overflow: 'hidden', paddingHorizontal: 4 },
 });
