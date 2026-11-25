@@ -23,18 +23,18 @@
 // Home-style dark Live pill with 3 green bars, flagcdn flag images,
 // and lucide-react-native icons (no emoji) in the actions row.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Dimensions, FlatList, Image, Modal, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, FlatList, Image, Modal, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Camera, Film, Heart, Image as ImageIcon, Phone, Play, Plus, Share2, Video, X } from 'lucide-react-native';
+import { Camera, Film, Heart, Image as ImageIcon, MoreVertical, Phone, Play, Plus, Share2, Video, X } from 'lucide-react-native';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { useApp } from '../store';
 import { supabase } from '../supabase/client';
 // [Live] Real Moments feed + upload (moments table). No hardcoded
 // captions/likes: the feed reads the table, newest first.
-import { fetchMoments, likeMoment, uploadMoment } from '../supabase/moments';
+import { deleteMoment, fetchMoments, likeMoment, uploadMoment } from '../supabase/moments';
 import { getCurrentUserId } from '../supabase/chat';
 
 const { width: SCREEN_W } = Dimensions.get('window');
@@ -96,7 +96,7 @@ function MomentVideo({ uri }) {
 // `liked` fills the heart; `counted` means the server total already
 // includes this user's like (persisted RPC) — the +1 is then NOT
 // added again, so a re-render or a fresh fetch never double-counts.
-const MomentCard = React.memo(function MomentCard({ moment, liked, counted, onLike, onCall, onShare }) {
+const MomentCard = React.memo(function MomentCard({ moment, liked, counted, onLike, onCall, onShare, onDelete }) {
   const likes = moment.likes + (liked && !counted ? 1 : 0);
   const flagUri = moment.host && moment.host.country ? FLAG_URL[moment.host.country] : null;
   const isOwn = !!moment.isOwn;
@@ -148,7 +148,16 @@ const MomentCard = React.memo(function MomentCard({ moment, liked, counted, onLi
           <Text style={styles.actionText}>Share</Text>
         </TouchableOpacity>
         <View style={{ flex: 1 }} />
-        {!isOwn && (
+        {isOwn ? (
+          <TouchableOpacity
+            style={styles.deleteBtn}
+            onPress={onDelete}
+            activeOpacity={0.8}
+            accessibilityLabel="Delete this moment"
+          >
+            <MoreVertical size={20} color="#818b84" strokeWidth={2} />
+          </TouchableOpacity>
+        ) : (
           <TouchableOpacity style={styles.callBtn} onPress={onCall} activeOpacity={0.85}>
             <Phone size={15} color="#fff" strokeWidth={2.2} />
             <Text style={styles.callBtnText}>Call</Text>
@@ -499,6 +508,52 @@ export default function MomentsScreen({ navigation }) {
     }
   };
 
+  // Delete an OWN moment only (the ••• button shows on own cards
+  // only). Local-only posts (id 'own-...') are removed from the
+  // on-device list (AsyncStorage auto-saves) and their copied file
+  // is deleted; server rows are deleted from the moments table +
+  // the moments bucket, then removed from the feed.
+  const handleDelete = (item) => {
+    Alert.alert('Delete this moment?', 'This cannot be undone.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          const clearLiked = () => {
+            setLikedIds((prev) => {
+              const next = { ...prev };
+              delete next[item.id];
+              return next;
+            });
+            setCountedIds((prev) => {
+              const next = { ...prev };
+              delete next[item.id];
+              return next;
+            });
+          };
+          if (typeof item.id === 'string' && item.id.startsWith('own-')) {
+            setOwnMoments((prev) => prev.filter((m) => m.id !== item.id));
+            clearLiked();
+            if (item.mediaUri && item.mediaUri.startsWith('file://')) {
+              FileSystem.deleteAsync(item.mediaUri, { idempotent: true }).catch(() => {});
+            }
+            showToast('Moment deleted');
+            return;
+          }
+          const ok = await deleteMoment(item);
+          if (ok) {
+            setFeed((prev) => prev.filter((m) => m.id !== item.id));
+            clearLiked();
+            showToast('Moment deleted');
+          } else {
+            showToast('Could not delete — please try again');
+          }
+        },
+      },
+    ]);
+  };
+
   // Call from a moment: the feed lookup (moments.js) sets the
   // author's real store host id (host.storeId). VideoCall needs a
   // store host (id = hosts.host_id), so the id is swapped in and
@@ -534,6 +589,7 @@ export default function MomentsScreen({ navigation }) {
       onLike={() => toggleLike(item.id)}
       onCall={() => handleCall(item)}
       onShare={() => handleShare(item)}
+      onDelete={() => handleDelete(item)}
     />
   );
   return (
@@ -594,6 +650,7 @@ const styles = StyleSheet.create({
   emptyText: { color: '#818b84', fontSize: 15, marginTop: 32, textAlign: 'center' },
   callBtn: { alignItems: 'center', backgroundColor: '#20a64b', borderRadius: 18, flexDirection: 'row', gap: 5, paddingHorizontal: 14, paddingVertical: 7 },
   callBtnText: { color: '#fff', fontSize: 13, fontWeight: 'bold' },
+  deleteBtn: { alignItems: 'center', height: 32, justifyContent: 'center', width: 32 },
   caption: { color: '#fff', fontSize: 14, marginTop: 2 },
   captionInput: { backgroundColor: '#fff', borderColor: '#e9eeea', borderRadius: 12, borderWidth: 1, color: '#111713', fontSize: 14, marginTop: 12, minHeight: 56, paddingHorizontal: 12, paddingVertical: 10, textAlignVertical: 'top' },
   card: { backgroundColor: '#fff', borderRadius: 15, elevation: 2, marginBottom: 16, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
