@@ -69,6 +69,56 @@ export async function leaveLiveRoom(channel) {
   }
 }
 
+// Watch a room's viewer LIST (presence entries with names) without
+// joining as a viewer. onViewers(entries) fires on every presence
+// change with the current entries [{ userId, name, joinedAt }].
+// Returns an unsubscribe function, or null when Realtime is
+// unavailable. Used by the Live Room's top-viewers row — real
+// viewers only, never invented names.
+export function subscribeRoomPresence(hostId, onViewers) {
+  if (!supabase || !hostId || typeof onViewers !== 'function') return null;
+  try {
+    const channel = supabase.channel(roomChannelName(hostId));
+    const report = () => {
+      try {
+        const state = channel.presenceState();
+        const entries = [];
+        if (state && typeof state === 'object') {
+          for (const key of Object.keys(state)) {
+            const list = state[key];
+            if (Array.isArray(list)) {
+              list.forEach((e) => {
+                entries.push({
+                  userId: (e && e.user_id) || key,
+                  name: (e && e.name) || 'Guest',
+                  joinedAt: (e && e.joined_at) || null,
+                });
+              });
+            }
+          }
+        }
+        onViewers(entries);
+      } catch (e) {
+        // Never break the caller on a presence error.
+      }
+    };
+    channel
+      .on('presence', { event: 'sync' }, report)
+      .on('presence', { event: 'join' }, report)
+      .on('presence', { event: 'leave' }, report)
+      .subscribe();
+    return async () => {
+      try {
+        await supabase.removeChannel(channel);
+      } catch (e) {
+        // Channel already removed.
+      }
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
 // Watch a room's viewer count without joining as a viewer.
 // onViewers(count) fires on every presence change. Returns an
 // unsubscribe function, or null when Realtime is unavailable.
