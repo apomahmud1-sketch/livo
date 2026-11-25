@@ -482,6 +482,7 @@ export default function LiveVideo({
   audioOnly = false, // [F2]
   uid = 0,
   style,
+  showLiveChip = true, // [New UI] false = the parent draws its own top UI (timer pills, LIVE badge)
   onRemoteJoin,
   onRemoteLeave,
   onJoin,
@@ -707,11 +708,13 @@ export default function LiveVideo({
           <Text style={styles.localLabel}>You</Text>
         </View>
       )}
-      <View style={styles.liveChip}>
-        <Text style={styles.liveChipText}>
-          {status === 'joined' ? '● LIVE' : '● Connecting…'}
-        </Text>
-      </View>
+      {showLiveChip ? (
+        <View style={styles.liveChip}>
+          <Text style={styles.liveChipText}>
+            {status === 'joined' ? '● LIVE' : '● Connecting…'}
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 }
