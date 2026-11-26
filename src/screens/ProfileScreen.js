@@ -30,7 +30,7 @@ import { ensureProfile, equipFrame, fetchMyProfile, getSessionUser, signOut } fr
 import { fetchUserTags } from '../supabase/tags';
 import { getAgentPortalInfo } from '../supabase/agent';
 import { DEVICE_ID_KEY } from '../supabase/device';
-import { stopHostHeartbeat } from '../supabase/host';
+import { getMyHostRow, stopHostHeartbeat } from '../supabase/host';
 import LevelView from './profile/LevelView';
 import VipView from './profile/VipView';
 import VipFrame from '../components/VipFrame'; // [Vero] animated VIP avatar frame
@@ -162,6 +162,19 @@ export default function ProfileScreen({ navigation }) {
     let mounted = true;
     getAgentPortalInfo().then((data) => {
       if (mounted) setAgentInfo(data);
+    });
+    return () => { mounted = false; };
+  }, [user]);
+  // Host Dashboard badge: the user's REAL hosts-row status
+  // ('approved' / 'pending' / 'rejected' / 'suspended'), or null
+  // when they have no host row at all. Never hardcoded — the
+  // owner's row is 'rejected', so his badge reads Rejected.
+  const [hostStatus, setHostStatus] = React.useState(null);
+  React.useEffect(() => {
+    if (!user) return undefined;
+    let mounted = true;
+    getMyHostRow(user.id).then((row) => {
+      if (mounted) setHostStatus(row && row.status ? String(row.status).toLowerCase() : null);
     });
     return () => { mounted = false; };
   }, [user]);
@@ -493,6 +506,17 @@ export default function ProfileScreen({ navigation }) {
     </TouchableOpacity>
   );
 
+  // Host Dashboard badge from the real hosts-row status (see the
+  // hostStatus effect above). No host row → no badge; the row
+  // still navigates to Host Dashboard either way.
+  const hostBadge =
+    !hostStatus ? null
+      : hostStatus === 'approved' ? <Text style={styles.tagGreen}>Approved</Text>
+      : hostStatus === 'pending' ? <Text style={styles.tagAmber}>Pending</Text>
+      : hostStatus === 'rejected' ? <Text style={styles.tagRed}>Rejected</Text>
+      : hostStatus === 'suspended' ? <Text style={styles.tagGrey}>Suspended</Text>
+      : null;
+
   // Avatar image, or an initial-letter placeholder when no photo
   // is set (never another person's photo as a fallback).
   const avatarView = (size, radius) => (avatarUri
@@ -540,7 +564,7 @@ export default function ProfileScreen({ navigation }) {
             <View style={styles.idHead}>
               <TouchableOpacity onPress={() => setView('profile')} activeOpacity={0.8} accessibilityLabel="Tap the photo to open the My Profile page">
                 {vipLevel && features.vip ? (
-                  <VipFrame frame="gold" size={78}>
+                  <VipFrame frame="gold" size={78} frames={frames}>
                     {avatarView(64, 32)}
                   </VipFrame>
                 ) : (
@@ -639,7 +663,7 @@ export default function ProfileScreen({ navigation }) {
 
           <View style={[styles.menuCard, { backgroundColor: t.surface }]}>
             {menuRow('💬', '#fde7f1', 'Messages', null, () => navigation.navigate('MessagesTab'))}
-            {features.host_dashboard ? menuRow('🎥', '#fde7f1', 'Host Dashboard', <Text style={styles.tagGreen}>Approved</Text>, () => navigation.navigate('HostDashboard')) : null}
+            {features.host_dashboard ? menuRow('🎥', '#fde7f1', 'Host Dashboard', hostBadge, () => navigation.navigate('HostDashboard')) : null}
             {agentInfo && agentInfo.isAgent && agentInfo.status === 'approved'
               ? menuRow('🪙', '#fef3c7', 'Agent Portal', <Text style={styles.tagGreen}>{Number(agentInfo.walletCoins || 0).toLocaleString()} coins</Text>, () => navigation.navigate('AgentPortal'))
               : null}
@@ -1187,6 +1211,10 @@ const styles = StyleSheet.create({
   tableRow: { borderBottomWidth: 1, flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 8 },
   tagGold: { backgroundColor: '#fef3c7', borderRadius: 10, color: '#b45309', fontSize: 11, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
   tagGreen: { backgroundColor: '#dcfce7', borderRadius: 10, color: '#16a34a', fontSize: 11, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
+  // Host Dashboard status badges (real hosts-row status).
+  tagAmber: { backgroundColor: '#fef3c7', borderRadius: 10, color: '#b45309', fontSize: 11, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
+  tagRed: { backgroundColor: '#fee2e2', borderRadius: 10, color: '#b91c1c', fontSize: 11, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
+  tagGrey: { backgroundColor: '#e5e7eb', borderRadius: 10, color: '#4b5563', fontSize: 11, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
   tagPink: { backgroundColor: '#fde7f1', borderRadius: 10, color: '#db2777', fontSize: 11, fontWeight: 'bold', paddingHorizontal: 8, paddingVertical: 3 },
   // Admin-set profile tags (user_tags) — small chips under the name.
   tagChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
