@@ -30,7 +30,7 @@ const COMING_SOON_PRIVILEGES = [
 ];
 
 export default function VIPScreen() {
-  const { vipLevel, vipUntil, buyVip, vipPacks, signedIn, iapStatus } = useApp();
+  const { vipLevel, vipUntil, buyVip, vipPacks, signedIn, iapStatus, frames } = useApp();
   return (
     <ScrollView style={styles.bg} contentContainerStyle={styles.wrap}>
       <Text style={styles.title}>👑 Premium</Text>
@@ -60,7 +60,7 @@ export default function VIPScreen() {
 
       <Text style={styles.sectionTitle}>Your VIP Frame</Text>
       <View style={styles.framePreview}>
-        <VipFrame frame="gold" size={110}>
+        <VipFrame frame="gold" size={110} frames={frames}>
           <View style={styles.frameAvatar}>
             <Text style={styles.frameAvatarText}>M</Text>
           </View>
