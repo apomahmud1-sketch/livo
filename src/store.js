@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CALL_RATES, COIN_PACKS, COIN_TO_DIAMOND_RATE, GIFTS, PLATFORM_COMMISSION_PERCENT, VIP_PACKS, VOICE_RATE_DIVISOR, getVoiceCallRate } from './config';
-import { fetchLiveCatalog, fetchLiveHosts, fetchFrames } from './supabase/live';
+import { fetchLiveCatalog, fetchLiveHosts, fetchFrames, fetchSpinPrizes, fetchLevelThresholds, fetchRewardsSettings } from './supabase/live';
 import { supabase } from './supabase/client';
 import { withTimeout } from './supabase/timeout';
 import { updateMyProfile } from './supabase/auth';
@@ -54,10 +54,28 @@ const LIVO_REWARDS_KEY = 'livo-rewards-v1';
 const DIAMOND_PACK_IDS = ['d4000', 'd13200', 'd48000', 'd150000', 'd520000', 'd57000'];
 
 // Level thresholds from the LV_ROWS ladder (strings with commas).
+// Fallback when the live level_thresholds table is missing — the
+// live rows win once loaded (see lvThresholds below).
 const LV_THRESHOLDS = LV_ROWS.map(([level, label]) => ({
   level,
   threshold: Number(String(label).replace(/,/g, '')) || 0,
 }));
+
+// Hardcoded spin / check-in fallbacks (identical to
+// rewardsConfig.js). Used until the live tables / app_config key
+// load — and forever when they are missing.
+const FALLBACK_SPIN_PRIZES = [
+  { id: 'spin_10', label: '10', coins: 10, weight: 30, color: '#fde68a' },
+  { id: 'spin_25', label: '25', coins: 25, weight: 25, color: '#fbcfe8' },
+  { id: 'spin_50', label: '50', coins: 50, weight: 18, color: '#c7d2fe' },
+  { id: 'spin_100', label: '100', coins: 100, weight: 12, color: '#a7f3d0' },
+  { id: 'spin_200', label: '200', coins: 200, weight: 8, color: '#fca5a5' },
+  { id: 'spin_500', label: '500', coins: 500, weight: 4, color: '#fcd34d' },
+  { id: 'spin_1000', label: '1,000', coins: 1000, weight: 2, color: '#d8b4fe' },
+  { id: 'spin_5000', label: '5,000', coins: 5000, weight: 1, color: '#f9a8d4' },
+];
+const FALLBACK_FREE_SPINS_PER_DAY = 1;
+const FALLBACK_CHECKIN_REWARDS = [10, 15, 20, 30, 40, 60, 100];
 
 // Transaction kinds that count toward the level points: top-up
 // (purchase_*) vs consumption (call_charge, gift_sent). Points =
@@ -146,6 +164,12 @@ export function AppProvider({ children }) {
   const [liveSource, setLiveSource] = useState('demo');
   // Frames from the frames table (panel) — [] until loaded.
   const [frames, setFrames] = useState([]);
+  // [Live] Spin prizes / level thresholds / rewards settings from
+  // Supabase (null = not loaded / failed → the hardcoded
+  // fallbacks below are used instead, never an empty wheel).
+  const [liveSpinPrizes, setLiveSpinPrizes] = useState(null);
+  const [liveLevelThresholds, setLiveLevelThresholds] = useState(null);
+  const [liveRewards, setLiveRewards] = useState(null);
   // The user's home country, from their profiles.country ('SGP'
   // only when the profile has none set yet).
   const [userCountry, setUserCountry] = useState('SGP');
@@ -161,10 +185,13 @@ export function AppProvider({ children }) {
     let cancelled = false;
     (async () => {
       try {
-        const [hostsLive, catalog, framesLive] = await Promise.all([
+        const [hostsLive, catalog, framesLive, spinLive, levelsLive, rewardsLive] = await Promise.all([
           fetchLiveHosts(),
           fetchLiveCatalog(),
           fetchFrames(),
+          fetchSpinPrizes(),
+          fetchLevelThresholds(),
+          fetchRewardsSettings(),
         ]);
         if (cancelled) return;
         let usedLive = false;
@@ -181,6 +208,9 @@ export function AppProvider({ children }) {
           if (catalog.diamondPacks) { setLiveDiamondPacks(catalog.diamondPacks); usedLive = true; }
         }
         if (framesLive && framesLive.length > 0) setFrames(framesLive);
+        if (spinLive && spinLive.length > 0) { setLiveSpinPrizes(spinLive); usedLive = true; }
+        if (levelsLive && levelsLive.length > 0) { setLiveLevelThresholds(levelsLive); usedLive = true; }
+        if (rewardsLive) { setLiveRewards(rewardsLive); usedLive = true; }
         if (usedLive) setLiveSource('supabase');
       } catch (e) { /* never break startup — demo data stays */ }
     })();
@@ -204,6 +234,35 @@ export function AppProvider({ children }) {
       : DIAMOND_PACK_IDS),
     [liveDiamondPacks],
   );
+  // [Live] Spin prizes: live rows when loaded AND exactly 8
+  // (the wheel layout assumes 8 segments) — anything else keeps
+  // the hardcoded 8, never an empty or misshapen wheel.
+  const spinPrizes = useMemo(
+    () => (liveSpinPrizes && liveSpinPrizes.length === 8 ? liveSpinPrizes : FALLBACK_SPIN_PRIZES),
+    [liveSpinPrizes],
+  );
+  // [Live] Rewards settings from the app_config `rewards` key.
+  // A bad / missing value keeps the hardcoded default.
+  const freeSpinsPerDay = useMemo(() => {
+    const v = liveRewards && liveRewards.free_spins_per_day;
+    return Number.isInteger(v) && v > 0 ? v : FALLBACK_FREE_SPINS_PER_DAY;
+  }, [liveRewards]);
+  const checkinRewards = useMemo(() => {
+    const v = liveRewards && liveRewards.checkin_rewards;
+    if (Array.isArray(v) && v.length === 7 && v.every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0)) {
+      return v;
+    }
+    return FALLBACK_CHECKIN_REWARDS;
+  }, [liveRewards]);
+  // [Live] Level ladder: live level_thresholds rows when loaded
+  // (sorted by level, Lv0 = 0 points), LV_ROWS otherwise.
+  const lvThresholds = useMemo(() => {
+    if (liveLevelThresholds && liveLevelThresholds.length > 0) {
+      const sorted = [...liveLevelThresholds].sort((a, b) => a.level - b.level);
+      if (sorted[0] && sorted[0].level === 0) return sorted;
+    }
+    return LV_THRESHOLDS;
+  }, [liveLevelThresholds]);
   // [Live] Rate lookups against the resolved (live or demo) tiers.
   // Same shapes as config.js getCallRate / getVoiceCallRate.
   const getLiveCallRate = (tierId) =>
@@ -304,24 +363,25 @@ export function AppProvider({ children }) {
     } catch (e) { /* keep the previous points */ }
   };
 
-  // Level from real points on the LV_ROWS ladder. Lv0 rule: a
-  // balance of 2,000 diamonds or less is always Lv0, whatever the
-  // history says. No transactions → Lv0 with 0 points.
+  // Level from real points on the live level ladder (or the
+  // LV_ROWS fallback). Lv0 rule: a balance of 2,000 diamonds or
+  // less is always Lv0, whatever the history says. No
+  // transactions → Lv0 with 0 points.
   const levelInfo = useMemo(() => {
     const points = levelPoints || 0;
     let level = 0;
     if (diamonds > 2000) {
-      for (const row of LV_THRESHOLDS) {
+      for (const row of lvThresholds) {
         if (points >= row.threshold) level = row.level;
       }
     }
-    const current = LV_THRESHOLDS[level] || { threshold: 0 };
-    const next = LV_THRESHOLDS[level + 1];
+    const current = lvThresholds.find((r) => r.level === level) || { threshold: 0 };
+    const next = lvThresholds.find((r) => r.level === level + 1);
     const progress = !next
       ? 100
       : Math.max(0, Math.min(100, Math.round(((points - current.threshold) / (next.threshold - current.threshold)) * 100)));
     return { level, points, progress };
-  }, [levelPoints, diamonds]);
+  }, [levelPoints, diamonds, lvThresholds]);
 
   // Follows from the follows table (follower_id = me). [] when not
   // signed in or on any failure — never a hardcoded list.
@@ -963,9 +1023,11 @@ export function AppProvider({ children }) {
     // signed-in user's profiles row (auth.js); frames are the
     // active panel frames; unreadTotal counts unread messages;
     // levelInfo is { level, points, progress } from real
-    // transactions on the LV_ROWS ladder.
-    () => ({ coins, diamonds, following, toggleFollow, sendGift, spendDiamonds, buyCoinPack, buyDiamondPack, chargeCall, chargeVoiceCall, callHistory, toast, showToast, hosts, setHostOnline, setHostRate, userCountry /* [F3] */, addRewardCoins, recordSpin, recordCheckin, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, claimTask, vipLevel, vipUntil, buyVip /* [Vero] */, callRates, coinPacks, gifts, vipPacks, diamondPacks, frames, getLiveCallRate, getLiveVoiceCallRate, liveSource /* [Live] */, liveHostsLoaded /* [Live-only Home] */, signedIn, walletStatus, iapStatus, transactions, refreshWallet, refreshTransactions /* [Wallet] */, unreadTotal, refreshUnreadTotal, levelInfo, updateMyProfile }),
-    [coins, diamonds, following, callHistory, toast, hosts, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, vipLevel, vipUntil, callRates, coinPacks, gifts, vipPacks, diamondPacks, frames, liveSource, liveHostsLoaded, signedIn, walletStatus, iapStatus, transactions, userCountry, unreadTotal, levelInfo]
+    // transactions on the live level ladder (LV_ROWS fallback);
+    // spinPrizes / freeSpinsPerDay / checkinRewards are the live
+    // spin + check-in values (hardcoded fallbacks when missing).
+    () => ({ coins, diamonds, following, toggleFollow, sendGift, spendDiamonds, buyCoinPack, buyDiamondPack, chargeCall, chargeVoiceCall, callHistory, toast, showToast, hosts, setHostOnline, setHostRate, userCountry /* [F3] */, addRewardCoins, recordSpin, recordCheckin, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, claimTask, vipLevel, vipUntil, buyVip /* [Vero] */, callRates, coinPacks, gifts, vipPacks, diamondPacks, frames, getLiveCallRate, getLiveVoiceCallRate, liveSource /* [Live] */, liveHostsLoaded /* [Live-only Home] */, signedIn, walletStatus, iapStatus, transactions, refreshWallet, refreshTransactions /* [Wallet] */, unreadTotal, refreshUnreadTotal, levelInfo, spinPrizes, freeSpinsPerDay, checkinRewards, updateMyProfile }),
+    [coins, diamonds, following, callHistory, toast, hosts, spinsUsedToday, lastSpinDate, lastCheckinDate, checkinStreak, giftsSent, claimedTasks, vipLevel, vipUntil, callRates, coinPacks, gifts, vipPacks, diamondPacks, frames, liveSource, liveHostsLoaded, signedIn, walletStatus, iapStatus, transactions, userCountry, unreadTotal, levelInfo, spinPrizes, freeSpinsPerDay, checkinRewards]
     // [/F1]
   );
 
