@@ -17,7 +17,7 @@ import { requestNotificationPermission } from './src/permissions';
 import { useIncomingCallListener } from './src/calls/signalling';
 import LoginScreen from './src/screens/LoginScreen';
 import LegalScreen from './src/screens/LegalScreen';
-import GenderScreen from './src/screens/GenderScreen';
+import SignupFlow from './src/screens/SignupFlow';
 import HomeScreen from './src/screens/HomeScreen';
 import VideoCallScreen from './src/screens/VideoCallScreen';
 import MatchingScreen from './src/screens/MatchingScreen'; // [New UI] Match flow
@@ -191,12 +191,16 @@ function Root() {
   // until the user goes back to sign-in (the next sign-in re-runs
   // the check, so a restored account gets in again).
   const [blocked, setBlocked] = React.useState(null);
-  // First-login gender step: true while the signed-in profile has
-  // no gender saved — the GenderScreen shows instead of Main.
-  const [needsGender, setNeedsGender] = React.useState(false);
-  // One gender check per user id per app run (same dedupe as the
+  // First-time signup flow (Waki Star flow, Livo theme): true
+  // while the signed-in profile is incomplete — no country or no
+  // gender saved — and the SignupFlow shows instead of Main.
+  // The fetched profile is kept so the flow can prefill the
+  // nickname / Google photo. Complete profiles never see it.
+  const [needsSignup, setNeedsSignup] = React.useState(false);
+  const [signupProfile, setSignupProfile] = React.useState(null);
+  // One signup check per user id per app run (same dedupe as the
   // access check above); cleared on sign-out.
-  const genderCheckedFor = React.useRef(null);
+  const signupCheckedFor = React.useRef(null);
   // One access check per user id per app run: the initial
   // getSession() restore and the INITIAL_SESSION event describe the
   // same session, so the second one must not re-run the checks
@@ -245,17 +249,20 @@ function Root() {
     return true;
   }, [runAccessChecks]);
 
-  // First-login gender step: a profile with no gender (null/empty)
-  // must pick Male/Female before entering Main. Fail-open on a
-  // failed lookup (no network / timeout) — the prompt re-appears
-  // on the next launch instead of locking the user out.
-  const resolveNeedsGender = React.useCallback(async (user) => {
-    if (!user || genderCheckedFor.current === user.id) return false;
-    genderCheckedFor.current = user.id;
+  // First-time signup check: a profile with no country or no
+  // gender (null/empty) must go through the signup flow before
+  // entering Main. Fail-open on a failed lookup (no network /
+  // timeout) — the flow re-appears on the next launch instead of
+  // locking the user out. The old standalone GenderScreen is
+  // gone — gender is now collected inside this one flow.
+  const resolveNeedsSignup = React.useCallback(async (user) => {
+    if (!user || signupCheckedFor.current === user.id) return false;
+    signupCheckedFor.current = user.id;
     try {
       const { profile, error } = await fetchMyProfile(user.id);
       if (error || !profile) return false;
-      return !String(profile.gender || '').trim();
+      setSignupProfile(profile);
+      return !String(profile.country || '').trim() || !String(profile.gender || '').trim();
     } catch (e) {
       return false;
     }
@@ -290,8 +297,8 @@ function Root() {
       if (!restored) { setSession(null); return; }
       const admitted = (await withTimeout(admitSession(restored))) === true;
       if (!mounted) return;
-      if (admitted && (await resolveNeedsGender(restored.user))) {
-        setNeedsGender(true);
+      if (admitted && (await resolveNeedsSignup(restored.user))) {
+        setNeedsSignup(true);
       }
       setSession(admitted ? restored : null);
     })();
@@ -299,8 +306,9 @@ function Root() {
       if (!mounted) return;
       if (event === 'SIGNED_OUT') {
         accessCheckedFor.current = null;
-        genderCheckedFor.current = null;
-        setNeedsGender(false);
+        signupCheckedFor.current = null;
+        setNeedsSignup(false);
+        setSignupProfile(null);
         setSession(null);
         return;
       }
@@ -322,8 +330,8 @@ function Root() {
         // startup gate — the watchdog below fails open to Login.
         const admitted = (await withTimeout(admitSession(newSession))) === true;
         if (!mounted) return;
-        if (admitted && (await resolveNeedsGender(newSession.user))) {
-          setNeedsGender(true);
+        if (admitted && (await resolveNeedsSignup(newSession.user))) {
+          setNeedsSignup(true);
         }
         setSession(admitted ? newSession : null);
         if (event === 'SIGNED_IN' && admitted && newSession.user) {
@@ -341,7 +349,7 @@ function Root() {
       clearTimeout(watchdog);
       listener.subscription.unsubscribe();
     };
-  }, [admitSession, resolveNeedsGender]);
+  }, [admitSession, resolveNeedsSignup]);
 
   // ── Incoming-call listener (real Realtime signalling, 2026-11-22) ──
   // Subscribes to ringing calls rows for the signed-in user and
@@ -385,12 +393,18 @@ function Root() {
     );
   }
 
-  // First-login gender step: the user picks Male/Female once;
-  // the screen only appears when the profile has no gender saved.
-  if (session && needsGender) {
+  // First-time signup flow: country + photo + nickname + birthday
+  // + gender, once, right after sign-in. It only appears when the
+  // profile is incomplete (no country or no gender saved) — complete
+  // profiles go straight to Main and never see it.
+  if (session && needsSignup) {
     return (
       <AuthContext.Provider value={authValue}>
-        <GenderScreen onDone={() => setNeedsGender(false)} />
+        <SignupFlow
+          user={session.user}
+          profile={signupProfile}
+          onDone={() => setNeedsSignup(false)}
+        />
         <StatusBar style="auto" />
       </AuthContext.Provider>
     );
