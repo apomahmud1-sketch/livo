@@ -12,10 +12,22 @@
 // rows. Until the products exist in Play Console the Buy buttons
 // explain that instead of charging anything.
 import React, { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { COLORS } from '../config';
 import { useApp } from '../store';
 import { getIapProducts, skuForCoinPack, skuForDiamondPack } from '../billing/iap';
+import { listPublicAgents } from '../supabase/agent';
+
+// Normalize an agent phone into a wa.me number (digits only):
+// 8 digits starting with 8/9 = Singapore mobile, prefix 65;
+// 11 digits starting with 0 = Bangladesh, strip the 0, prefix 880;
+// anything else is used as-is.
+function agentWhatsAppNumber(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.length === 8 && (digits[0] === '8' || digits[0] === '9')) return `65${digits}`;
+  if (digits.length === 11 && digits[0] === '0') return `880${digits.slice(1)}`;
+  return digits;
+}
 
 // Diamond packs come ONLY from the store's live catalog
 // (diamond_packs table via live.js) — no hardcoded list here.
@@ -58,6 +70,39 @@ export default function WalletScreen({ navigation }) {
   // Bill · History filter: All / Received / Sent. Received =
   // a positive coins or diamonds amount; Sent = a negative one.
   const [billFilter, setBillFilter] = useState('all');
+  // Approved coin agents (Wallet "Buy from Agent" section, below
+  // the coin packs). null = still loading, [] = none or load failed
+  // (agentsFailed tells those two apart).
+  const [agents, setAgents] = useState(null);
+  const [agentsFailed, setAgentsFailed] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    listPublicAgents().then((rows) => {
+      if (!alive) return;
+      if (rows === null) {
+        setAgents([]);
+        setAgentsFailed(true);
+      } else {
+        setAgents(rows);
+        setAgentsFailed(false);
+      }
+    });
+    return () => { alive = false; };
+  }, []);
+
+  const openAgentWhatsApp = async (phone) => {
+    const url = `https://wa.me/${agentWhatsAppNumber(phone)}`;
+    try {
+      if (await Linking.canOpenURL(url)) {
+        await Linking.openURL(url);
+      } else {
+        showToast('Could not open WhatsApp.');
+      }
+    } catch (e) {
+      showToast('Could not open WhatsApp.');
+    }
+  };
 
   const visibleTx = transactions.filter((h) => {
     if (billFilter === 'received') return (h.amountCoins || 0) > 0 || (h.amountDiamonds || 0) > 0;
@@ -256,6 +301,33 @@ export default function WalletScreen({ navigation }) {
             ? 'Secure purchase via Google Play.'
             : 'Real Google Play payment — billing is starting up.'}
       </Text>
+
+      {agents !== null ? (
+        <View>
+          <Text style={styles.sectionTitle}>🤝 Buy Coins from an Agent</Text>
+          <Text style={styles.agentNote}>
+            Pay the agent by cash or bKash, then share your Livo ID — the agent will send the coins to your account.
+          </Text>
+          {agentsFailed ? (
+            <Text style={styles.empty}>Could not load coin agents — check your connection and try again.</Text>
+          ) : agents.length === 0 ? (
+            <Text style={styles.empty}>No coin agents available yet.</Text>
+          ) : (
+            agents.map((a) => (
+              <View key={a.agentId || a.name} style={styles.agentRow}>
+                <View style={styles.agentInfo}>
+                  <Text style={styles.agentName}>{a.name}</Text>
+                  <Text style={styles.agentMeta}>@{a.agentId}</Text>
+                  <Text style={styles.agentRate}>{a.rate.toLocaleString()} coins per $1</Text>
+                </View>
+                <TouchableOpacity style={styles.waBtn} onPress={() => openAgentWhatsApp(a.phone)}>
+                  <Text style={styles.waBtnText}>WhatsApp</Text>
+                </TouchableOpacity>
+              </View>
+            ))
+          )}
+        </View>
+      ) : null}
     </ScrollView>
   );
 }
@@ -263,6 +335,14 @@ export default function WalletScreen({ navigation }) {
 const styles = StyleSheet.create({
   agreeRow: { alignItems: 'flex-start', flexDirection: 'row', marginTop: 18 },
   agreeText: { color: '#fff', flex: 1, fontSize: 14 },
+  agentInfo: { flex: 1 },
+  agentMeta: { color: '#e9d5ff', fontSize: 13, marginTop: 2 },
+  agentName: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  agentNote: { color: '#e9d5ff', fontSize: 13, marginTop: 6 },
+  agentRate: { color: '#fff', fontSize: 14, fontWeight: 'bold', marginTop: 4 },
+  agentRow: { alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.18)', borderRadius: 12, flexDirection: 'row', justifyContent: 'space-between', marginTop: 8, padding: 12 },
+  waBtn: { backgroundColor: '#25d366', borderRadius: 16, paddingHorizontal: 16, paddingVertical: 10 },
+  waBtnText: { color: '#fff', fontWeight: 'bold' },
   back: { color: '#fff', fontSize: 28, fontWeight: 'bold' },
   balance: { color: '#fff', fontSize: 26, fontWeight: 'bold', marginBottom: 4, marginTop: 8 },
   bg: { backgroundColor: '#a855f7', flex: 1 },
