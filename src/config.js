@@ -87,6 +87,14 @@ export const COIN_TO_DIAMOND_RATE = 1;
 // Platform commission on host earnings, in percent (admin can change).
 export const PLATFORM_COMMISSION_PERCENT = 30;
 
+// Host share of a received gift, in percent of the gift price
+// (admin can change). 100 = the host keeps the full gift price as
+// Diamonds. The user also asked for gift + call earnings at 70% —
+// that change is pending his confirmation, so flip this to 70
+// when he confirms; the call share stays at
+// 100 - PLATFORM_COMMISSION_PERCENT = 70%.
+export const GIFT_HOST_SHARE_PERCENT = 100;
+
 // Minimum withdrawal, in diamonds (admin can change).
 export const MIN_WITHDRAW_DIAMONDS = 10000;
 
