@@ -75,6 +75,9 @@ export default function HomeScreen({ navigation }) {
   const { coins, hosts: allHosts, liveHostsLoaded, unreadTotal, getLiveCallRate, showToast } = useApp();
   // Panel-driven config (app_config): theme colours, hero text, notice.
   const { theme: T, homeHero, noticeText } = useAppConfig();
+  // Belt-and-braces: the hero text must never crash Home — if the
+  // panel config ever lacks home_hero, the built-in default stands in.
+  const hero = homeHero || { title: '1v1 Video Call', subtitle: 'Find your best match!' };
   const styles = React.useMemo(() => makeStyles(T), [T]);
 
   // Live-only Home: only hosts who are really live on video appear
@@ -144,8 +147,8 @@ export default function HomeScreen({ navigation }) {
         end={{ x: 1, y: 1 }}
         style={styles.hero}
       >
-        <Text style={styles.heroTitle}>{homeHero.title}</Text>
-        <Text style={styles.heroSub}>{homeHero.subtitle}</Text>
+        <Text style={styles.heroTitle}>{hero.title}</Text>
+        <Text style={styles.heroSub}>{hero.subtitle}</Text>
         <TouchableOpacity onPress={goMatching} activeOpacity={0.85}>
           <LinearGradient
             colors={[T.pinkLight, T.pink]}
