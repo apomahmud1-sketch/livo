@@ -474,6 +474,18 @@ export default function HostDashboardScreen({ navigation, route }) {
         </Text>
       </View>
 
+      {/* my income — Diamonds live here now (not in the Wallet):
+          earnings history + withdraw live on the My Income screen. */}
+      <TouchableOpacity
+        style={styles.incomeBtn}
+        onPress={() => navigation.navigate('MyIncome')}
+      >
+        <Text style={styles.incomeBtnText}>💎  My Income</Text>
+        <Text style={styles.incomeBtnSub}>
+          {fmt(availableDiamonds)} Diamonds available · see your earnings and withdraw
+        </Text>
+      </TouchableOpacity>
+
       {/* call rate — persisted to the hosts table */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Call Rate — per minute</Text>
@@ -643,6 +655,9 @@ const styles = StyleSheet.create({
   historyTitle: { fontSize: 14, fontWeight: 'bold', marginBottom: 4 },
   historyWrap: { marginTop: 16 },
   hostId: { color: COLORS.grey, fontSize: 13, marginTop: 2 },
+  incomeBtn: { backgroundColor: '#7c3aed', borderRadius: 16, elevation: 2, marginTop: 16, padding: 16 },
+  incomeBtnSub: { color: '#ede9fe', fontSize: 13, lineHeight: 18, marginTop: 4 },
+  incomeBtnText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
   input: { borderColor: COLORS.lightGrey, borderRadius: 12, borderWidth: 1, color: COLORS.dark, fontSize: 15, paddingHorizontal: 12, paddingVertical: 10 },
   knobLeft: { alignSelf: 'flex-start' },
   knobRight: { alignSelf: 'flex-end' },
