@@ -33,6 +33,8 @@ import RewardsScreen from './src/screens/RewardsScreen'; // [F1] Lucky Spin + Da
 import MomentsScreen from './src/screens/MomentsScreen'; // [Vero] Moments feed
 import TasksScreen from './src/screens/TasksScreen'; // [Vero] Daily Tasks
 import AgentPortalScreen from './src/screens/AgentPortalScreen'; // [Agent] Coin agent portal
+import MyIncomeScreen from './src/screens/MyIncomeScreen'; // [Wallet] Host Diamond earnings + withdraw
+import AgentDetailScreen from './src/screens/AgentDetailScreen'; // [Wallet] Agent detail inside the app
 
 // AuthContext (2026-11-23): the gate in Root() holds the session in
 // MEMORY (from the SIGNED_IN / INITIAL_SESSION event). Screens must
@@ -463,6 +465,8 @@ function Root() {
             <Stack.Screen name="LiveRoom" component={LiveRoomScreen} />
             <Stack.Screen name="ChatDetail" component={ChatDetailScreen} />
             <Stack.Screen name="WalletTab" component={WalletScreen} />
+            <Stack.Screen name="MyIncome" component={MyIncomeScreen} />
+            <Stack.Screen name="AgentDetail" component={AgentDetailScreen} />
             <Stack.Screen name="HostDashboard" component={HostDashboardScreen} />
             <Stack.Screen name="Ranking" component={RankingScreen} />
             <Stack.Screen name="VIP" component={VIPScreen} />
