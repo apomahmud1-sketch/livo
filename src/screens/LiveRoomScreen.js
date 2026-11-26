@@ -251,7 +251,7 @@ export default function LiveRoomScreen({ route, navigation }) {
           )}
           <View style={styles.hostMeta}>
             <Text style={styles.hostName} numberOfLines={1}>{host.name}</Text>
-            <Text style={styles.hostId}>ID: {host.userId || host.id}</Text>
+            <Text style={styles.hostId}>ID: {host.userId || '—'}</Text>
           </View>
           <TouchableOpacity
             style={[styles.followBtn, isFollowing && styles.followBtnOn]}
