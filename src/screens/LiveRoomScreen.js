@@ -37,6 +37,7 @@ import { fetchRoomMessages, sendRoomMessage, subscribeRoomMessages } from '../su
 import { buildChannelName } from '../calls/signalling';
 import LiveVideo from '../agora/LiveVideo';
 import GiftSheet from '../components/GiftSheet';
+import GiftAnimationOverlay, { giftAnimationUrl } from '../components/GiftAnimationOverlay';
 
 const HEART_COLORS = ['#ff5da2', '#f43f9e', '#c084fc', '#ffd76a'];
 
@@ -68,6 +69,10 @@ export default function LiveRoomScreen({ route, navigation }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [giftOpen, setGiftOpen] = useState(false);
+  // Gift animation overlay: the gift with an uploaded animation
+  // currently playing (null = none). The chat line + hearts below
+  // still fire, so a load failure just leaves the existing effect.
+  const [animGift, setAnimGift] = useState(null);
   const [hearts, setHearts] = useState([]);
   const [myId, setMyId] = useState(null);
   const [myName, setMyName] = useState('Guest');
@@ -203,6 +208,10 @@ export default function LiveRoomScreen({ route, navigation }) {
   const onGiftSent = (gift) => {
     // A real event that just happened: show it in this room's feed
     // as a local line (gold, like the preview) + floating hearts.
+    // A gift with an uploaded animation also plays it full-screen
+    // (overlay below); a load failure just leaves the line +
+    // hearts — the existing effect — and never blocks anything.
+    if (giftAnimationUrl(gift)) setAnimGift(gift);
     setMessages((prev) => [
       ...prev.slice(-49),
       {
@@ -360,6 +369,16 @@ export default function LiveRoomScreen({ route, navigation }) {
           </LinearGradient>
         </TouchableOpacity>
       </View>
+
+      {/* Uploaded gift animation overlay (video/GIF, auto-dismiss;
+          silent fallback to the chat line + hearts on load failure). */}
+      <GiftAnimationOverlay
+        gift={animGift}
+        senderName="You"
+        visible={!!animGift}
+        onDone={() => setAnimGift(null)}
+        onError={() => setAnimGift(null)}
+      />
 
       <GiftSheet visible={giftOpen} host={host} onClose={() => setGiftOpen(false)} onSent={onGiftSent} />
     </View>
