@@ -288,7 +288,7 @@ export default function MessagesScreen({ navigation }) {
       </View>
       <View style={styles.msgBody}>
         <Text style={styles.name}>
-          {item.name} <Text style={styles.idChip}>ID: {item.id}</Text>
+          {item.name} <Text style={styles.idChip}>ID: {item.userId || '—'}</Text>
         </Text>
         <Text style={styles.text} numberOfLines={1}>Say hi to {item.name}</Text>
       </View>
@@ -489,7 +489,7 @@ export default function MessagesScreen({ navigation }) {
               <Avatar name={item.name} color={item.color || '#7c3aed'} photo={item.photo} />
               <View style={styles.msgBody}>
                 <Text style={styles.name}>{item.name}</Text>
-                <Text style={styles.text} numberOfLines={1}>ID: {item.id} · {item.lang}</Text>
+                <Text style={styles.text} numberOfLines={1}>ID: {item.userId || '—'} · {item.lang}</Text>
               </View>
               <View style={styles.sayHiBtn}>
                 <Text style={styles.sayHiBtnText}>Chat</Text>
