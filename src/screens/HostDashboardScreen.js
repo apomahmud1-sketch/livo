@@ -29,6 +29,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { COLORS, MIN_WITHDRAW_DIAMONDS, WITHDRAW_METHODS } from '../config';
 import { useApp } from '../store';
+import { useAppConfig, genderViewFor } from '../appConfig';
 import { fetchMyProfile } from '../supabase/auth';
 import {
   ensureHostRow,
@@ -73,6 +74,13 @@ export default function HostDashboardScreen({ navigation }) {
   // Go Live is for female hosts only (profiles.gender). A missing
   // or non-female gender hides/disables it — never guessed.
   const isFemale = String((profile && profile.gender) || '').toLowerCase() === 'female';
+  // Gender-based view (panel app_config → gender_views): the Go Live
+  // button only shows when this user's view is 'host'. The approved
+  // + female gates inside goLive() are unchanged. Fail open: no live
+  // config or an unknown gender keeps the button (current behaviour).
+  const appCfg = useAppConfig();
+  const showGoLive = !appCfg.configLive
+    || genderViewFor(appCfg, profile && profile.gender) === 'host';
   // Store host with the same host_id, so Home updates at once when
   // this host toggles online / changes rate in this session.
   const storeHost = hostRow ? hosts.find((h) => String(h.id) === String(hostRow.host_id)) : null;
@@ -471,16 +479,22 @@ export default function HostDashboardScreen({ navigation }) {
         </Text>
       </View>
 
-      {/* go live — female hosts only; hidden/disabled otherwise */}
-      <TouchableOpacity
-        style={[styles.goLiveBtn, (!approved || !isFemale) && styles.goLiveDisabled]}
-        onPress={goLive}
-        disabled={!approved || !isFemale}
-      >
-        <Text style={styles.goLiveText}>🎥  Go Live</Text>
-      </TouchableOpacity>
-      {approved && !isFemale ? (
-        <Text style={styles.goLiveNote}>Go Live is only for female hosts — your profile gender is not set or is not female.</Text>
+      {/* go live — female hosts only; hidden/disabled otherwise.
+          Also hidden entirely when this user's gender view is
+          'caller' (panel gender_views). */}
+      {showGoLive ? (
+        <>
+          <TouchableOpacity
+            style={[styles.goLiveBtn, (!approved || !isFemale) && styles.goLiveDisabled]}
+            onPress={goLive}
+            disabled={!approved || !isFemale}
+          >
+            <Text style={styles.goLiveText}>🎥  Go Live</Text>
+          </TouchableOpacity>
+          {approved && !isFemale ? (
+            <Text style={styles.goLiveNote}>Go Live is only for female hosts — your profile gender is not set or is not female.</Text>
+          ) : null}
+        </>
       ) : null}
 
       {/* weekly earnings chart — real calls rows, last 7 days */}
