@@ -218,7 +218,9 @@ export default function ProfileScreen({ navigation }) {
       || meta.full_name
       || meta.name
       || (user && user.email ? user.email.split('@')[0] : null);
-    const displayId = (profile && profile.user_id) || (user && user.id) || null;
+    // The 8-digit Livo ID only — never the auth UUID: one person,
+    // one number, shown the same everywhere in the app.
+    const displayId = (profile && profile.user_id) || null;
     return {
       name: displayName,
       id: displayId,
@@ -635,7 +637,7 @@ export default function ProfileScreen({ navigation }) {
 
           {!profile && (
             <Text style={{ fontSize: 11, color: t.muted, marginTop: 6, marginBottom: 2 }}>
-              {`Session: ${user ? 'yes' : 'no'} | User: ${user && user.id ? String(user.id).slice(0, 8) : 'none'} | Profile: missing | Error: ${fetchErr || 'none'} | Storage: ${storageTest}`}
+              {`Session: ${user ? 'yes' : 'no'} | Profile: missing | Error: ${fetchErr || 'none'} | Storage: ${storageTest}`}
             </Text>
           )}
 
