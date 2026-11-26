@@ -15,7 +15,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 import { Bell, Crown, Eye, Users, Video, Zap } from 'lucide-react-native';
 import { formatViewers } from '../config';
-import { shadeColor, useAppConfig } from '../appConfig';
+import { resolveAppPage, shadeColor, useAppConfig } from '../appConfig';
 import { useApp } from '../store';
 import { subscribeRoomViewers } from '../supabase/presence';
 import { CoinIcon } from '../components/GiftSheet';
@@ -74,10 +74,29 @@ const HostCard = React.memo(function HostCard({ host, viewers, rate, navigation,
 export default function HomeScreen({ navigation }) {
   const { coins, hosts: allHosts, liveHostsLoaded, unreadTotal, getLiveCallRate, showToast } = useApp();
   // Panel-driven config (app_config): theme colours, hero text, notice.
-  const { theme: T, homeHero, noticeText } = useAppConfig();
+  const { theme: T, homeHero, noticeText, app_pages } = useAppConfig();
   // Belt-and-braces: the hero text must never crash Home — if the
   // panel config ever lacks home_hero, the built-in default stands in.
   const hero = homeHero || { title: '1v1 Video Call', subtitle: 'Find your best match!' };
+  // ── App Builder (Mother Panel → app_pages) — Home page ─────────
+  // The panel's `home` page config hides / reorders the Home
+  // sections: notice, hero, quickmatch (the three tiles), rewards
+  // (the banner that opens Rewards), livehosts (the Live Hosts
+  // grid). The grid is a scrolling list, so it always sits below
+  // the header blocks even when the panel order puts it first —
+  // that is the honest limit of this layout. `tabbar` is the bottom
+  // tab bar, handled in App.js, not here.
+  const homePage = React.useMemo(() => resolveAppPage(app_pages, 'home'), [app_pages]);
+  const homeItemById = React.useMemo(() => new Map(homePage.items.map((i) => [i.id, i])), [homePage]);
+  const showHomeBlock = (id) => {
+    const it = homeItemById.get(id);
+    return !!it && !it.hidden;
+  };
+  const showLiveHosts = showHomeBlock('livehosts');
+  // Header blocks in the panel's order (livehosts + tabbar excluded).
+  const homeHeaderOrder = homePage.items
+    .filter((i) => !i.hidden && ['notice', 'hero', 'quickmatch', 'rewards'].indexOf(i.id) !== -1)
+    .map((i) => i.id);
   const styles = React.useMemo(() => makeStyles(T), [T]);
 
   // Live-only Home: only hosts who are really live on video appear
@@ -131,74 +150,101 @@ export default function HomeScreen({ navigation }) {
 
   const goMatching = () => navigation.navigate('Matching');
 
-  const listHeader = (
-    <View>
-      {/* App notice from the Mother Panel (app_config notice.text).
-          Empty text = no banner at all. */}
-      {noticeText ? (
-        <View style={styles.noticeBanner}>
+  // One header block per App Builder item id, rendered in the
+  // panel's order (see homeHeaderOrder above).
+  const renderHomeBlock = (id) => {
+    if (id === 'notice') {
+      // App notice from the Mother Panel (app_config notice.text).
+      // Empty text = no banner at all.
+      return noticeText ? (
+        <View key="notice" style={styles.noticeBanner}>
           <Text style={styles.noticeText}>{noticeText}</Text>
         </View>
-      ) : null}
-      {/* Hero banner — title + subtitle come from app_config home_hero. */}
-      <LinearGradient
-        colors={[T.violet, T.purple, T.pink]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.hero}
-      >
-        <Text style={styles.heroTitle}>{hero.title}</Text>
-        <Text style={styles.heroSub}>{hero.subtitle}</Text>
-        <TouchableOpacity onPress={goMatching} activeOpacity={0.85}>
-          <LinearGradient
-            colors={[T.pinkLight, T.pink]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.startMatchBtn}
-          >
-            <Text style={styles.startMatchTxt}>Start Match →</Text>
-          </LinearGradient>
-        </TouchableOpacity>
-      </LinearGradient>
-
-      {/* Three tiles */}
-      <View style={styles.tiles}>
-        <TouchableOpacity onPress={goMatching} activeOpacity={0.85} style={styles.tileWrap}>
-          <LinearGradient colors={[T.violet, T.violetDark]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.tile}>
-            <View style={styles.tileIcon}><Zap size={20} color="#ffd23e" strokeWidth={2.4} /></View>
-            <Text style={styles.tileTitle}>Quick Match</Text>
-            <Text style={styles.tileSub}>1v1 Chat</Text>
-          </LinearGradient>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={goMatching} activeOpacity={0.85} style={styles.tileWrap}>
-          <LinearGradient colors={['#0ea5e9', '#2563eb']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.tile}>
-            <View style={styles.tileIcon}><Video size={20} color="#fff" strokeWidth={2.4} /></View>
-            <Text style={styles.tileTitle}>Video Call</Text>
-            <Text style={styles.tileSub}>Random</Text>
-          </LinearGradient>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => navigation.navigate('MessagesTab')} activeOpacity={0.85} style={styles.tileWrap}>
-          <LinearGradient colors={['#f59e0b', '#ea580c']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.tile}>
-            <View style={styles.tileIcon}><Users size={20} color="#fff" strokeWidth={2.4} /></View>
-            <Text style={styles.tileTitle}>Friend Call</Text>
-            <Text style={styles.tileSub}>Call friends</Text>
-          </LinearGradient>
-        </TouchableOpacity>
-      </View>
-
-      {/* Live Hosts section header */}
-      <View style={styles.sectionHead}>
-        <Text style={styles.sectionTitle}>Live Hosts</Text>
-        <View style={styles.liveBadge}>
-          <View style={styles.liveDot} />
-          <Text style={styles.liveText}>LIVE</Text>
+      ) : null;
+    }
+    if (id === 'hero') {
+      // Hero banner — title + subtitle come from app_config home_hero.
+      return (
+        <LinearGradient
+          key="hero"
+          colors={[T.violet, T.purple, T.pink]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.hero}
+        >
+          <Text style={styles.heroTitle}>{hero.title}</Text>
+          <Text style={styles.heroSub}>{hero.subtitle}</Text>
+          <TouchableOpacity onPress={goMatching} activeOpacity={0.85}>
+            <LinearGradient
+              colors={[T.pinkLight, T.pink]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.startMatchBtn}
+            >
+              <Text style={styles.startMatchTxt}>Start Match →</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+        </LinearGradient>
+      );
+    }
+    if (id === 'quickmatch') {
+      // Three tiles.
+      return (
+        <View key="quickmatch" style={styles.tiles}>
+          <TouchableOpacity onPress={goMatching} activeOpacity={0.85} style={styles.tileWrap}>
+            <LinearGradient colors={[T.violet, T.violetDark]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.tile}>
+              <View style={styles.tileIcon}><Zap size={20} color="#ffd23e" strokeWidth={2.4} /></View>
+              <Text style={styles.tileTitle}>Quick Match</Text>
+              <Text style={styles.tileSub}>1v1 Chat</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={goMatching} activeOpacity={0.85} style={styles.tileWrap}>
+            <LinearGradient colors={['#0ea5e9', '#2563eb']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.tile}>
+              <View style={styles.tileIcon}><Video size={20} color="#fff" strokeWidth={2.4} /></View>
+              <Text style={styles.tileTitle}>Video Call</Text>
+              <Text style={styles.tileSub}>Random</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => navigation.navigate('MessagesTab')} activeOpacity={0.85} style={styles.tileWrap}>
+            <LinearGradient colors={['#f59e0b', '#ea580c']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.tile}>
+              <View style={styles.tileIcon}><Users size={20} color="#fff" strokeWidth={2.4} /></View>
+              <Text style={styles.tileTitle}>Friend Call</Text>
+              <Text style={styles.tileSub}>Call friends</Text>
+            </LinearGradient>
+          </TouchableOpacity>
         </View>
-        <View style={{ flex: 1 }} />
-        <TouchableOpacity onPress={() => showToast('Showing all live hosts')} activeOpacity={0.8}>
-          {/* See All: the grid below already shows every live host. */}
-          <Text style={styles.seeAll}>See All ›</Text>
+      );
+    }
+    if (id === 'rewards') {
+      // Rewards banner (App Builder `home:rewards` — the panel
+      // preview shows it on Home): opens the real Rewards screen.
+      return (
+        <TouchableOpacity key="rewards" onPress={() => navigation.navigate('Rewards')} activeOpacity={0.85} style={styles.rewardsBanner}>
+          <Text style={styles.rewardsBannerTxt}>🎁 Rewards — spin daily &amp; check in for coins</Text>
         </TouchableOpacity>
-      </View>
+      );
+    }
+    return null;
+  };
+
+  const listHeader = (
+    <View>
+      {homeHeaderOrder.map((id) => renderHomeBlock(id))}
+      {/* Live Hosts section header — hidden with the grid. */}
+      {showLiveHosts ? (
+        <View style={styles.sectionHead}>
+          <Text style={styles.sectionTitle}>Live Hosts</Text>
+          <View style={styles.liveBadge}>
+            <View style={styles.liveDot} />
+            <Text style={styles.liveText}>LIVE</Text>
+          </View>
+          <View style={{ flex: 1 }} />
+          <TouchableOpacity onPress={() => showToast('Showing all live hosts')} activeOpacity={0.8}>
+            {/* See All: the grid below already shows every live host. */}
+            <Text style={styles.seeAll}>See All ›</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
     </View>
   );
 
@@ -234,7 +280,7 @@ export default function HomeScreen({ navigation }) {
       </View>
 
       <FlatList
-        data={liveHosts}
+        data={showLiveHosts ? liveHosts : []}
         style={{ flex: 1 }}
         keyExtractor={(h) => String(h.id)}
         numColumns={2}
@@ -244,7 +290,7 @@ export default function HomeScreen({ navigation }) {
         ListHeaderComponent={listHeader}
         removeClippedSubviews maxToRenderPerBatch={8} windowSize={8} initialNumToRender={8} updateCellsBatchingPeriod={50}
         ListEmptyComponent={
-          <Text style={styles.empty}>No hosts live right now.</Text>
+          showLiveHosts ? <Text style={styles.empty}>No hosts live right now.</Text> : null
         }
       />
     </LinearGradient>
@@ -300,6 +346,9 @@ const makeStyles = (t) => StyleSheet.create({
   // App notice banner (Mother Panel) — gold bg, dark text.
   noticeBanner: { backgroundColor: t.gold, borderRadius: 12, marginHorizontal: 14, marginTop: 2, paddingHorizontal: 14, paddingVertical: 10 },
   noticeText: { color: '#1f2937', fontSize: 13.5, fontWeight: '700' },
+  // Rewards banner (App Builder `home:rewards`) — gold, like the panel preview.
+  rewardsBanner: { backgroundColor: t.gold, borderRadius: 12, marginHorizontal: 14, marginTop: 14, paddingHorizontal: 14, paddingVertical: 12 },
+  rewardsBannerTxt: { color: '#3b2a00', fontSize: 13, fontWeight: '800' },
   heroTitle: { color: '#ffe259', fontSize: 21, fontWeight: '900', textShadowColor: 'rgba(0,0,0,0.35)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 10 },
   heroSub: { color: '#fff', fontSize: 13.5, fontWeight: '700', marginTop: 4 },
   startMatchBtn: { alignSelf: 'flex-start', borderRadius: 999, marginTop: 16, minHeight: 40, paddingHorizontal: 17, paddingVertical: 9 },
