@@ -40,6 +40,7 @@
 //     extra.googleOAuth.webClientId (the same Web client already
 //     configured in the Supabase Google provider).
 // ─────────────────────────────────────────────────────────────────
+import Constants from 'expo-constants';
 import { supabase } from './client';
 import { withTimeout } from './timeout';
 import { GOOGLE_WEB_CLIENT_ID, GOOGLE_WEB_CLIENT_ID_IS_CONFIGURED } from '../config';
@@ -53,6 +54,40 @@ import { GOOGLE_WEB_CLIENT_ID, GOOGLE_WEB_CLIENT_ID_IS_CONFIGURED } from '../con
 //     hides the "Google sign-in was cancelled." message.)
 const NOT_SET_UP_MESSAGE = "Google sign-in isn't set up for this app yet.";
 const FAILED_MESSAGE = 'Google sign-in failed. Please try again.';
+
+// ── Login diagnostics (2026-11-26, build 26d) ────────────────────
+// Release APKs keep failing native Google sign-in with the "isn't
+// set up yet" error even though the client ID, module, package
+// and SHA-1 are all verified correct — and no account picker
+// appears. The app itself records WHICH failure branch fires, in
+// the public.login_diagnostics table (anon INSERT allowed, no
+// SELECT for anon). Fire-and-forget: never awaited, never throws,
+// never changes the login outcome. Only a 12-char prefix + length
+// of the client ID is logged — never the full ID, never tokens
+// or emails. Remove after the login failure is root-caused.
+const LOGIN_DIAG_VERSION = '26d';
+let loginDiagDeviceId = null;
+function logLoginDiag(stage, detail) {
+  try {
+    if (!supabase) return;
+    if (!loginDiagDeviceId) {
+      loginDiagDeviceId =
+        'diag-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    }
+    supabase
+      .from('login_diagnostics')
+      .insert({
+        stage,
+        detail: detail || null,
+        device_id: loginDiagDeviceId,
+        app_version: LOGIN_DIAG_VERSION,
+      })
+      .then(() => {})
+      .catch(() => {});
+  } catch (e) {
+    /* diagnostics must never break login */
+  }
+}
 
 // Lazy-load the native Google Sign-In library. NEVER a top-level
 // import: the library's spec calls getEnforcing('RNGoogleSignin')
@@ -77,7 +112,29 @@ function loadGoogleSignin() {
 // is logged to console for diagnosis).
 async function signInWithGoogleNative() {
   const lib = loadGoogleSignin();
-  if (!lib || !GOOGLE_WEB_CLIENT_ID_IS_CONFIGURED) {
+  if (!lib) {
+    logLoginDiag('lib_null', 'require(@react-native-google-signin/google-signin) threw');
+    return { data: null, error: new Error(NOT_SET_UP_MESSAGE) };
+  }
+  if (!GOOGLE_WEB_CLIENT_ID_IS_CONFIGURED) {
+    let extra = null;
+    try {
+      extra = (Constants.expoConfig && Constants.expoConfig.extra) || null;
+    } catch (e) {
+      extra = null;
+    }
+    const id = GOOGLE_WEB_CLIENT_ID || '';
+    logLoginDiag(
+      'no_client_id',
+      'webClientId prefix=' +
+        id.slice(0, 12) +
+        ' len=' +
+        id.length +
+        ' extra_present=' +
+        !!extra +
+        ' googleOAuth_present=' +
+        !!(extra && extra.googleOAuth),
+    );
     return { data: null, error: new Error(NOT_SET_UP_MESSAGE) };
   }
   const { GoogleSignin, statusCodes } = lib;
@@ -105,8 +162,13 @@ async function signInWithGoogleNative() {
     if (sessionResult.error) {
       // eslint-disable-next-line no-console
       console.log('[Livo] signInWithIdToken failed:', sessionResult.error.message);
+      logLoginDiag(
+        'other_error',
+        'signInWithIdToken ' + (sessionResult.error.message || ''),
+      );
       return { data: null, error: new Error(FAILED_MESSAGE) };
     }
+    logLoginDiag('success', null);
 
     // First sign-in: make sure the user has a profiles row.
     // Best-effort — a profiles write failure must not break the login.
@@ -127,12 +189,17 @@ async function signInWithGoogleNative() {
       // The app is not registered in Google Cloud yet (missing
       // Android OAuth client for this package + SHA-1). No browser
       // fallback any more — the login screen shows the setup error.
+      logLoginDiag('developer_error', (e.code || '') + ' ' + (e.message || ''));
       // eslint-disable-next-line no-console
       console.log('[Livo] native Google sign-in not registered (DEVELOPER_ERROR).');
       return { data: null, error: new Error(NOT_SET_UP_MESSAGE) };
     }
     // Any other native failure (incl. PLAY_SERVICES_NOT_AVAILABLE):
     // no browser fallback — show the generic error.
+    logLoginDiag(
+      'other_error',
+      (e && e.code ? String(e.code) : '') + ' ' + (e && e.message ? String(e.message) : ''),
+    );
     // eslint-disable-next-line no-console
     console.log('[Livo] native Google sign-in failed:', e && e.message);
     return { data: null, error: new Error(FAILED_MESSAGE) };
