@@ -320,8 +320,10 @@ export function googleSubOrEmail(user) {
 // Short numeric Livo ID for a new user (e.g. 63227007): 8 digits,
 // checked against the profiles table so two users never share one.
 // The DB also has a UNIQUE constraint on profiles.user_id
-// (profiles_user_id_key) as a backstop.
-async function generateShortUserId() {
+// (profiles_user_id_key) as a backstop. Exported: the wallet
+// fallback profile creation must use the same generator — never
+// the raw auth UUID as a display ID.
+export async function generateShortUserId() {
   for (let attempt = 0; attempt < 3; attempt++) {
     const candidate = String(Math.floor(10000000 + Math.random() * 90000000));
     try {
@@ -372,13 +374,27 @@ export async function ensureProfile(user) {
       coins: 0,
       diamonds: 0,
     };
-    const { data: inserted, error: insertError } = (await withTimeout(
-      supabase
-        .from('profiles')
-        .insert(row)
-        .select(PROFILE_COLUMNS)
-        .single(),
-    )) || {};
+    // Insert with a fresh 8-digit ID; on the (near-impossible)
+    // unique-violation race, regenerate and retry instead of
+    // failing signup or ever sharing a number between two users.
+    let inserted = null;
+    let insertError = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const res = (await withTimeout(
+        supabase
+          .from('profiles')
+          .insert({ ...row, user_id: attempt === 0 ? row.user_id : await generateShortUserId() })
+          .select(PROFILE_COLUMNS)
+          .single(),
+      )) || {};
+      if (!res.error) {
+        inserted = res.data;
+        insertError = null;
+        break;
+      }
+      insertError = res.error;
+      if (res.error.code !== '23505') break;
+    }
     if (insertError) return { profile: null, error: insertError };
     return { profile: inserted, error: null };
   } catch (e) {
@@ -425,6 +441,11 @@ export async function updateMyProfile(patch) {
     const user = await getSessionUser();
     if (!user) return null;
     const write = { ...patch };
+    // The 8-digit Livo ID is never changeable from the app — only
+    // the owner can change it from the Mother Panel. Strip it here
+    // so no future edit path can ever rewrite it by accident.
+    delete write.user_id;
+    delete write.id;
     if (write.frame_id && !write.frame_expires_at) {
       write.frame_expires_at = await frameExpiryFor(write);
     }
