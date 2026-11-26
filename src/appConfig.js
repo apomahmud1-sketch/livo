@@ -38,6 +38,12 @@ export const DEFAULT_APP_CONFIG = {
   // the same for both views (live hosts to call). Same defaults as
   // the panel seeds.
   gender_views: { female: 'host', male: 'caller' },
+  // App Builder (Mother Panel → `app_pages`): the whole app layout
+  // — which pages and rows show, their order, names and badges.
+  // Default is the full catalog: nothing hidden, renamed or
+  // reordered. Stored shape: { pages: { [pageId]: { hidden?,
+  // title?, order?, items?, custom?, removed? } }, customPages: [] }.
+  app_pages: { pages: {}, customPages: [] },
 };
 
 function isObj(v) {
@@ -90,7 +96,182 @@ export function mergeAppConfig(raw) {
       if (v === 'host' || v === 'caller') out.gender_views[k] = v;
     });
   }
+  // App Builder layout (Mother Panel → `app_pages`). Only the known
+  // fields are kept, with the right types — a bad value is dropped,
+  // never a crash. An absent key keeps the full-catalog default.
+  if (isObj(raw.app_pages)) {
+    const pages = {};
+    if (isObj(raw.app_pages.pages)) {
+      Object.keys(raw.app_pages.pages).forEach((pid) => {
+        const p = raw.app_pages.pages[pid];
+        if (!isObj(p)) return;
+        const pg = {};
+        if (p.hidden === true) pg.hidden = true;
+        if (typeof p.title === 'string' && p.title.trim()) pg.title = p.title.trim();
+        if (Array.isArray(p.order)) pg.order = p.order.filter((x) => typeof x === 'string');
+        if (Array.isArray(p.removed)) pg.removed = p.removed.filter((x) => typeof x === 'string');
+        if (isObj(p.items)) {
+          const items = {};
+          Object.keys(p.items).forEach((iid) => {
+            const it = p.items[iid];
+            if (!isObj(it)) return;
+            const o = {};
+            if (it.hidden === true) o.hidden = true;
+            if (typeof it.label === 'string' && it.label.trim()) o.label = it.label.trim();
+            if (typeof it.badge === 'string') o.badge = it.badge;
+            items[iid] = o;
+          });
+          pg.items = items;
+        }
+        if (Array.isArray(p.custom)) {
+          pg.custom = p.custom
+            .filter((c) => isObj(c) && typeof c.id === 'string' && typeof c.label === 'string')
+            .map((c) => ({
+              id: c.id,
+              icon: typeof c.icon === 'string' && c.icon ? c.icon : '✨',
+              label: c.label,
+              badge: typeof c.badge === 'string' ? c.badge : '',
+            }));
+        }
+        pages[pid] = pg;
+      });
+    }
+    const customPages = Array.isArray(raw.app_pages.customPages)
+      ? raw.app_pages.customPages
+          .filter((c) => isObj(c) && typeof c.id === 'string' && typeof c.name === 'string')
+          .map((c) => ({
+            id: c.id,
+            name: c.name,
+            icon: typeof c.icon === 'string' && c.icon ? c.icon : '🧩',
+          }))
+      : [];
+    out.app_pages = { pages, customPages };
+  }
   return out;
+}
+
+// ── App Builder catalog + resolver ───────────────────────────────
+// The panel's page catalog (Mother Panel client/src/pages10.tsx)
+// uses these item ids and default labels/badges. The resolver below
+// mirrors the panel's resolvePages exactly, so the app and the panel
+// always agree on what a stored `app_pages` value means:
+//   order = [...(stored order), ...catalog order, ...custom rows]
+//   (deduped, unknown + removed ids skipped);
+//   label = stored label || catalog label; badge likewise;
+//   hidden = stored hidden flag; removed ids never appear.
+// A page with no stored config resolves to the full catalog.
+export const APP_PAGE_CATALOG = {
+  home: {
+    title: 'Home',
+    items: [
+      { id: 'notice', label: 'Notice banner' },
+      { id: 'hero', label: 'Hero — 1v1 Video Call' },
+      { id: 'quickmatch', label: 'Quick Match' },
+      { id: 'rewards', label: 'Rewards banner' },
+      { id: 'livehosts', label: 'Live Hosts grid' },
+      { id: 'tabbar', label: 'Bottom tab bar' },
+    ],
+  },
+  moments: {
+    title: 'Moments',
+    items: [
+      { id: 'feed', label: 'Moments feed' },
+      { id: 'newmoment', label: 'New Moment button' },
+      { id: 'tabbar', label: 'Bottom tab bar' },
+    ],
+  },
+  messages: {
+    title: 'Messages',
+    items: [
+      { id: 'service', label: 'Customer service row' },
+      { id: 'chatlist', label: 'Chat list' },
+      { id: 'tabbar', label: 'Bottom tab bar' },
+    ],
+  },
+  me: {
+    title: 'Me',
+    items: [
+      { id: 'header', label: 'Photo, name, ID & badges' },
+      { id: 'stats', label: 'Friend · Follow · Fans' },
+      { id: 'walletcard', label: 'My Wallet card' },
+      { id: 'levelvip', label: 'My Level & VIP row' },
+      { id: 'm_messages', label: 'Messages' },
+      { id: 'm_hostdash', label: 'Host Dashboard', badge: 'Approved' },
+      { id: 'm_tasks', label: 'My Tasks', badge: 'New Reward' },
+      { id: 'm_spin', label: 'Lucky Spin', badge: 'Free spin' },
+      { id: 'm_chatprice', label: 'Chat Price', badge: 'Not set' },
+      { id: 'm_profile', label: 'My Profile' },
+      { id: 'm_settings', label: 'Settings' },
+      { id: 'tabbar', label: 'Bottom tab bar' },
+    ],
+  },
+};
+
+export function resolveAppPage(appPages, pageId) {
+  const catalog = APP_PAGE_CATALOG[pageId];
+  if (!catalog) return { id: pageId, hidden: false, title: pageId, items: [] };
+  const pc = (appPages && appPages.pages && appPages.pages[pageId]) || {};
+  const catById = new Map(catalog.items.map((i) => [i.id, i]));
+  const customItems = Array.isArray(pc.custom) ? pc.custom : [];
+  const customById = new Map(customItems.map((i) => [i.id, i]));
+  const removed = new Set(Array.isArray(pc.removed) ? pc.removed : []);
+  const baseOrder = [
+    ...catalog.items.filter((i) => !removed.has(i.id)).map((i) => i.id),
+    ...customItems.map((i) => i.id),
+  ];
+  const seen = new Set();
+  const order = [];
+  const storedOrder = Array.isArray(pc.order) ? pc.order : [];
+  for (const id of [...storedOrder, ...baseOrder]) {
+    if (seen.has(id)) continue;
+    if (!catById.has(id) && !customById.has(id)) continue;
+    if (removed.has(id)) continue;
+    seen.add(id);
+    order.push(id);
+  }
+  const items = order.map((id) => {
+    const ov = (pc.items && pc.items[id]) || {};
+    const c = customById.get(id);
+    if (c) {
+      return {
+        id,
+        icon: c.icon || '✨',
+        label: (typeof ov.label === 'string' && ov.label) || c.label,
+        badge: typeof ov.badge === 'string' ? ov.badge : (c.badge || ''),
+        hidden: ov.hidden === true,
+        custom: true,
+      };
+    }
+    const b = catById.get(id);
+    return {
+      id,
+      icon: b.icon,
+      label: (typeof ov.label === 'string' && ov.label) || b.label,
+      badge: typeof ov.badge === 'string' ? ov.badge : (b.badge || ''),
+      hidden: ov.hidden === true,
+      custom: false,
+    };
+  });
+  return {
+    id: pageId,
+    hidden: pc.hidden === true,
+    title: (typeof pc.title === 'string' && pc.title.trim()) ? pc.title.trim() : catalog.title,
+    items,
+  };
+}
+
+// Is a whole page hidden by the App Builder? (No stored config
+// means visible.) The Me tab never hides even when the `me` page
+// is hidden — only its rows obey the config.
+export function isAppPageHidden(appPages, pageId) {
+  const pc = appPages && appPages.pages && appPages.pages[pageId];
+  return !!(pc && pc.hidden === true);
+}
+
+// Renamed page title from the App Builder, or the fallback.
+export function appPageTitle(appPages, pageId, fallback) {
+  const pc = appPages && appPages.pages && appPages.pages[pageId];
+  return (pc && typeof pc.title === 'string' && pc.title.trim()) ? pc.title.trim() : fallback;
 }
 
 // Resolve which side of the app a user sees from the panel's
