@@ -173,6 +173,10 @@ async function fetchAppConfigRows() {
 
 const AppConfigContext = React.createContext({
   ...clone(DEFAULT_APP_CONFIG),
+  // Camel-case alias for home_hero — HomeScreen reads `homeHero`.
+  // Without this key the destructure is undefined and Home crashes
+  // on `homeHero.title` at first render after login.
+  homeHero: clone(DEFAULT_APP_CONFIG.home_hero),
   theme: themeFromConfig(DEFAULT_APP_CONFIG),
   loginStyle: 'neon',
   noticeText: '',
@@ -231,6 +235,9 @@ export function AppConfigProvider({ children }) {
   const value = React.useMemo(
     () => ({
       ...config,
+      // Camel-case alias for config.home_hero (see createContext
+      // default above): HomeScreen destructures `homeHero`.
+      homeHero: config.home_hero || DEFAULT_APP_CONFIG.home_hero,
       theme: themeFromConfig(config),
       loginStyle:
         (config.login_style && config.login_style.style) || 'neon',
