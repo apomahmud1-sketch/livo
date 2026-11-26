@@ -45,6 +45,34 @@ function isFiniteNumber(v) {
 // Each returns the mapped array in the app's own shape, or null when
 // the table is unreadable or has no usable rows (demo stays).
 
+// VIP packages also carry panel-controlled price_coins,
+// badge_color and privileges when those columns exist (added by
+// the panel workstream). An older DB without them still loads —
+// the select retries with the old column list, exactly like the
+// hosts presence retry below.
+async function fetchVipRows() {
+  const rows = await safeSelect('vip_packages', 'id,name,days,price_usd,price_coins,badge_color,privileges,is_active', (q) =>
+    q.eq('is_active', true).order('price_usd', { ascending: true }));
+  if (rows) return rows;
+  return safeSelect('vip_packages', 'id,name,days,price_usd,is_active', (q) =>
+    q.eq('is_active', true).order('price_usd', { ascending: true }));
+}
+
+function normalizePrivileges(v) {
+  if (Array.isArray(v)) return v.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim());
+  if (typeof v === 'string' && v.trim()) {
+    const s = v.trim();
+    if (s.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(s);
+        if (Array.isArray(parsed)) return normalizePrivileges(parsed);
+      } catch (e) { /* not JSON — fall through to comma split */ }
+    }
+    return s.split(',').map((x) => x.trim()).filter(Boolean);
+  }
+  return [];
+}
+
 export async function fetchLiveCatalog() {
   const [rateRows, packRows, giftRows, vipRows, diamondRows] = await Promise.all([
     safeSelect('call_rates', 'id,name,coins_per_minute,is_active', (q) =>
@@ -53,8 +81,7 @@ export async function fetchLiveCatalog() {
       q.eq('is_active', true).order('coins', { ascending: true })),
     safeSelect('gifts', 'id,name,emoji,price_coins,is_active,animation_url', (q) =>
       q.eq('is_active', true).order('price_coins', { ascending: true })),
-    safeSelect('vip_packages', 'id,name,days,price_usd,is_active', (q) =>
-      q.eq('is_active', true).order('price_usd', { ascending: true })),
+    fetchVipRows(),
     safeSelect('diamond_packs', 'id,diamonds,bonus,price_usd,is_active', (q) =>
       q.eq('is_active', true).order('diamonds', { ascending: true })),
   ]);
@@ -110,6 +137,11 @@ export async function fetchLiveCatalog() {
             days: isFiniteNumber(v.days) ? v.days : 30,
             price: `$${Number(v.price_usd || 0).toFixed(2)}`,
             coins: 0,
+            // Panel-controlled VIP fields (0 / null / [] when the
+            // panel has not set them yet — never a crash).
+            priceCoins: isFiniteNumber(v.price_coins) ? v.price_coins : 0,
+            badgeColor: typeof v.badge_color === 'string' && v.badge_color.trim() ? v.badge_color.trim() : null,
+            privileges: normalizePrivileges(v.privileges),
           }))
       : null;
 
@@ -263,6 +295,50 @@ export async function fetchFrames() {
       minVipLevel: typeof f.min_vip_level === 'number' ? f.min_vip_level : 0,
       fileName: f.file_name || null,
     }));
+}
+
+// ── Spin prizes / level thresholds / rewards settings ──────────
+// Live values for the Lucky Spin wheel, the level ladder and the
+// Daily Reward settings. Each returns null when its table/key is
+// missing or unreadable — the store keeps the hardcoded fallbacks
+// (rewardsConfig.js / levelData.js) instead, so the app never
+// shows an empty wheel or a broken level.
+export async function fetchSpinPrizes() {
+  const rows = await safeSelect('spin_prizes', 'id,label,coins,weight,color,sort_order', (q) =>
+    q.eq('is_active', true).order('sort_order', { ascending: true }));
+  if (!rows || rows.length === 0) return null;
+  const mapped = rows
+    .filter((p) => p && typeof p.id === 'string' && p.id && isFiniteNumber(p.coins) && p.coins >= 0 && isFiniteNumber(p.weight) && p.weight > 0)
+    .map((p) => ({
+      id: p.id,
+      label: typeof p.label === 'string' && p.label ? p.label : String(p.coins),
+      coins: p.coins,
+      weight: p.weight,
+      color: typeof p.color === 'string' && p.color ? p.color : '#fde68a',
+    }));
+  return mapped.length > 0 ? mapped : null;
+}
+
+export async function fetchLevelThresholds() {
+  const rows = await safeSelect('level_thresholds', 'level,points', (q) =>
+    q.order('level', { ascending: true }));
+  if (!rows || rows.length === 0) return null;
+  const mapped = rows
+    .filter((r) => r && Number.isInteger(r.level) && r.level >= 0 && isFiniteNumber(Number(r.points)) && Number(r.points) >= 0)
+    .map((r) => ({ level: r.level, threshold: Number(r.points) }));
+  return mapped.length > 0 ? mapped : null;
+}
+
+// Rewards settings from the app_config `rewards` key
+// ({ free_spins_per_day, checkin_rewards[7] }). Returns the raw
+// value object, or null when the key/table is missing — the store
+// validates the fields and falls back to the hardcoded values.
+export async function fetchRewardsSettings() {
+  const rows = await safeSelect('app_config', 'value', (q) =>
+    q.eq('key', 'rewards').limit(1));
+  if (!rows || rows.length === 0) return null;
+  const v = rows[0] && rows[0].value;
+  return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
 }
 
 // ── Presence ─────────────────────────────────────────────────────
