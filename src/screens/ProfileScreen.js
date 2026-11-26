@@ -319,15 +319,6 @@ export default function ProfileScreen({ navigation }) {
     return true;
   };
 
-  const persistGender = async (g) => {
-    const u = await ensureUser();
-    if (!u) { showToast('Please sign in first.'); return; }
-    const ok = await savePatch({ gender: g });
-    if (!ok) { showToast("Couldn't save gender — try again."); return; }
-    setGender(g);
-    showToast(`Gender set to ${g === 'female' ? 'Female' : 'Male'}`);
-  };
-
   const pickSecondLang = async (en) => {
     const u = await ensureUser();
     if (!u) { showToast('Please sign in first.'); return; }
@@ -359,13 +350,16 @@ export default function ProfileScreen({ navigation }) {
       showToast('Age must be between 13 and 120');
       return;
     }
+    // Locked at signup (panel-only rule): nickname, country and
+    // gender are set once in the first-time signup flow and can
+    // only be changed by the owner from the Mother Panel — never
+    // from the app. This patch deliberately leaves them out, so
+    // even a stale draft can never rewrite them.
     const patch = {
       bio: draft.bio.trim(),
-      country: draft.country.trim() || null,
       language: draft.language.trim() || null,
       tags: draft.tags.trim(),
     };
-    if (draft.nickname.trim()) patch.username = draft.nickname.trim();
     if (ageNum !== null) patch.age = ageNum;
     setSaving(true);
     try {
@@ -538,7 +532,6 @@ export default function ProfileScreen({ navigation }) {
     return (
       <LevelView
         gender={gender}
-        onGenderChange={persistGender}
         onBack={() => setView('main')}
         onTopUp={goWallet}
         showToast={showToast}
@@ -903,14 +896,13 @@ export default function ProfileScreen({ navigation }) {
               <Text style={[styles.editValue, { color: t.muted }]}>{user && user.email ? user.email : 'Not set'}</Text>
             </View>
 
-            <Text style={[styles.fieldLabel, { color: t.text }]}>Nickname</Text>
-            <TextInput
-              style={[styles.input, { backgroundColor: t.surface, borderColor: t.border, color: t.text }]}
-              value={draft.nickname}
-              onChangeText={(v) => setDraft((d) => ({ ...d, nickname: v }))}
-              placeholder="Your nickname"
-              placeholderTextColor={t.muted}
-            />
+            {/* Nickname — set once at signup, locked in the app
+                (only the owner can change it from the Mother Panel). */}
+            <Text style={[styles.fieldLabel, { color: t.text }]}>Nickname (set at signup — cannot be changed)</Text>
+            <View style={[styles.editRow, { backgroundColor: t.surface, borderColor: t.border }]}>
+              <Text style={[styles.editLabel, { color: t.text }]}>{draft.nickname || PROFILE.name || 'Not set'}</Text>
+              <Text style={[styles.editValue, { color: t.muted }]}>Locked</Text>
+            </View>
             <Text style={[styles.fieldLabel, { color: t.text }]}>Age</Text>
             <TextInput
               style={[styles.input, { backgroundColor: t.surface, borderColor: t.border, color: t.text }]}
@@ -920,27 +912,23 @@ export default function ProfileScreen({ navigation }) {
               placeholderTextColor={t.muted}
               keyboardType="numeric"
             />
-            <Text style={[styles.fieldLabel, { color: t.text }]}>Gender (gates Go Live — saved to your profile)</Text>
-            <View style={styles.genderRow}>
-              {['male', 'female'].map((g) => (
-                <TouchableOpacity
-                  key={g}
-                  style={[styles.genderBtn, gender === g && { backgroundColor: t.violet, borderColor: t.violet }]}
-                  onPress={() => persistGender(g)}
-                >
-                  <Text style={[styles.genderBtnTxt, gender === g && styles.genderBtnTxtOn]}>{g === 'male' ? 'Male' : 'Female'}</Text>
-                </TouchableOpacity>
-              ))}
-              <Text style={[styles.editValue, { color: t.muted }]}>{gender ? '' : 'Not set'}</Text>
+            {/* Gender — set once at signup, locked in the app
+                (only the owner can change it from the Mother Panel).
+                It gates Go Live, so it must never be flippable here. */}
+            <Text style={[styles.fieldLabel, { color: t.text }]}>Gender (set at signup — cannot be changed)</Text>
+            <View style={[styles.editRow, { backgroundColor: t.surface, borderColor: t.border }]}>
+              <Text style={[styles.editLabel, { color: t.text }]}>
+                {gender === 'female' ? '♀ Female' : gender === 'male' ? '♂ Male' : 'Not set'}
+              </Text>
+              <Text style={[styles.editValue, { color: t.muted }]}>Locked</Text>
             </View>
-            <Text style={[styles.fieldLabel, { color: t.text }]}>Country</Text>
-            <TextInput
-              style={[styles.input, { backgroundColor: t.surface, borderColor: t.border, color: t.text }]}
-              value={draft.country}
-              onChangeText={(v) => setDraft((d) => ({ ...d, country: v }))}
-              placeholder="Not set"
-              placeholderTextColor={t.muted}
-            />
+            {/* Country — set once at signup, locked in the app
+                (only the owner can change it from the Mother Panel). */}
+            <Text style={[styles.fieldLabel, { color: t.text }]}>Country (set at signup — cannot be changed)</Text>
+            <View style={[styles.editRow, { backgroundColor: t.surface, borderColor: t.border }]}>
+              <Text style={[styles.editLabel, { color: t.text }]}>{draft.country || PROFILE.country || 'Not set'}</Text>
+              <Text style={[styles.editValue, { color: t.muted }]}>Locked</Text>
+            </View>
             <Text style={[styles.fieldLabel, { color: t.text }]}>Language</Text>
             <TextInput
               style={[styles.input, { backgroundColor: t.surface, borderColor: t.border, color: t.text }]}
