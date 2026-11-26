@@ -380,7 +380,7 @@ export default function HostDashboardScreen({ navigation }) {
           )}
           <View style={styles.profileText}>
             <Text style={styles.name}>{displayName}</Text>
-            <Text style={styles.hostId}>Host ID: {hostRow ? hostRow.host_id : '—'}</Text>
+            <Text style={styles.hostId}>Host ID: {profile && profile.user_id ? profile.user_id : '—'}</Text>
             {approved ? (
               <View style={styles.approvedBadge}>
                 <Text style={styles.approvedText}>✓ Approved</Text>
