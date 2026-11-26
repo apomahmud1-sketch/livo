@@ -1,26 +1,32 @@
 // Livo — Wallet (redesigned 2026-11-26 from the user's reference
-// image): dark screen, gradient Coin balance card, 3-column Recharge
-// grid (live coin packs), one big Recharge Now button, an Agent pill
-// at the top-right of Recharge (scrolls to the Buy from Agent
-// section), Diamonds as a small section below the agents.
+// image; coins-only since 2026-11-27): dark screen, gradient Coin
+// balance card, 3-column Recharge grid (live coin packs), one big
+// Recharge Now button, an Agent pill at the top-right of Recharge
+// (scrolls to the Buy from Agent section). Diamonds do NOT live
+// here any more — the Diamonds section and Buy Diamonds button were
+// removed (user 2026-11-27); Diamonds live on the My Income screen
+// for hosts. The diamond packs stay in the DB/panel and the
+// buyDiamondPack billing code stays in the store — only this
+// screen stopped showing them. Tapping an agent card opens the
+// agent's detail inside the app (AgentDetail screen).
 // Removed: the agree checkbox + Confirm in the middle and the
 // static Play Console note — the buy flow itself toasts the Play
 // Console state (see store buyWithIap). Balances and packs are the
 // live catalog, never hardcoded. The Bill (receipt) icon opens
 // Bill · History inside this screen.
 import React, { useEffect, useRef, useState } from 'react';
-import { findNodeHandle, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { findNodeHandle, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, THEME } from '../config';
 import { useApp } from '../store';
-import { getIapProducts, skuForCoinPack, skuForDiamondPack } from '../billing/iap';
+import { getIapProducts, skuForCoinPack } from '../billing/iap';
 import { listPublicAgents } from '../supabase/agent';
 
 // Normalize an agent phone into a wa.me number (digits only):
 // 8 digits starting with 8/9 = Singapore mobile, prefix 65;
 // 11 digits starting with 0 = Bangladesh, strip the 0, prefix 880;
-// anything else is used as-is.
-function agentWhatsAppNumber(phone) {
+// anything else is used as-is. Exported for AgentDetailScreen.
+export function agentWhatsAppNumber(phone) {
   const digits = String(phone || '').replace(/\D/g, '');
   if (digits.length === 8 && (digits[0] === '8' || digits[0] === '9')) return `65${digits}`;
   if (digits.length === 11 && digits[0] === '0') return `880${digits.slice(1)}`;
@@ -33,13 +39,6 @@ function agentWhatsAppNumber(phone) {
 function playPrice(sku, catalogPrice) {
   const prod = getIapProducts().find((p) => p.id === sku);
   return (prod && (prod.localizedPrice || prod.price)) || catalogPrice;
-}
-
-function packGems(diamonds) {
-  if (diamonds >= 100000) return '💎💎💎💎';
-  if (diamonds >= 48000) return '💎💎💎';
-  if (diamonds >= 13200) return '💎💎';
-  return '💎';
 }
 
 function txText(t) {
@@ -59,11 +58,10 @@ function coinTotal(p) {
 
 export default function WalletScreen({ navigation }) {
   const {
-    coins, diamonds, buyDiamondPack, buyCoinPack, coinPacks, diamondPacks,
+    coins, diamonds, buyCoinPack, coinPacks,
     showToast, signedIn, transactions, refreshTransactions,
   } = useApp();
   const [selectedCoinId, setSelectedCoinId] = useState(null);
-  const [selectedDiamondId, setSelectedDiamondId] = useState(null);
   const [showBill, setShowBill] = useState(false);
   // Bill · History filter: All / Received / Sent. Received =
   // a positive coins or diamonds amount; Sent = a negative one.
@@ -90,19 +88,6 @@ export default function WalletScreen({ navigation }) {
     });
     return () => { alive = false; };
   }, []);
-
-  const openAgentWhatsApp = async (phone) => {
-    const url = `https://wa.me/${agentWhatsAppNumber(phone)}`;
-    try {
-      if (await Linking.canOpenURL(url)) {
-        await Linking.openURL(url);
-      } else {
-        showToast('Could not open WhatsApp.');
-      }
-    } catch (e) {
-      showToast('Could not open WhatsApp.');
-    }
-  };
 
   // Scroll the Agent pill target into view (the Buy from Agent
   // section sits below the packs).
@@ -136,7 +121,6 @@ export default function WalletScreen({ navigation }) {
   // Coin selection defaults to the first live pack (like the
   // reference image) — still null while the catalog loads.
   const selectedCoin = coinPacks.find((p) => p.id === selectedCoinId) || coinPacks[0] || null;
-  const selectedDiamond = diamondPacks.find((p) => p.id === selectedDiamondId) || null;
 
   // Bill · History is the real transactions table, re-read whenever
   // the view opens.
@@ -159,19 +143,6 @@ export default function WalletScreen({ navigation }) {
     // listener and the balance updates by itself. When Play
     // products are not set up yet, buyCoinPack toasts that itself.
     await buyCoinPack(selectedCoin);
-  };
-
-  const buySelectedDiamond = async () => {
-    if (!selectedDiamond) {
-      showToast('Choose a Diamond pack first.');
-      return;
-    }
-    if (typeof buyDiamondPack !== 'function') {
-      showToast('Upload the new store.js first, then buy again.');
-      return;
-    }
-    const opened = await buyDiamondPack(selectedDiamond);
-    if (opened) setSelectedDiamondId(null);
   };
 
   const goBack = () => {
@@ -322,63 +293,31 @@ export default function WalletScreen({ navigation }) {
                 <Text style={styles.empty}>No coin agents available yet.</Text>
               ) : (
                 agents.map((a) => (
-                  <View key={a.agentId || a.name} style={styles.agentRow}>
+                  <TouchableOpacity
+                    key={a.agentId || a.name}
+                    style={styles.agentRow}
+                    onPress={() => navigation.navigate('AgentDetail', { agent: a })}
+                  >
                     <View style={styles.agentInfo}>
                       <Text style={styles.agentName}>{a.name}</Text>
                       <Text style={styles.agentMeta}>@{a.agentId}</Text>
                       <Text style={styles.agentRate}>{a.rate.toLocaleString()} coins per $1</Text>
                     </View>
-                    <TouchableOpacity style={styles.waBtn} onPress={() => openAgentWhatsApp(a.phone)}>
-                      <Text style={styles.waBtnText}>WhatsApp</Text>
-                    </TouchableOpacity>
-                  </View>
+                    <Text style={styles.agentChev}>›</Text>
+                  </TouchableOpacity>
                 ))
               )}
             </View>
           ) : null}
         </View>
 
-        <View style={styles.diamondHead}>
-          <Text style={[styles.sectionTitle, styles.sectionTitleInline]}>💎 Diamonds</Text>
-          <Text style={styles.diamondBalance}>💎 {diamonds.toLocaleString()}</Text>
-        </View>
-        <View style={styles.diamondGrid}>
-          {diamondPacks.length === 0 ? (
-            <Text style={styles.empty}>Diamond packs are loading from the store — check your connection and try again.</Text>
-          ) : (
-            diamondPacks.map((p) => {
-              const old = p.bonus ? p.diamonds - p.bonus : null;
-              const isSelected = selectedDiamond && selectedDiamond.id === p.id;
-              return (
-                <TouchableOpacity
-                  key={p.id}
-                  style={[styles.diamondTile, isSelected && styles.diamondTileSelected]}
-                  onPress={() => setSelectedDiamondId(p.id)}
-                >
-                  <Text style={styles.diamondGems}>{packGems(p.diamonds)}</Text>
-                  <Text style={styles.diamondAmount}>{p.diamonds.toLocaleString()}</Text>
-                  {old ? <Text style={styles.diamondOld}>{old.toLocaleString()}</Text> : null}
-                  <Text style={styles.diamondPrice}>{playPrice(skuForDiamondPack(p.id), p.price)}</Text>
-                </TouchableOpacity>
-              );
-            })
-          )}
-        </View>
-        {diamondPacks.length > 0 ? (
-          <TouchableOpacity style={styles.diamondBtn} onPress={buySelectedDiamond}>
-            <Text style={styles.diamondBtnText}>
-              {selectedDiamond
-                ? `Buy · ${selectedDiamond.diamonds.toLocaleString()} 💎 ${playPrice(skuForDiamondPack(selectedDiamond.id), selectedDiamond.price)}`
-                : 'Buy Diamonds'}
-            </Text>
-          </TouchableOpacity>
-        ) : null}
       </ScrollView>
     </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
+  agentChev: { color: THEME.dim, fontSize: 26, fontWeight: 'bold' },
   agentInfo: { flex: 1 },
   agentMeta: { color: THEME.dim, fontSize: 13, marginTop: 2 },
   agentName: { color: THEME.text, fontSize: 16, fontWeight: 'bold' },
@@ -400,17 +339,6 @@ const styles = StyleSheet.create({
   coinGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 4 },
   coinTile: { alignItems: 'center', backgroundColor: THEME.panel2, borderColor: THEME.panel2, borderRadius: 16, borderWidth: 2, marginBottom: 12, paddingVertical: 16, width: '31%' },
   coinTileSelected: { borderColor: THEME.gold },
-  diamondBalance: { color: THEME.dim, fontSize: 14, fontWeight: 'bold' },
-  diamondBtn: { alignItems: 'center', backgroundColor: THEME.violet, borderRadius: 20, marginTop: 12, paddingVertical: 12 },
-  diamondBtnText: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
-  diamondGems: { fontSize: 22, marginBottom: 4, textAlign: 'center' },
-  diamondGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 4 },
-  diamondHead: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginTop: 24 },
-  diamondOld: { color: THEME.dim, fontSize: 13, textDecorationLine: 'line-through' },
-  diamondAmount: { color: THEME.text, fontSize: 17, fontWeight: 'bold' },
-  diamondPrice: { color: THEME.dim, fontSize: 14, fontWeight: 'bold', marginTop: 2 },
-  diamondTile: { alignItems: 'center', backgroundColor: THEME.panel2, borderColor: THEME.panel2, borderRadius: 14, borderWidth: 2, marginBottom: 10, paddingVertical: 12, width: '48%' },
-  diamondTileSelected: { borderColor: THEME.gold },
   done: { color: COLORS.green, fontWeight: 'bold' },
   empty: { color: THEME.text, fontSize: 14, marginTop: 20, textAlign: 'center', width: '100%' },
   filterRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
@@ -437,7 +365,5 @@ const styles = StyleSheet.create({
   tileCoinText: { color: '#3d2400', fontSize: 20, fontWeight: 'bold' },
   tilePrice: { color: THEME.dim, fontSize: 14, fontWeight: 'bold', marginTop: 2 },
   totals: { color: THEME.text, fontSize: 14, fontWeight: 'bold', marginBottom: 4, marginTop: 6 },
-  waBtn: { backgroundColor: '#25d366', borderRadius: 16, paddingHorizontal: 16, paddingVertical: 10 },
-  waBtnText: { color: '#fff', fontWeight: 'bold' },
   wrap: { padding: 16, paddingBottom: 32, paddingTop: 48 },
 });
