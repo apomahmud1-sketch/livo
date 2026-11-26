@@ -1,10 +1,13 @@
 // Livo RewardsScreen — Lucky Spin + Daily Reward  [F1]
 // ─────────────────────────────────────────────────────────────────
 // • Lucky Spin: 1 free spin per day (FREE_SPINS_PER_DAY), coin
-//   prizes from src/rewardsConfig.js — the admin panel can change
-//   the prizes / odds / free spins at any time.
+//   prizes from the live spin_prizes table via the store —
+//   rewardsConfig.js is only the fallback when the table is
+//   missing. The admin panel can change the prizes / odds /
+//   free spins at any time.
 // • Daily check-in: claim once a day, 7-day streak cycle, reward
-//   from CHECKIN_REWARDS in src/rewardsConfig.js.
+//   from the live app_config `rewards` key via the store
+//   (CHECKIN_REWARDS in rewardsConfig.js is the fallback).
 // • Winnings are added to the LIVE coin balance via the store's
 //   real addRewardCoins() — no demo / hard-coded balance.
 // • SERVER GATE: spin and check-in go through the store's
@@ -34,10 +37,10 @@ import { useAppConfig } from '../appConfig';
 import { useApp } from '../store';
 import {
   CHECKIN_CYCLE_DAYS,
-  CHECKIN_REWARDS,
-  FREE_SPINS_PER_DAY,
-  SPIN_PRIZES,
-  pickSpinPrize,
+  CHECKIN_REWARDS as DEFAULT_CHECKIN_REWARDS,
+  FREE_SPINS_PER_DAY as DEFAULT_FREE_SPINS_PER_DAY,
+  SPIN_PRIZES as DEFAULT_SPIN_PRIZES,
+  pickSpinPrizeFrom,
   todayKey,
   yesterdayKey,
 } from '../rewardsConfig';
@@ -50,7 +53,6 @@ const { width: SCREEN_W } = Dimensions.get('window');
 const WHEEL_SIZE = Math.min(280, SCREEN_W - 48);
 const RADIUS = WHEEL_SIZE / 2;
 const SEGMENT_BASE = Math.round(2 * RADIUS * Math.tan(Math.PI / 8)); // ≈116
-const SEGMENT_ANGLE = 360 / SPIN_PRIZES.length; // 45°
 const SPIN_TURNS = 5;
 const SPIN_DURATION_MS = 4000;
 
@@ -68,7 +70,24 @@ export default function RewardsScreen({ navigation }) {
     lastCheckinDate,
     checkinStreak,
     showToast,
+    // [Live] Spin prizes / free spins / check-in rewards from
+    // Supabase (store), falling back to the hardcoded values
+    // above when the tables / app_config key are missing.
+    spinPrizes: liveSpinPrizes,
+    freeSpinsPerDay: liveFreeSpins,
+    checkinRewards: liveCheckinRewards,
   } = useApp();
+
+  // Live values win when the store resolved them; otherwise the
+  // hardcoded defaults stand in — the wheel always has exactly 8
+  // segments (the store only accepts an 8-prize live list).
+  const SPIN_PRIZES =
+    Array.isArray(liveSpinPrizes) && liveSpinPrizes.length === 8 ? liveSpinPrizes : DEFAULT_SPIN_PRIZES;
+  const FREE_SPINS_PER_DAY =
+    Number.isInteger(liveFreeSpins) && liveFreeSpins > 0 ? liveFreeSpins : DEFAULT_FREE_SPINS_PER_DAY;
+  const CHECKIN_REWARDS =
+    Array.isArray(liveCheckinRewards) && liveCheckinRewards.length === 7 ? liveCheckinRewards : DEFAULT_CHECKIN_REWARDS;
+  const SEGMENT_ANGLE = 360 / SPIN_PRIZES.length; // 45° with 8 prizes
 
   const [spinning, setSpinning] = useState(false);
   const [lastWin, setLastWin] = useState(null);
@@ -111,7 +130,7 @@ export default function RewardsScreen({ navigation }) {
       showToast('Could not start the spin — try again.');
       return;
     }
-    const prize = pickSpinPrize();
+    const prize = pickSpinPrizeFrom(SPIN_PRIZES);
     const prizeIndex = SPIN_PRIZES.findIndex((p) => p.id === prize.id);
     // Segment i is centred at i * 45° clockwise from the top.
     // Rotate the wheel so that centre lands under the top pointer,
