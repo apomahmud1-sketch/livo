@@ -159,8 +159,10 @@ export async function getSession() {
 // The profiles columns the app reads for the signed-in user.
 // frame_id / frame_expires_at drive the avatar frame display;
 // is_banned / deleted_at drive the access gate in checkAccess.
+// birthday is set once at first-time signup (18+ enforced there)
+// and read back by the profile screens.
 const PROFILE_COLUMNS =
-  'id, user_id, username, country, language, gender, age, bio, avatar_url, coins, diamonds, frame_id, frame_expires_at, is_banned, deleted_at';
+  'id, user_id, username, country, language, gender, age, birthday, bio, avatar_url, coins, diamonds, frame_id, frame_expires_at, is_banned, deleted_at';
 
 // ── Ban / delete access gate (Hapa Mother "User" set) ────────────
 // After a session resolves, the app checks whether this account
