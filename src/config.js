@@ -14,7 +14,11 @@ import Constants from 'expo-constants';
 export const AGORA_APP_ID =
   (Constants.expoConfig && Constants.expoConfig.extra && Constants.expoConfig.extra.AGORA_APP_ID) ||
   process.env.EXPO_PUBLIC_AGORA_APP_ID ||
-  '';
+  // Hardcoded fallback: the locally-built release APK's embedded
+  // update manifest (assets/app.manifest) carries NO `extra`, so
+  // expoConfig.extra is empty on the embedded JS and this would
+  // otherwise be '' — breaking Agora calls on first launch.
+  'ac11cdc3f22b4f86bb2fceab3820b8d7';
 
 export const AGORA_APP_ID_IS_PLACEHOLDER = !AGORA_APP_ID;
 
@@ -32,7 +36,12 @@ export const GOOGLE_WEB_CLIENT_ID =
     Constants.expoConfig.extra &&
     Constants.expoConfig.extra.googleOAuth &&
     Constants.expoConfig.extra.googleOAuth.webClientId) ||
-  '';
+  // Hardcoded fallback: the locally-built release APK's embedded
+  // update manifest (assets/app.manifest) carries NO `extra`, so
+  // expoConfig.extra is empty on the embedded JS and this would
+  // otherwise be '' — making native Google sign-in report
+  // "Google sign-in isn't set up for this app yet." on first launch.
+  '233957434945-r4fta6inltul8ppn8to3tvbqrapm54e1.apps.googleusercontent.com';
 
 export const GOOGLE_WEB_CLIENT_ID_IS_CONFIGURED =
   !!GOOGLE_WEB_CLIENT_ID && !GOOGLE_WEB_CLIENT_ID.startsWith('REPLACE_WITH');
