@@ -22,7 +22,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { THEME } from '../config';
-import { useAppConfig } from '../appConfig';
+import { useAppConfig, resolveAppPage } from '../appConfig';
 import { useApp } from '../store';
 import { AuthContext } from '../../App';
 import { supabase } from '../supabase/client';
@@ -61,8 +61,9 @@ function vipLabel(v) {
 
 export default function ProfileScreen({ navigation }) {
   const { coins, diamonds, showToast, vipLevel, vipUntil, following, levelInfo, updateMyProfile, frames } = useApp();
-  // Panel-driven config (app_config): theme colours + feature toggles.
-  const { theme: cfgTheme, features } = useAppConfig();
+  // Panel-driven config (app_config): theme colours + feature toggles
+  // + the App Builder layout (app_pages).
+  const { theme: cfgTheme, features, app_pages } = useAppConfig();
 
   // ── Real signed-in user ──
   // user = Supabase auth user (Google account); profile = the user's
@@ -239,6 +240,9 @@ export default function ProfileScreen({ navigation }) {
   const avatarUri = googleAvatar || profileAvatar || null;
 
   const [view, setView] = React.useState('main');
+  // Custom page (added from the Mother Panel's App Builder) opened
+  // from a Me menu row — rendered as a simple name + icon page.
+  const [customPage, setCustomPage] = React.useState(null);
   const [dark, setDark] = React.useState(false);
   // Gender gates Go Live, so it is real profile state, persisted
   // through store.updateMyProfile — never a local-only toggle.
@@ -287,7 +291,7 @@ export default function ProfileScreen({ navigation }) {
     await signOut();
   };
 
-  const parentOf = { badge: 'profile', gift: 'profile', edit: 'profile', lang: 'edit', chatprice: 'main' };
+  const parentOf = { badge: 'profile', gift: 'profile', edit: 'profile', lang: 'edit', chatprice: 'main', custompage: 'main' };
   const goBack = () => setView(parentOf[view] || 'main');
 
   const openBadge = (badge) => { setBadgeDetail(badge); setView('badge'); };
@@ -493,8 +497,8 @@ export default function ProfileScreen({ navigation }) {
     </View>
   );
 
-  const menuRow = (icon, iconBg, label, right, onPress) => (
-    <TouchableOpacity key={label} style={[styles.menuRow, { backgroundColor: t.surface, borderColor: t.border }]} onPress={onPress}>
+  const menuRow = (id, icon, iconBg, label, right, onPress) => (
+    <TouchableOpacity key={id} style={[styles.menuRow, { backgroundColor: t.surface, borderColor: t.border }]} onPress={onPress}>
       <View style={[styles.menuIcon, { backgroundColor: iconBg }]}><Text style={styles.menuEmoji}>{icon}</Text></View>
       <Text style={[styles.menuLabel, { color: t.text }]}>{label}</Text>
       {right}
@@ -527,6 +531,83 @@ export default function ProfileScreen({ navigation }) {
     ? `${PROFILE.gender === 'female' ? '♀' : '♂'}${PROFILE.age ? ` ${PROFILE.age}` : ''}`
     : null;
 
+  // ── App Builder (Mother Panel → app_pages) — Me page ───────────
+  // The panel's `me` page config drives this screen: order reorders
+  // the menu rows, hidden / removed hides them, label / badge
+  // renames them, and custom rows (added in the panel) render as
+  // menu rows that show a "coming soon" note — they have no real
+  // target yet. The existing rules still win: a row hidden by
+  // features.* stays hidden even if the panel shows it, and the
+  // live badges (host status, chat price, income, agent wallet)
+  // always show the real value — a panel badge never overwrites
+  // live data.
+  const mePage = resolveAppPage(app_pages, 'me');
+  const meItemById = new Map(mePage.items.map((i) => [i.id, i]));
+  // Blocks: absent (removed in the panel) or hidden = not shown.
+  const meBlockHidden = (id) => {
+    const it = meItemById.get(id);
+    return !it || it.hidden === true;
+  };
+  const ME_ROW_DEFS = {
+    m_messages: { icon: '💬', iconBg: '#fde7f1', onPress: () => navigation.navigate('MessagesTab') },
+    m_hostdash: { icon: '🎥', iconBg: '#fde7f1', feature: 'host_dashboard', onPress: () => navigation.navigate('HostDashboard') },
+    m_tasks: { icon: '✅', iconBg: '#e2f5ec', feature: 'my_tasks', onPress: () => navigation.navigate('Tasks') },
+    m_spin: { icon: '🎡', iconBg: '#fef3c7', feature: 'lucky_spin', onPress: () => navigation.navigate('Rewards') },
+    m_chatprice: { icon: '💬', iconBg: '#e0f5fa', feature: 'chat_price', onPress: () => setView('chatprice') },
+    m_profile: { icon: '👤', iconBg: '#e0f5fa', onPress: () => setView('profile') },
+    m_settings: { icon: '⚙️', iconBg: '#eef0f4', onPress: () => setView('settings') },
+  };
+  const meMenuRows = [];
+  mePage.items.forEach((item) => {
+    if (item.hidden) return;
+    if (item.custom) {
+      meMenuRows.push({
+        id: item.id,
+        icon: item.icon,
+        iconBg: '#eef0f4',
+        label: item.label,
+        badge: item.badge ? <Text style={styles.tagPink}>{item.badge}</Text> : null,
+        onPress: () => showToast(`"${item.label}" is coming soon — add its content from the Mother Panel.`),
+      });
+      return;
+    }
+    const def = ME_ROW_DEFS[item.id];
+    if (!def) return; // header / stats / walletcard / levelvip / tabbar are blocks, not menu rows
+    if (def.feature && !features[def.feature]) return; // features.* still wins
+    // Live badges always show the real value, never a panel badge.
+    let badge = null;
+    if (item.id === 'm_hostdash') badge = hostBadge;
+    else if (item.id === 'm_chatprice') badge = <Text style={styles.chatPriceVal}>{chatPrice ? `${chatPrice.toLocaleString()}/min` : 'Not set'}</Text>;
+    else if (item.badge) badge = <Text style={styles.tagPink}>{item.badge}</Text>;
+    meMenuRows.push({ id: item.id, icon: def.icon, iconBg: def.iconBg, label: item.label, badge, onPress: def.onPress });
+  });
+  // My Income + Agent Portal are app rows the panel catalog does not
+  // know — they stay in the menu, right after Host Dashboard (or at
+  // the end when Host Dashboard is hidden / removed).
+  const meExtraRows = [
+    { id: 'my_income', icon: '💎', iconBg: '#e0f5fa', label: 'My Income', badge: <Text style={styles.tagGreen}>💎 {diamonds.toLocaleString()}</Text>, onPress: () => navigation.navigate('MyIncome') },
+  ];
+  if (agentInfo && agentInfo.isAgent && agentInfo.status === 'approved') {
+    meExtraRows.push({ id: 'agent_portal', icon: '🪙', iconBg: '#fef3c7', label: 'Agent Portal', badge: <Text style={styles.tagGreen}>{Number(agentInfo.walletCoins || 0).toLocaleString()} coins</Text>, onPress: () => navigation.navigate('AgentPortal') });
+  }
+  const meHostIdx = meMenuRows.findIndex((r) => r.id === 'm_hostdash');
+  if (meHostIdx >= 0) meMenuRows.splice(meHostIdx + 1, 0, ...meExtraRows);
+  else meMenuRows.push(...meExtraRows);
+  // Custom pages (added from the panel) each get a Me menu row that
+  // opens a simple page with its name + icon — a page cannot be
+  // built from config alone, so this is the honest limit. A custom
+  // page the owner deleted in the panel shows no row.
+  const meCustomPageRows = ((app_pages && app_pages.customPages) || [])
+    .filter((p) => !(app_pages.pages && app_pages.pages[p.id] && app_pages.pages[p.id].hidden === true))
+    .map((p) => ({
+      id: `custompage:${p.id}`,
+      icon: p.icon || '🧩',
+      iconBg: '#eef0f4',
+      label: p.name,
+      badge: null,
+      onPress: () => { setCustomPage(p); setView('custompage'); },
+    }));
+
   // ── My Level / VIP (separate components, own ScrollViews) ──
   if (view === 'level') {
     return (
@@ -555,6 +636,7 @@ export default function ProfileScreen({ navigation }) {
       {/* ── Me main ── */}
       {view === 'main' && (
         <View style={styles.mainPad}>
+          {!meBlockHidden('header') && (
           <View style={[styles.headerCard, { backgroundColor: t.surface }]}>
             <View style={styles.idHead}>
               <TouchableOpacity onPress={() => setView('profile')} activeOpacity={0.8} accessibilityLabel="Tap the photo to open the My Profile page">
@@ -612,6 +694,7 @@ export default function ProfileScreen({ navigation }) {
                 </TouchableOpacity>
               </View>
             </View>
+            {!meBlockHidden('stats') && (
             <View style={styles.stats}>
               <View style={styles.stat}>
                 <Text style={[styles.statNum, { color: t.text }]}>—</Text>
@@ -625,8 +708,8 @@ export default function ProfileScreen({ navigation }) {
                 <Text style={[styles.statNum, { color: t.text }]}>—</Text>
                 <Text style={[styles.statLbl, { color: t.muted }]}>Fans</Text>
               </View>
-            </View>
-          </View>
+            </View>)}
+          </View>)}
 
           {!profile && (
             <Text style={{ fontSize: 11, color: t.muted, marginTop: 6, marginBottom: 2 }}>
@@ -634,6 +717,7 @@ export default function ProfileScreen({ navigation }) {
             </Text>
           )}
 
+          {!meBlockHidden('walletcard') && (
           <TouchableOpacity style={[styles.goldBanner, { backgroundColor: t.gold }]} onPress={goWallet} activeOpacity={0.85}>
             <Text style={styles.goldBannerIcon}>🪙</Text>
             <View style={{ flex: 1 }}>
@@ -641,8 +725,9 @@ export default function ProfileScreen({ navigation }) {
               <Text style={styles.goldBannerValue}>🪙 {Number(coins || 0).toLocaleString()} Coins · 💎 {diamonds.toLocaleString()} Diamonds</Text>
             </View>
             <Text style={styles.goldBannerChev}>›</Text>
-          </TouchableOpacity>
+          </TouchableOpacity>)}
 
+          {!meBlockHidden('levelvip') && (
           <View style={styles.darkRow}>
             <TouchableOpacity style={[styles.darkCard, { backgroundColor: t.panel2 }]} onPress={() => setView('level')} activeOpacity={0.85}>
               <Text style={[styles.darkCardTitle, { color: t.gold }]}>My Level</Text>
@@ -654,20 +739,13 @@ export default function ProfileScreen({ navigation }) {
                 <Text style={styles.darkCardValue}>{vipLevel ? `${vipLabel(vipLevel)}${vipDaysLeft > 0 ? ` · ${vipDaysLeft}d left` : ''}` : 'Member Centre'}</Text>
               </TouchableOpacity>
             ) : null}
-          </View>
+          </View>)}
 
           <View style={[styles.menuCard, { backgroundColor: t.surface }]}>
-            {menuRow('💬', '#fde7f1', 'Messages', null, () => navigation.navigate('MessagesTab'))}
-            {features.host_dashboard ? menuRow('🎥', '#fde7f1', 'Host Dashboard', hostBadge, () => navigation.navigate('HostDashboard')) : null}
-            {menuRow('💎', '#e0f5fa', 'My Income', <Text style={styles.tagGreen}>💎 {diamonds.toLocaleString()}</Text>, () => navigation.navigate('MyIncome'))}
-            {agentInfo && agentInfo.isAgent && agentInfo.status === 'approved'
-              ? menuRow('🪙', '#fef3c7', 'Agent Portal', <Text style={styles.tagGreen}>{Number(agentInfo.walletCoins || 0).toLocaleString()} coins</Text>, () => navigation.navigate('AgentPortal'))
-              : null}
-            {features.my_tasks ? menuRow('✅', '#e2f5ec', 'My Tasks', <Text style={styles.tagPink}>New Reward</Text>, () => navigation.navigate('Tasks')) : null}
-            {features.lucky_spin ? menuRow('🎡', '#fef3c7', 'Lucky Spin', <Text style={styles.tagPink}>Free spin</Text>, () => navigation.navigate('Rewards')) : null}
-            {features.chat_price ? menuRow('💬', '#e0f5fa', 'Chat Price', <Text style={styles.chatPriceVal}>{chatPrice ? `${chatPrice.toLocaleString()}/min` : 'Not set'}</Text>, () => setView('chatprice')) : null}
-            {menuRow('👤', '#e0f5fa', 'My Profile', null, () => setView('profile'))}
-            {menuRow('⚙️', '#eef0f4', 'Settings', null, () => setView('settings'))}
+            {[...meMenuRows, ...meCustomPageRows].map((r) => menuRow(r.id, r.icon, r.iconBg, r.label, r.badge, r.onPress))}
+            {meMenuRows.length === 0 && meCustomPageRows.length === 0 ? (
+              <Text style={[styles.menuEmpty, { color: t.muted }]}>No menu items to show — turn some on from the Mother Panel's App Builder.</Text>
+            ) : null}
           </View>
         </View>
       )}
@@ -1033,12 +1111,32 @@ export default function ProfileScreen({ navigation }) {
           </TouchableOpacity>
         </View>
       )}
+
+      {/* ── Custom page (added from the Mother Panel's App Builder) ──
+          A page built from config alone: its name + icon, and the
+          honest note that it has no content yet. */}
+      {view === 'custompage' && customPage && (
+        <View>
+          {subHead(customPage.name)}
+          <View style={[styles.cardBox, { backgroundColor: t.surface }]}>
+            <Text style={styles.customPageIcon}>{customPage.icon || '🧩'}</Text>
+            <Text style={[styles.cardBoxTitle, { color: t.text, textAlign: 'center' }]}>{customPage.name}</Text>
+            <Text style={[styles.hint, { color: t.muted, textAlign: 'center' }]}>
+              This page was added from the Mother Panel. It has no content yet — add its content from the panel and it will show here.
+            </Text>
+          </View>
+        </View>
+      )}
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   albumEmpty: { fontSize: 13, marginTop: 10 },
+  // App Builder: honest empty state when every Me menu row is hidden.
+  menuEmpty: { fontSize: 13, padding: 16, textAlign: 'center' },
+  // App Builder: icon on a custom page (added from the panel).
+  customPageIcon: { fontSize: 44, marginBottom: 8, textAlign: 'center' },
   avatar: { borderRadius: 32, height: 64, width: 64 },
   avatarFallback: { alignItems: 'center', backgroundColor: '#7c3aed', justifyContent: 'center' },
   avatarFallbackTxt: { color: '#fff', fontSize: 24, fontWeight: 'bold' },
