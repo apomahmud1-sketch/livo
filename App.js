@@ -7,7 +7,7 @@ import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import { House, MessageCircle, Play, UserRound, Video } from 'lucide-react-native';
 import { THEME } from './src/config';
-import { AppConfigProvider, useAppConfig } from './src/appConfig';
+import { AppConfigProvider, useAppConfig, genderViewFor } from './src/appConfig';
 import { AppProvider, useApp } from './src/store';
 import { supabase } from './src/supabase/client';
 import { withTimeout } from './src/supabase/timeout';
@@ -41,7 +41,7 @@ import AgentPortalScreen from './src/screens/AgentPortalScreen'; // [Agent] Coin
 // sign-in (nearly-full storage), so every screen that called
 // getSession() saw "no session" while the gate correctly showed
 // Main. The context carries the gate's live session/user instead.
-export const AuthContext = React.createContext({ session: null, user: null });
+export const AuthContext = React.createContext({ session: null, user: null, profile: null });
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -70,7 +70,16 @@ function MainTabs() {
   const { unreadTotal } = useApp();
   // Panel-driven config (app_config): theme colours + the Moments
   // feature toggle. When moments is OFF the tab is hidden entirely.
-  const { theme: T, features } = useAppConfig();
+  const appCfg = useAppConfig();
+  const { theme: T, features } = appCfg;
+  // Gender-based view (panel app_config → gender_views): the Live
+  // (Host Dashboard) tab only shows when this user's view is
+  // 'host'. The profile comes from the gate's signup check in Root
+  // (AuthContext) — no extra fetch. Fail open: no live config, no
+  // profile, or an unknown gender keeps the tab (current behaviour).
+  const { profile } = React.useContext(AuthContext);
+  const showLiveTab = !appCfg.configLive
+    || genderViewFor(appCfg, profile && profile.gender) === 'host';
   return (
     <Tab.Navigator
       screenOptions={{
@@ -98,18 +107,20 @@ function MainTabs() {
           }}
         />
       ) : null}
-      <Tab.Screen
-        name="LiveTab"
-        component={HostDashboardScreen}
-        options={{
-          tabBarLabel: () => null,
-          tabBarIcon: () => (
-            <LinearGradient colors={[T.violet, T.violetDark]} style={styles.liveBtn}>
-              <Video size={23} color="#fff" strokeWidth={2.2} />
-            </LinearGradient>
-          ),
-        }}
-      />
+      {showLiveTab ? (
+        <Tab.Screen
+          name="LiveTab"
+          component={HostDashboardScreen}
+          options={{
+            tabBarLabel: () => null,
+            tabBarIcon: () => (
+              <LinearGradient colors={[T.violet, T.violetDark]} style={styles.liveBtn}>
+                <Video size={23} color="#fff" strokeWidth={2.2} />
+              </LinearGradient>
+            ),
+          }}
+        />
+      ) : null}
       <Tab.Screen
         name="MessagesTab"
         component={MessagesScreen}
@@ -360,10 +371,12 @@ function Root() {
 
   // Live auth value for screens (see AuthContext above): memoised on
   // the session object so consumers only re-render on real auth
-  // changes, not on every Root render.
+  // changes, not on every Root render. profile is the gate's
+  // signup-check profiles row (Root fetches it once per user) —
+  // MainTabs reads the gender from it for the gender-based view.
   const authValue = React.useMemo(
-    () => ({ session: session || null, user: (session && session.user) || null }),
-    [session],
+    () => ({ session: session || null, user: (session && session.user) || null, profile: signupProfile || null }),
+    [session, signupProfile],
   );
 
   if (session === undefined) {
