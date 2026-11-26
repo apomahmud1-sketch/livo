@@ -5,12 +5,48 @@
 // never the preview's mock prices. Sending charges real coins via
 // store.sendGift (host share credited when a host is passed).
 import React, { useEffect, useState } from 'react';
-import { Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Image, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Video } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
 import { Gift, X } from 'lucide-react-native';
 import { THEME, formatGiftPrice } from '../config';
 import { useApp } from '../store';
+import { giftAnimationUrl } from './GiftAnimationOverlay';
+
+// Small animated preview for a gift that has an uploaded
+// animation (animation_url from the panel): the video/GIF plays
+// muted + looping inside the tile. ANY load failure falls back
+// to the plain emoji — the tile never shows a broken player.
+function GiftTileMedia({ gift }) {
+  const url = giftAnimationUrl(gift);
+  const [failed, setFailed] = useState(false);
+  if (!url || failed) {
+    return <Text style={styles.emoji}>{gift.emoji}</Text>;
+  }
+  if (/\.gif(\?|#|$)/i.test(url)) {
+    return (
+      <Image
+        source={{ uri: url }}
+        style={styles.animPreview}
+        resizeMode="contain"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+  return (
+    <Video
+      source={{ uri: url }}
+      style={styles.animPreview}
+      resizeMode={Video.RESIZE_MODE_CONTAIN}
+      shouldPlay
+      isLooping
+      isMuted
+      useNativeControls={false}
+      onError={() => setFailed(true)}
+    />
+  );
+}
 
 // Small gold coin icon (gold circle with a dark "C"), like the preview.
 export function CoinIcon({ size = 14, fontSize = 9 }) {
@@ -67,7 +103,7 @@ export default function GiftSheet({ visible, host, onClose, onSent }) {
                     onPress={() => setSelectedId(g.id)}
                     activeOpacity={0.85}
                   >
-                    <Text style={styles.emoji}>{g.emoji}</Text>
+                    <GiftTileMedia gift={g} />
                     <Text style={styles.giftName} numberOfLines={1}>{g.name}</Text>
                     <View style={styles.priceRow}>
                       <CoinIcon size={14} fontSize={9} />
@@ -144,6 +180,8 @@ const styles = StyleSheet.create({
   },
   tileSel: { backgroundColor: '#3a1666', borderColor: THEME.gold },
   emoji: { fontSize: 31 },
+  // Animated tile preview (video/GIF) — same footprint as the emoji.
+  animPreview: { height: 44, width: 64 },
   giftName: { color: THEME.text, fontSize: 13, fontWeight: '700', marginTop: 4 },
   priceRow: { alignItems: 'center', flexDirection: 'row', gap: 4, marginTop: 3 },
   price: { color: THEME.gold2, fontSize: 12, fontWeight: '900' },
