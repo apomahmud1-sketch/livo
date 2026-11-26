@@ -111,6 +111,18 @@ function MainTabs() {
         <Tab.Screen
           name="LiveTab"
           component={HostDashboardScreen}
+          listeners={({ navigation: tabNav }) => ({
+            // Centre Live button goes live straight away: open the
+            // Host Dashboard with autoGoLive so its camera starts
+            // at once — the dashboard itself is only the fallback
+            // (not approved / no host row yet / not female).
+            // preventDefault stops the plain tab switch so the
+            // param-carrying navigation is the only one that runs.
+            tabPress: (e) => {
+              e.preventDefault();
+              tabNav.navigate('LiveTab', { autoGoLive: true });
+            },
+          })}
           options={{
             tabBarLabel: () => null,
             tabBarIcon: () => (
