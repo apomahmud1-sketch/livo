@@ -32,6 +32,7 @@ import VIPScreen from './src/screens/VIPScreen';
 import RewardsScreen from './src/screens/RewardsScreen'; // [F1] Lucky Spin + Daily Reward
 import MomentsScreen from './src/screens/MomentsScreen'; // [Vero] Moments feed
 import TasksScreen from './src/screens/TasksScreen'; // [Vero] Daily Tasks
+import AgentPortalScreen from './src/screens/AgentPortalScreen'; // [Agent] Coin agent portal
 
 // AuthContext (2026-11-23): the gate in Root() holds the session in
 // MEMORY (from the SIGNED_IN / INITIAL_SESSION event). Screens must
@@ -428,6 +429,7 @@ function Root() {
             <Stack.Screen name="VIP" component={VIPScreen} />
             <Stack.Screen name="Rewards" component={RewardsScreen} />
             <Stack.Screen name="Tasks" component={TasksScreen} />
+            <Stack.Screen name="AgentPortal" component={AgentPortalScreen} />
             <Stack.Screen name="Legal" component={LegalScreen} />
           </>
         ) : (
