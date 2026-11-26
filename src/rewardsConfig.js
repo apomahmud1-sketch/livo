@@ -30,16 +30,23 @@ export const SPIN_PRIZES = [
   { id: 'spin_5000', label: '5,000', coins: 5000, weight: 1,  color: '#f9a8d4' },
 ];
 
-// Pick one prize by weight. Returns the prize object.
-export const pickSpinPrize = () => {
-  const total = SPIN_PRIZES.reduce((sum, p) => sum + p.weight, 0);
+// Pick one prize by weight from a given prize list. Returns the
+// prize object. Falls back to the first entry on a bad list, so
+// the wheel never spins to nothing.
+export const pickSpinPrizeFrom = (prizes) => {
+  const list = Array.isArray(prizes) && prizes.length > 0 ? prizes : SPIN_PRIZES;
+  const total = list.reduce((sum, p) => sum + (p.weight || 0), 0);
+  if (total <= 0) return list[0];
   let roll = Math.random() * total;
-  for (const prize of SPIN_PRIZES) {
-    roll -= prize.weight;
+  for (const prize of list) {
+    roll -= prize.weight || 0;
     if (roll <= 0) return prize;
   }
-  return SPIN_PRIZES[0];
+  return list[0];
 };
+
+// Pick one prize by weight. Returns the prize object.
+export const pickSpinPrize = () => pickSpinPrizeFrom(SPIN_PRIZES);
 
 // ── Daily check-in reward ────────────────────────────────────────
 // 7-day cycle: day 1..7 of the streak, then it wraps back to day 1.
