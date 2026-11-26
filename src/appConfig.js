@@ -32,6 +32,12 @@ export const DEFAULT_APP_CONFIG = {
   // rewardsConfig.js / store.js — the panel's `rewards` key wins
   // when it is set.
   rewards: { free_spins_per_day: 1, checkin_rewards: [10, 15, 20, 30, 40, 60, 100] },
+  // Gender-based views (Mother Panel App Control → `gender_views`):
+  // which side of the app each gender sees. 'host' shows the Host
+  // Dashboard tab + Go Live button; 'caller' hides them. Home stays
+  // the same for both views (live hosts to call). Same defaults as
+  // the panel seeds.
+  gender_views: { female: 'host', male: 'caller' },
 };
 
 function isObj(v) {
@@ -78,7 +84,24 @@ export function mergeAppConfig(raw) {
       out.rewards.checkin_rewards = raw.rewards.checkin_rewards;
     }
   }
+  if (isObj(raw.gender_views)) {
+    ['female', 'male'].forEach((k) => {
+      const v = String(raw.gender_views[k] || '').trim().toLowerCase();
+      if (v === 'host' || v === 'caller') out.gender_views[k] = v;
+    });
+  }
   return out;
+}
+
+// Resolve which side of the app a user sees from the panel's
+// gender_views: 'host' or 'caller'. An unknown/missing gender fails
+// open to 'host' (current behaviour) — never guessed, never hidden.
+export function genderViewFor(config, gender) {
+  const g = String(gender || '').trim().toLowerCase();
+  const views = (config && config.gender_views) || {};
+  if (g === 'female') return views.female === 'caller' ? 'caller' : 'host';
+  if (g === 'male') return views.male === 'host' ? 'host' : 'caller';
+  return 'host';
 }
 
 // Full THEME-shaped object (same keys as config.js THEME) driven by
@@ -154,6 +177,12 @@ const AppConfigContext = React.createContext({
   loginStyle: 'neon',
   noticeText: '',
   loaded: false,
+  // True once a real config has been seen — a fresh fetch that
+  // succeeded, or a cached config from an earlier fetch. False when
+  // the whole config load failed (no fetch, no cache): consumers
+  // fall back to current behaviour (e.g. the Host Dashboard tab
+  // stays visible to everyone) instead of applying the defaults.
+  configLive: false,
 });
 
 // Loads cached config first (instant, offline-safe), then refreshes
@@ -162,6 +191,7 @@ const AppConfigContext = React.createContext({
 export function AppConfigProvider({ children }) {
   const [config, setConfig] = React.useState(DEFAULT_APP_CONFIG);
   const [loaded, setLoaded] = React.useState(false);
+  const [configLive, setConfigLive] = React.useState(false);
 
   React.useEffect(() => {
     let mounted = true;
@@ -171,6 +201,8 @@ export function AppConfigProvider({ children }) {
         if (cached && mounted) {
           try {
             setConfig(mergeAppConfig(JSON.parse(cached)));
+            // A cache only exists because a real fetch wrote it once.
+            setConfigLive(true);
           } catch (e) {
             // Corrupt cache — ignore it, defaults stand in.
           }
@@ -182,6 +214,7 @@ export function AppConfigProvider({ children }) {
       if (!mounted) return;
       if (fresh) {
         setConfig(fresh);
+        setConfigLive(true);
         try {
           await AsyncStorage.setItem(APP_CONFIG_CACHE_KEY, JSON.stringify(fresh));
         } catch (e) {
@@ -206,8 +239,9 @@ export function AppConfigProvider({ children }) {
           ? config.notice.text
           : ''),
       loaded,
+      configLive,
     }),
-    [config, loaded],
+    [config, loaded, configLive],
   );
 
   return (
