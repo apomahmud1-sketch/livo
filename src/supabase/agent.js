@@ -10,6 +10,12 @@
 //   agent_send_coins(id, n) — atomic agent-wallet debit + user
 //                             credit + agent_transactions row
 //   agent_my_transactions() — the caller's sent transfers
+//   list_public_agents()    — approved agents anyone may see
+//                             (name, @id, phone, rate) — used by the
+//                             Wallet "Buy from Agent" section so
+//                             normal users can discover agents. The
+//                             table stays owner-only under RLS; only
+//                             this function exposes approved rows.
 // No client-side cross-user writes anywhere: the money moves
 // inside agent_send_coins only. A send RPC timeout returns
 // 'update-failed' WITHOUT retrying — the server may already have
@@ -111,5 +117,25 @@ export async function fetchAgentTransactions() {
     }));
   } catch (e) {
     return [];
+  }
+}
+
+// Approved coin agents, visible to every user (Wallet "Buy from
+// Agent"). Returns null on any failure so the caller can tell
+// "could not load" apart from "no approved agents yet" — never
+// invented rows. Rows: { agentId, name, phone, rate }.
+export async function listPublicAgents() {
+  if (!supabase) return null;
+  try {
+    const res = await withTimeout(supabase.rpc('list_public_agents'));
+    if (!res || res.error || !Array.isArray(res.data)) return null;
+    return res.data.map((r) => ({
+      agentId: typeof r.agent_id === 'string' ? r.agent_id : '',
+      name: typeof r.name === 'string' && r.name ? r.name : (typeof r.agent_id === 'string' ? r.agent_id : ''),
+      phone: typeof r.phone === 'string' ? r.phone : '',
+      rate: typeof r.rate_coins_per_usd === 'number' ? r.rate_coins_per_usd : 0,
+    }));
+  } catch (e) {
+    return null;
   }
 }
