@@ -3,17 +3,21 @@
 // (public.gifts.animation_url, set from the Mother Panel) as a
 // full-screen overlay on the Live Room / Video Call screen when
 // that gift is sent. Video (mp4/webm/mov) via expo-av, GIF via
-// Image. Auto-dismisses when the video finishes, or after ~3s
-// for a GIF. Never crashes, never blocks the gift flow: ANY
-// load/play failure reports through onError and the parent falls
-// back to the existing emoji gift effect (FullScreenGift for
-// expensive gifts in a call, hearts + chat line in a room).
+// Image, SVGA (.svga) via the native SVGA player (SvgaPlayer —
+// fail-soft: on APKs without the native module it reports an
+// error instead of rendering). Auto-dismisses when the video /
+// SVGA finishes, or after ~3s for a GIF. Never crashes, never
+// blocks the gift flow: ANY load/play failure reports through
+// onError and the parent falls back to the existing emoji gift
+// effect (FullScreenGift for expensive gifts in a call, hearts +
+// chat line in a room).
 // Exactly one of onDone / onError ever fires per showing.
 // pointerEvents="none" so it never blocks the call controls.
 // ─────────────────────────────────────────────────────────────────
 import React, { useEffect, useRef } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 import { Video } from 'expo-av';
+import SvgaPlayer from './SvgaPlayer';
 
 const GIF_DISMISS_MS = 3000;
 // Safety net: a video that never reports finished / error still
@@ -33,9 +37,14 @@ function isGifUrl(url) {
   return /\.gif(\?|#|$)/i.test(url);
 }
 
+function isSvgaUrl(url) {
+  return /\.svga(\?|#|$)/i.test(url);
+}
+
 export default function GiftAnimationOverlay({ gift, senderName, visible, onDone, onError }) {
   const url = giftAnimationUrl(gift);
   const isGif = url ? isGifUrl(url) : false;
+  const isSvga = url ? isSvgaUrl(url) : false;
   const doneRef = useRef(false);
   const onDoneRef = useRef(onDone);
   const onErrorRef = useRef(onError);
@@ -64,12 +73,12 @@ export default function GiftAnimationOverlay({ gift, senderName, visible, onDone
     if (!visible || !gift || !url) return undefined;
     doneRef.current = false;
     // GIFs have no "finished" event — dismiss after ~3s. Videos
-    // dismiss on didJustFinish; the timer below is only the
+    // and SVGA dismiss on finished; the timer below is only the
     // safety net in case that event never arrives.
     const timer = setTimeout(() => finishRef.current('done'), isGif ? GIF_DISMISS_MS : VIDEO_MAX_MS);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, gift, url, isGif]);
+  }, [visible, gift, url, isGif, isSvga]);
 
   if (!visible || !gift || !url) return null;
 
@@ -77,7 +86,15 @@ export default function GiftAnimationOverlay({ gift, senderName, visible, onDone
     <View style={styles.overlay} pointerEvents="none">
       <View style={styles.dim} />
       <View style={styles.content}>
-        {isGif ? (
+        {isSvga ? (
+          <SvgaPlayer
+            source={url}
+            style={styles.media}
+            loops={1}
+            onFinished={() => finishRef.current('done')}
+            onError={() => finishRef.current('error')}
+          />
+        ) : isGif ? (
           <Image
             source={{ uri: url }}
             style={styles.media}
