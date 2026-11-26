@@ -210,6 +210,43 @@ export default function HostDashboardScreen({ navigation }) {
     showToast(`Your call rate is now ${fmt(r.coinsPerMinute)} coins/min`);
   };
 
+  // Go Live must not depend on the store's live-hosts list: an
+  // offline host is never in it (and the list is still the demo
+  // fallback when the live fetch has not landed), so requiring it
+  // made Go Live impossible for exactly the host trying to go
+  // live. Build the same host object from this screen's own
+  // loaded hostRow + profile instead — same shape as
+  // fetchLiveHosts() maps (live.js), so VideoCall gets the exact
+  // fields it uses: id (host_id "u-…"), name, country, rateTier.
+  const buildLiveHost = () => {
+    if (!hostRow || !profile) return null;
+    const name =
+      (profile.username && String(profile.username)) ||
+      (user && user.email ? String(user.email).split('@')[0] : 'Host');
+    const country = String(profile.country || 'SGP').toUpperCase();
+    const flags = { BGD: '🇧🇩', IND: '🇮🇳', PAK: '🇵🇰', SGP: '🇸🇬', PHL: '🇵🇭', BRA: '🇧🇷', KOR: '🇰🇷' };
+    return {
+      id: String(hostRow.host_id),
+      userId: profile.user_id || null,
+      profileId: hostRow.profile_id || null,
+      name,
+      country,
+      flag: flags[country] || '🌍',
+      lang: profile.language || 'English',
+      level: 1,
+      rateTier: hostRow.rate_tier || myTier || 'tier2',
+      color: '#f472b6',
+      photo: profile.avatar_url ? { uri: profile.avatar_url } : null,
+      online: true,
+      viewerCount: null,
+      lastSeen: null,
+      status: 'Online now — video call 💬',
+      gender: profile.gender || 'female',
+      lat: null,
+      lng: null,
+    };
+  };
+
   const goLive = () => {
     if (!approved) {
       showToast('Not approved yet — you can go live once the panel approves you');
@@ -219,12 +256,18 @@ export default function HostDashboardScreen({ navigation }) {
       showToast('Go Live is only for female hosts');
       return;
     }
-    if (!storeHost) {
+    // Prefer the store host (keeps Home in sync), but never block
+    // on it: an offline host is not in the live-hosts list, and
+    // the list is still the demo fallback while the live fetch
+    // has not landed. Fall back to the host object built from
+    // this screen's own loaded hostRow + profile.
+    const host = storeHost || buildLiveHost();
+    if (!host) {
       showToast('Your host profile has not loaded yet — please try again in a moment');
       return;
     }
     showToast("You're live — control your mic, camera and beauty settings from here");
-    navigation.navigate('VideoCall', { host: storeHost, asHost: true });
+    navigation.navigate('VideoCall', { host, asHost: true });
   };
 
   const doWithdraw = async () => {
