@@ -28,6 +28,10 @@ export const DEFAULT_APP_CONFIG = {
   home_hero: { title: '1v1 Video Call', subtitle: 'Find your best match!' },
   login_style: { style: 'neon' },
   notice: { text: '' },
+  // Rewards settings (Lucky Spin + Daily Reward). Same defaults as
+  // rewardsConfig.js / store.js — the panel's `rewards` key wins
+  // when it is set.
+  rewards: { free_spins_per_day: 1, checkin_rewards: [10, 15, 20, 30, 40, 60, 100] },
 };
 
 function isObj(v) {
@@ -64,6 +68,15 @@ export function mergeAppConfig(raw) {
   }
   if (isObj(raw.notice) && typeof raw.notice.text === 'string') {
     out.notice.text = raw.notice.text;
+  }
+  if (isObj(raw.rewards)) {
+    if (Number.isInteger(raw.rewards.free_spins_per_day) && raw.rewards.free_spins_per_day > 0) {
+      out.rewards.free_spins_per_day = raw.rewards.free_spins_per_day;
+    }
+    if (Array.isArray(raw.rewards.checkin_rewards) && raw.rewards.checkin_rewards.length === 7
+      && raw.rewards.checkin_rewards.every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0)) {
+      out.rewards.checkin_rewards = raw.rewards.checkin_rewards;
+    }
   }
   return out;
 }
