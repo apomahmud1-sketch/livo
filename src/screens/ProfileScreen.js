@@ -659,6 +659,7 @@ export default function ProfileScreen({ navigation }) {
           <View style={[styles.menuCard, { backgroundColor: t.surface }]}>
             {menuRow('💬', '#fde7f1', 'Messages', null, () => navigation.navigate('MessagesTab'))}
             {features.host_dashboard ? menuRow('🎥', '#fde7f1', 'Host Dashboard', hostBadge, () => navigation.navigate('HostDashboard')) : null}
+            {menuRow('💎', '#e0f5fa', 'My Income', <Text style={styles.tagGreen}>💎 {diamonds.toLocaleString()}</Text>, () => navigation.navigate('MyIncome'))}
             {agentInfo && agentInfo.isAgent && agentInfo.status === 'approved'
               ? menuRow('🪙', '#fef3c7', 'Agent Portal', <Text style={styles.tagGreen}>{Number(agentInfo.walletCoins || 0).toLocaleString()} coins</Text>, () => navigation.navigate('AgentPortal'))
               : null}
