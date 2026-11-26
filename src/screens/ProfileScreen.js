@@ -28,6 +28,7 @@ import { AuthContext } from '../../App';
 import { supabase } from '../supabase/client';
 import { ensureProfile, equipFrame, fetchMyProfile, getSessionUser, signOut } from '../supabase/auth';
 import { fetchUserTags } from '../supabase/tags';
+import { getAgentPortalInfo } from '../supabase/agent';
 import { DEVICE_ID_KEY } from '../supabase/device';
 import { stopHostHeartbeat } from '../supabase/host';
 import LevelView from './profile/LevelView';
@@ -151,6 +152,19 @@ export default function ProfileScreen({ navigation }) {
   // Admin-set tags (user_tags, active only) — small chips under
   // the name. No rows → no chips, never demo tags.
   const [userTags, setUserTags] = React.useState([]);
+  // Agent Portal: visible ONLY to approved coin agents (checked
+  // via the agent_portal_info RPC — the agents table is owner-only
+  // under RLS, so this never reads it directly). Everyone else
+  // never sees the entry.
+  const [agentInfo, setAgentInfo] = React.useState(null);
+  React.useEffect(() => {
+    if (!user) return undefined;
+    let mounted = true;
+    getAgentPortalInfo().then((data) => {
+      if (mounted) setAgentInfo(data);
+    });
+    return () => { mounted = false; };
+  }, [user]);
   React.useEffect(() => {
     if (!profile || !profile.id) return undefined;
     let mounted = true;
@@ -626,6 +640,9 @@ export default function ProfileScreen({ navigation }) {
           <View style={[styles.menuCard, { backgroundColor: t.surface }]}>
             {menuRow('💬', '#fde7f1', 'Messages', null, () => navigation.navigate('MessagesTab'))}
             {features.host_dashboard ? menuRow('🎥', '#fde7f1', 'Host Dashboard', <Text style={styles.tagGreen}>Approved</Text>, () => navigation.navigate('HostDashboard')) : null}
+            {agentInfo && agentInfo.isAgent && agentInfo.status === 'approved'
+              ? menuRow('🪙', '#fef3c7', 'Agent Portal', <Text style={styles.tagGreen}>{Number(agentInfo.walletCoins || 0).toLocaleString()} coins</Text>, () => navigation.navigate('AgentPortal'))
+              : null}
             {features.my_tasks ? menuRow('✅', '#e2f5ec', 'My Tasks', <Text style={styles.tagPink}>New Reward</Text>, () => navigation.navigate('Tasks')) : null}
             {features.lucky_spin ? menuRow('🎡', '#fef3c7', 'Lucky Spin', <Text style={styles.tagPink}>Free spin</Text>, () => navigation.navigate('Rewards')) : null}
             {features.chat_price ? menuRow('💬', '#e0f5fa', 'Chat Price', <Text style={styles.chatPriceVal}>{chatPrice ? `${chatPrice.toLocaleString()}/min` : 'Not set'}</Text>, () => setView('chatprice')) : null}
