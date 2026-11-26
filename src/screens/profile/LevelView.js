@@ -22,7 +22,7 @@ function levelPillIcon(lv) {
   return '👑';
 }
 
-export default function LevelView({ gender, onGenderChange, onBack, onTopUp, showToast }) {
+export default function LevelView({ gender, onBack, onTopUp, showToast }) {
   const { levelInfo } = useApp();
   const female = gender === 'female';
   const privs = female ? LV_PRIVS_FEMALE : LV_PRIVS_MALE;
@@ -44,19 +44,12 @@ export default function LevelView({ gender, onGenderChange, onBack, onTopUp, sho
       <View style={styles.headRow}>
         <TouchableOpacity onPress={onBack} style={styles.backBtn}><Text style={styles.backTxt}>‹</Text></TouchableOpacity>
         <Text style={styles.headTitle}>My Level</Text>
+        {/* Gender is set once at signup and locked in the app
+            (only the owner can change it from the Mother Panel) —
+            this used to be a Male/Female switcher here. The label
+            only shows which side of the ladder this ID is on. */}
         <View style={styles.genderSeg}>
-          <TouchableOpacity
-            style={[styles.segBtn, !female && styles.segBtnOn]}
-            onPress={() => { onGenderChange('male'); }}
-          >
-            <Text style={[styles.segTxt, !female && styles.segTxtOn]}>Male ID</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.segBtn, female && styles.segBtnOnF]}
-            onPress={() => { onGenderChange('female'); }}
-          >
-            <Text style={[styles.segTxt, female && styles.segTxtOn]}>Female ID</Text>
-          </TouchableOpacity>
+          <Text style={[styles.segTxt, styles.segTxtOn]}>{female ? 'Female ID' : 'Male ID'}</Text>
         </View>
       </View>
 
