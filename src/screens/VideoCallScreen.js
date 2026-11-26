@@ -27,6 +27,11 @@ import {
 // [F5] Full-screen gift animation for expensive gifts (price >= 1000 coins)
 import FullScreenGift from '../components/FullScreenGift';
 // [/F5]
+// Gift animation overlay — plays a gift's uploaded animation
+// (animation_url) when that gift is sent, instead of the emoji
+// effect. Falls back to FullScreenGift (expensive gifts) on load
+// failure — see the onSent handler below.
+import GiftAnimationOverlay, { giftAnimationUrl } from '../components/GiftAnimationOverlay';
 import LiveVideo, {
   getAgoraEngine,
   leaveAgoraChannel,
@@ -179,6 +184,11 @@ export default function VideoCallScreen({ route, navigation }) {
   // [F5] Gift currently playing the full-screen animation (null = none).
   // Only expensive gifts (price >= EXPENSIVE_GIFT_MIN_COINS) ever set this.
   const [bigGift, setBigGift] = useState(null);
+  // Gift animation overlay: the gift with an uploaded animation
+  // currently playing (null = none). Takes priority over bigGift
+  // for that gift; on load failure the overlay reports onError
+  // and the expensive-gift emoji effect plays instead.
+  const [animGift, setAnimGift] = useState(null);
   // [/F5]
   // [F7] Voice changer state. 'normal' = your real voice. The panel
   // is closed by default so the call controls stay uncluttered.
@@ -740,15 +750,31 @@ export default function VideoCallScreen({ route, navigation }) {
       {/* [F5] Full-screen animation overlay for an expensive gift (pointerEvents="none" inside — never blocks the call controls). senderName is the signed-in user's real username (fetched from their profiles row), not demo data. */}
       <FullScreenGift gift={bigGift} senderName={senderName || 'You'} visible={!!bigGift} onDone={() => setBigGift(null)} />
       {/* [/F5] */}
+      {/* Uploaded gift animation overlay: plays when the sent gift
+          has an animation_url. On load failure it falls back to
+          the expensive-gift emoji effect above (cheap gifts keep
+          the toast-only behaviour — sendGift already toasted). */}
+      <GiftAnimationOverlay
+        gift={animGift}
+        senderName={senderName || 'You'}
+        visible={!!animGift}
+        onDone={() => setAnimGift(null)}
+        onError={(g) => {
+          setAnimGift(null);
+          if (g && g.price >= EXPENSIVE_GIFT_MIN_COINS) setBigGift(g);
+        }}
+      />
       {/* [New UI] Shared Gift sheet: sending charges real coins via
-          the store; expensive gifts also play the full-screen
-          animation above. */}
+          the store; a gift with an uploaded animation plays the
+          overlay above, an expensive gift without one plays the
+          full-screen emoji animation. */}
       <GiftSheet
         visible={giftOpen}
         host={host}
         onClose={() => setGiftOpen(false)}
         onSent={(gift) => {
-          if (gift.price >= EXPENSIVE_GIFT_MIN_COINS) setBigGift(gift);
+          if (giftAnimationUrl(gift)) setAnimGift(gift);
+          else if (gift.price >= EXPENSIVE_GIFT_MIN_COINS) setBigGift(gift);
         }}
       />
     </View>
