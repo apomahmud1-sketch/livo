@@ -22,8 +22,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      # --legacy-peer-deps: react-native-svga-player@1.1.0 wants
+      # react ^16.8.1 but the app uses react 18.3.1 (it was
+      # installed locally with --legacy-peer-deps too). Plain
+      # `npm ci` fails with ERESOLVE on that peer conflict.
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
       - name: Write env (public token-server URL, also in .env.example)
         run: echo "EXPO_PUBLIC_AGORA_TOKEN_SERVER_URL=https://livo-token-server.onrender.com" > .env
       - name: Publish OTA update
