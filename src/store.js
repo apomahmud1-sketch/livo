@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { CALL_RATES, COIN_PACKS, COIN_TO_DIAMOND_RATE, GIFTS, PLATFORM_COMMISSION_PERCENT, VIP_PACKS, VOICE_RATE_DIVISOR, getVoiceCallRate } from './config';
+import { CALL_RATES, COIN_PACKS, COIN_TO_DIAMOND_RATE, GIFTS, GIFT_HOST_SHARE_PERCENT, PLATFORM_COMMISSION_PERCENT, VIP_PACKS, VOICE_RATE_DIVISOR, getVoiceCallRate } from './config';
 import { fetchLiveCatalog, fetchLiveHosts, fetchFrames, fetchSpinPrizes, fetchLevelThresholds, fetchRewardsSettings } from './supabase/live';
 import { supabase } from './supabase/client';
 import { withTimeout } from './supabase/timeout';
@@ -734,7 +734,11 @@ export function AppProvider({ children }) {
       reference: gift.id || gift.name,
     }), false);
     if (host && host.id) {
-      creditHostEarnings(host.id, gift.price * COIN_TO_DIAMOND_RATE, 'gift_received', gift.id || gift.name);
+      // Gift share is one named constant (GIFT_HOST_SHARE_PERCENT,
+      // currently 100 = full gift price as Diamonds). The call share
+      // is 100 - PLATFORM_COMMISSION_PERCENT = 70%.
+      const giftShare = Math.round(gift.price * GIFT_HOST_SHARE_PERCENT / 100);
+      creditHostEarnings(host.id, giftShare * COIN_TO_DIAMOND_RATE, 'gift_received', gift.id || gift.name);
       // Best-effort: bump the host row's total_gifts. Never blocks
       // the gift and never throws — a failure just leaves the
       // counter one behind until the next gift.
