@@ -51,7 +51,7 @@ export async function fetchLiveCatalog() {
       q.eq('is_active', true).order('coins_per_minute', { ascending: true })),
     safeSelect('coin_packs', 'id,coins,bonus,price_usd,is_active', (q) =>
       q.eq('is_active', true).order('coins', { ascending: true })),
-    safeSelect('gifts', 'id,name,emoji,price_coins,is_active', (q) =>
+    safeSelect('gifts', 'id,name,emoji,price_coins,is_active,animation_url', (q) =>
       q.eq('is_active', true).order('price_coins', { ascending: true })),
     safeSelect('vip_packages', 'id,name,days,price_usd,is_active', (q) =>
       q.eq('is_active', true).order('price_usd', { ascending: true })),
@@ -92,6 +92,11 @@ export async function fetchLiveCatalog() {
             name: g.name || g.id,
             emoji: g.emoji || '🎁',
             price: g.price_coins,
+            // Uploaded animation (Mother Panel → gift-animations
+            // bucket). Null for gifts without one — those behave
+            // exactly as before. A missing column on an old DB
+            // just yields null, never a failed catalog load.
+            animationUrl: typeof g.animation_url === 'string' && g.animation_url ? g.animation_url : null,
           }))
       : null;
 
