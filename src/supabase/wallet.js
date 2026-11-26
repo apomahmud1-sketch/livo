@@ -22,7 +22,7 @@
 // ─────────────────────────────────────────────────────────────────
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './client';
-import { getSessionUser } from './auth';
+import { generateShortUserId, getSessionUser } from './auth';
 import { withTimeout } from './timeout';
 
 const LIVO_WALLET_CACHE_KEY = 'livo-wallet-cache-v1';
@@ -106,12 +106,21 @@ export async function loadWallet() {
     const error = res ? res.error : new Error('load-timed-out');
     if (error) return { error: 'load-failed' };
     if (!data) {
-      const { error: insErr } = await supabase.from('profiles').insert({
-        id: user.id,
-        user_id: user.id,
-        coins: 0,
-        diamonds: 0,
-      });
+      // Recovery path when the profile row is missing: create it
+      // with a real 8-digit Livo ID — never the raw auth UUID as a
+      // display ID. Retry once on the near-impossible ID collision.
+      let insErr = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const freshId = await generateShortUserId();
+        const r = await supabase.from('profiles').insert({
+          id: user.id,
+          user_id: freshId,
+          coins: 0,
+          diamonds: 0,
+        });
+        insErr = r.error || null;
+        if (!insErr || insErr.code !== '23505') break;
+      }
       if (insErr) return { error: 'profile-not-found' };
       const fresh = { coins: 0, diamonds: 0, vipLevel: null, vipUntil: null };
       await writeWalletCache(user.id, fresh);
