@@ -72,7 +72,7 @@ const FAILED_MESSAGE = 'Google sign-in failed. Please try again.';
 // error stack in the catch, and fixes the misclassification:
 // v13 statusCodes has no DEVELOPER_ERROR key, so any codeless
 // error matched that branch and showed the setup dialog.
-const LOGIN_DIAG_VERSION = '26e';
+const LOGIN_DIAG_VERSION = '26f';
 let loginDiagDeviceId = null;
 function logLoginDiag(stage, detail) {
   try {
