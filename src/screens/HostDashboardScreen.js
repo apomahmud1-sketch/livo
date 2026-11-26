@@ -51,7 +51,7 @@ function fmt(n) {
   return Number(n || 0).toLocaleString('en-US');
 }
 
-export default function HostDashboardScreen({ navigation }) {
+export default function HostDashboardScreen({ navigation, route }) {
   const { showToast, hosts, setHostOnline: setStoreHostOnline, setHostRate: setStoreHostRate, callRates, getLiveCallRate, diamonds } = useApp();
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
@@ -277,6 +277,23 @@ export default function HostDashboardScreen({ navigation }) {
     showToast("You're live — control your mic, camera and beauty settings from here");
     navigation.navigate('VideoCall', { host, asHost: true });
   };
+
+  // Centre Live tab (autoGoLive): the tab press navigates here
+  // with autoGoLive=true so the camera goes live straight away —
+  // the dashboard itself is only the fallback surface (not
+  // approved / no host row yet / not female). Fires once the
+  // initial load finishes; the param is cleared first so it never
+  // re-fires on remount or after returning from a call. A missing
+  // host row means the user has never applied — stay on the
+  // dashboard so the Apply card is what they see. The gates and
+  // toasts are goLive()'s own, byte-for-byte.
+  useEffect(() => {
+    const wantAuto = route && route.params && route.params.autoGoLive;
+    if (!wantAuto || loading) return;
+    navigation.setParams({ autoGoLive: false });
+    if (!hostRow) return;
+    goLive();
+  }, [loading, hostRow, route && route.params && route.params.autoGoLive, navigation]);
 
   const doWithdraw = async () => {
     if (!hostRow || withdrawing) return;
