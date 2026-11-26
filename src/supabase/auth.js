@@ -55,7 +55,7 @@ import { GOOGLE_WEB_CLIENT_ID, GOOGLE_WEB_CLIENT_ID_IS_CONFIGURED } from '../con
 const NOT_SET_UP_MESSAGE = "Google sign-in isn't set up for this app yet.";
 const FAILED_MESSAGE = 'Google sign-in failed. Please try again.';
 
-// ── Login diagnostics (2026-11-26, build 26d) ────────────────────
+// ── Login diagnostics (2026-11-26, builds 26d/26e) ───────────────
 // Release APKs keep failing native Google sign-in with the "isn't
 // set up yet" error even though the client ID, module, package
 // and SHA-1 are all verified correct — and no account picker
@@ -65,7 +65,14 @@ const FAILED_MESSAGE = 'Google sign-in failed. Please try again.';
 // never changes the login outcome. Only a 12-char prefix + length
 // of the client ID is logged — never the full ID, never tokens
 // or emails. Remove after the login failure is root-caused.
-const LOGIN_DIAG_VERSION = '26d';
+// 26d proved the error is NOT Google setup: the real error is a
+// JS TypeError "Cannot read property 'title' of undefined".
+// 26e adds per-step markers (attempt / configure_ok /
+// playservices_ok / signin_ok / tokens_ok / session_ok) + the
+// error stack in the catch, and fixes the misclassification:
+// v13 statusCodes has no DEVELOPER_ERROR key, so any codeless
+// error matched that branch and showed the setup dialog.
+const LOGIN_DIAG_VERSION = '26e';
 let loginDiagDeviceId = null;
 function logLoginDiag(stage, detail) {
   try {
@@ -87,6 +94,19 @@ function logLoginDiag(stage, detail) {
   } catch (e) {
     /* diagnostics must never break login */
   }
+}
+
+// 26e: one-line error detail with the stack, so the runtime cause
+// is visible in login_diagnostics instead of only a message.
+function diagDetail(e, prefix) {
+  const name = (e && e.name) || '';
+  const code = e && e.code != null ? String(e.code) : '';
+  const msg = (e && e.message) || '';
+  const stack = e && e.stack ? String(e.stack).slice(0, 800) : '';
+  return (
+    (prefix ? prefix + ' ' : '') +
+    'name=' + name + ' code=' + code + ' msg=' + msg + ' stack=' + stack
+  );
 }
 
 // Lazy-load the native Google Sign-In library. NEVER a top-level
@@ -139,15 +159,20 @@ async function signInWithGoogleNative() {
   }
   const { GoogleSignin, statusCodes } = lib;
   try {
+    logLoginDiag('step', 'attempt');
     await GoogleSignin.configure({ webClientId: GOOGLE_WEB_CLIENT_ID, offlineAccess: false });
+    logLoginDiag('step', 'configure_ok');
     await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+    logLoginDiag('step', 'playservices_ok');
     const res = await GoogleSignin.signIn();
+    logLoginDiag('step', 'signin_ok');
     if (!res || res.type === 'cancelled') {
       return { data: null, error: new Error('Google sign-in was cancelled.') };
     }
     let idToken = res.data && res.data.idToken;
     if (!idToken) {
       const tokens = await GoogleSignin.getTokens();
+      logLoginDiag('step', 'tokens_ok');
       idToken = tokens && tokens.idToken;
     }
     if (!idToken) {
@@ -162,12 +187,10 @@ async function signInWithGoogleNative() {
     if (sessionResult.error) {
       // eslint-disable-next-line no-console
       console.log('[Livo] signInWithIdToken failed:', sessionResult.error.message);
-      logLoginDiag(
-        'other_error',
-        'signInWithIdToken ' + (sessionResult.error.message || ''),
-      );
+      logLoginDiag('other_error', diagDetail(sessionResult.error, 'signInWithIdToken'));
       return { data: null, error: new Error(FAILED_MESSAGE) };
     }
+    logLoginDiag('step', 'session_ok');
     logLoginDiag('success', null);
 
     // First sign-in: make sure the user has a profiles row.
@@ -185,21 +208,22 @@ async function signInWithGoogleNative() {
     if (e && e.code === statusCodes.SIGN_IN_CANCELLED) {
       return { data: null, error: new Error('Google sign-in was cancelled.') };
     }
-    if (e && e.code === statusCodes.DEVELOPER_ERROR) {
+    // 26e fix: v13's statusCodes has NO DEVELOPER_ERROR key, so
+    // statusCodes.DEVELOPER_ERROR is undefined — any error with no
+    // code (a plain JS TypeError) matched this branch and showed
+    // the "isn't set up yet" dialog. Compare the string literal.
+    if (e && e.code === 'DEVELOPER_ERROR') {
       // The app is not registered in Google Cloud yet (missing
       // Android OAuth client for this package + SHA-1). No browser
       // fallback any more — the login screen shows the setup error.
-      logLoginDiag('developer_error', (e.code || '') + ' ' + (e.message || ''));
+      logLoginDiag('developer_error', diagDetail(e));
       // eslint-disable-next-line no-console
       console.log('[Livo] native Google sign-in not registered (DEVELOPER_ERROR).');
       return { data: null, error: new Error(NOT_SET_UP_MESSAGE) };
     }
     // Any other native failure (incl. PLAY_SERVICES_NOT_AVAILABLE):
     // no browser fallback — show the generic error.
-    logLoginDiag(
-      'other_error',
-      (e && e.code ? String(e.code) : '') + ' ' + (e && e.message ? String(e.message) : ''),
-    );
+    logLoginDiag('other_error', diagDetail(e));
     // eslint-disable-next-line no-console
     console.log('[Livo] native Google sign-in failed:', e && e.message);
     return { data: null, error: new Error(FAILED_MESSAGE) };
