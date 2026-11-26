@@ -7,7 +7,7 @@ import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import { House, MessageCircle, Play, UserRound, Video } from 'lucide-react-native';
 import { THEME } from './src/config';
-import { AppConfigProvider, useAppConfig, genderViewFor } from './src/appConfig';
+import { AppConfigProvider, useAppConfig, genderViewFor, isAppPageHidden, appPageTitle } from './src/appConfig';
 import { AppProvider, useApp } from './src/store';
 import { supabase } from './src/supabase/client';
 import { withTimeout } from './src/supabase/timeout';
@@ -73,7 +73,16 @@ function MainTabs() {
   // Panel-driven config (app_config): theme colours + the Moments
   // feature toggle. When moments is OFF the tab is hidden entirely.
   const appCfg = useAppConfig();
-  const { theme: T, features } = appCfg;
+  const { theme: T, features, app_pages } = appCfg;
+  // App Builder (Mother Panel → app_pages): a hidden tab page hides
+  // its tab. The Me tab NEVER hides (it is the hub — the panel only
+  // changes the rows inside it), and the centre Live tab is the Go
+  // Live action, not a page, so it is untouched. Me always stays, so
+  // at least one tab always remains — the "never hide the last tab"
+  // guard holds by construction.
+  const homeTabHidden = isAppPageHidden(app_pages, 'home');
+  const momentsTabHidden = !features.moments || isAppPageHidden(app_pages, 'moments');
+  const messagesTabHidden = isAppPageHidden(app_pages, 'messages');
   // Gender-based view (panel app_config → gender_views): the Live
   // (Host Dashboard) tab only shows when this user's view is
   // 'host'. The profile comes from the gate's signup check in Root
@@ -91,20 +100,22 @@ function MainTabs() {
         tabBarStyle: [styles.tabBar, { backgroundColor: T.page, borderTopColor: T.line }],
       }}
     >
-      <Tab.Screen
-        name="HomeTab"
-        component={HomeScreen}
-        options={{
-          tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, { color: focused ? T.tabActive : T.tabInactive }, focused && styles.tabLabelActive]}>Home</Text>,
-          tabBarIcon: ({ focused }) => <House size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? T.tabActive : T.tabInactive} />,
-        }}
-      />
-      {features.moments ? (
+      {!homeTabHidden && (
+        <Tab.Screen
+          name="HomeTab"
+          component={HomeScreen}
+          options={{
+            tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, { color: focused ? T.tabActive : T.tabInactive }, focused && styles.tabLabelActive]}>{appPageTitle(app_pages, 'home', 'Home')}</Text>,
+            tabBarIcon: ({ focused }) => <House size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? T.tabActive : T.tabInactive} />,
+          }}
+        />
+      )}
+      {!momentsTabHidden ? (
         <Tab.Screen
           name="MomentsTab"
           component={MomentsScreen}
           options={{
-            tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, { color: focused ? T.tabActive : T.tabInactive }, focused && styles.tabLabelActive]}>Moments</Text>,
+            tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, { color: focused ? T.tabActive : T.tabInactive }, focused && styles.tabLabelActive]}>{appPageTitle(app_pages, 'moments', 'Moments')}</Text>,
             tabBarIcon: ({ focused }) => <Play size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? T.tabActive : T.tabInactive} />,
           }}
         />
@@ -135,21 +146,23 @@ function MainTabs() {
           }}
         />
       ) : null}
-      <Tab.Screen
-        name="MessagesTab"
-        component={MessagesScreen}
-        options={{
-          tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, { color: focused ? T.tabActive : T.tabInactive }, focused && styles.tabLabelActive]}>Messages</Text>,
-          tabBarIcon: ({ focused }) => <MessageCircle size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? T.tabActive : T.tabInactive} />,
-          tabBarBadge: unreadTotal > 0 ? unreadTotal : undefined,
-          tabBarBadgeStyle: styles.msgBadge,
-        }}
-      />
+      {!messagesTabHidden && (
+        <Tab.Screen
+          name="MessagesTab"
+          component={MessagesScreen}
+          options={{
+            tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, { color: focused ? T.tabActive : T.tabInactive }, focused && styles.tabLabelActive]}>{appPageTitle(app_pages, 'messages', 'Messages')}</Text>,
+            tabBarIcon: ({ focused }) => <MessageCircle size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? T.tabActive : T.tabInactive} />,
+            tabBarBadge: unreadTotal > 0 ? unreadTotal : undefined,
+            tabBarBadgeStyle: styles.msgBadge,
+          }}
+        />
+      )}
       <Tab.Screen
         name="ProfileTab"
         component={ProfileScreen}
         options={{
-          tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, { color: focused ? T.tabActive : T.tabInactive }, focused && styles.tabLabelActive]}>Me</Text>,
+          tabBarLabel: ({ focused }) => <Text style={[styles.tabLabel, { color: focused ? T.tabActive : T.tabInactive }, focused && styles.tabLabelActive]}>{appPageTitle(app_pages, 'me', 'Me')}</Text>,
           tabBarIcon: ({ focused }) => <UserRound size={20} strokeWidth={focused ? 2.5 : 1.9} color={focused ? T.tabActive : T.tabInactive} />,
         }}
       />
@@ -163,9 +176,9 @@ const navigationRef = createNavigationContainerRef();
 // The native stack already pops inner pages (ChatDetail, VideoCall,
 // WalletTab, …) — this handler only adds the two behaviours the
 // native stack does NOT do:
-//  • On a root tab screen other than Home, back goes to the Home tab
-//    first instead of closing the app.
-//  • On the Home tab, back needs a double-press within 2s to exit.
+//  • On a root tab screen other than the first tab, back goes to the
+//    first tab first instead of closing the app.
+//  • On the first tab, back needs a double-press within 2s to exit.
 // It returns false for stack screens, so the native pop runs exactly
 // once (no double-pop). It is registered after the navigator mounts,
 // so it runs before the navigator's own back listener.
@@ -182,16 +195,21 @@ function useHardwareBack() {
       // A stack screen above Main (ChatDetail, VideoCall, …):
       // let the native stack pop it — do nothing here.
       if (!top || top.name !== 'Main') return false;
-      // On a tab: which tab is focused?
+      // On a tab: which tab is focused? Back goes to the FIRST tab
+      // (Home when it is shown, otherwise the first visible tab —
+      // the App Builder can hide the Home tab).
       const tabState = top.state;
       const focusedTab = tabState && tabState.routes
         ? tabState.routes[tabState.index].name
         : 'HomeTab';
-      if (focusedTab !== 'HomeTab') {
-        nav.navigate('Main', { screen: 'HomeTab' });
+      const firstTab = tabState && tabState.routes && tabState.routes.length
+        ? tabState.routes[0].name
+        : 'HomeTab';
+      if (focusedTab !== firstTab) {
+        nav.navigate('Main', { screen: firstTab });
         return true;
       }
-      // Home tab: double-press within 2s exits the app.
+      // First tab: double-press within 2s exits the app.
       const now = Date.now();
       if (now - lastPressRef.current < 2000) return false;
       lastPressRef.current = now;
