@@ -37,6 +37,10 @@ import { fetchRoomMessages, sendRoomMessage, subscribeRoomMessages } from '../su
 import { buildChannelName } from '../calls/signalling';
 import LiveVideo from '../agora/LiveVideo';
 import GiftSheet from '../components/GiftSheet';
+// Report a host to the Mother Panel (see ReportSheet): a viewer
+// watching this live room can report the host — the report lands
+// in the public.reports table for the owner to review.
+import ReportSheet from '../components/ReportSheet';
 import GiftAnimationOverlay, { giftAnimationUrl } from '../components/GiftAnimationOverlay';
 
 const HEART_COLORS = ['#ff5da2', '#f43f9e', '#c084fc', '#ffd76a'];
@@ -69,6 +73,8 @@ export default function LiveRoomScreen({ route, navigation }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [giftOpen, setGiftOpen] = useState(false);
+  // Report sheet: a viewer can report the host of this room.
+  const [reportOpen, setReportOpen] = useState(false);
   // Gift animation overlay: the gift with an uploaded animation
   // currently playing (null = none). The chat line + hearts below
   // still fire, so a load failure just leaves the existing effect.
@@ -272,6 +278,9 @@ export default function LiveRoomScreen({ route, navigation }) {
             <Text style={styles.viewerTxt}>{formatViewers(viewerCount)}</Text>
           </View>
         ) : null}
+        <TouchableOpacity style={styles.reportBtn} onPress={() => setReportOpen(true)} activeOpacity={0.8}>
+          <Text style={styles.reportTxt}>⚑ Report</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.closeBtn} onPress={() => navigation.goBack()} activeOpacity={0.8}>
           <X size={18} color="#fff" strokeWidth={2.5} />
         </TouchableOpacity>
@@ -381,6 +390,9 @@ export default function LiveRoomScreen({ route, navigation }) {
       />
 
       <GiftSheet visible={giftOpen} host={host} onClose={() => setGiftOpen(false)} onSent={onGiftSent} />
+
+      {/* Report sheet: a viewer reports this host to the owner. */}
+      <ReportSheet visible={reportOpen} host={host} onClose={() => setReportOpen(false)} />
     </View>
   );
 }
@@ -431,6 +443,17 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   viewerTxt: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  reportBtn: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(10,0,20,0.52)',
+    borderColor: 'rgba(255,255,255,0.16)',
+    borderRadius: 999,
+    borderWidth: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  reportTxt: { color: '#fff', fontSize: 12, fontWeight: '900' },
   closeBtn: {
     alignItems: 'center',
     backgroundColor: 'rgba(10,0,20,0.52)',
