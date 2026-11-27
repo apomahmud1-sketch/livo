@@ -228,6 +228,24 @@ export function getAgoraEngine() {
   return engine;
 }
 
+// ── Co-guest uid ───────────────────────────────────────────────
+// Deterministic Agora uid for a user id (FNV-1a, positive 31-bit,
+// never 0). A viewer approved as co-guest joins the channel with
+// this uid (as a broadcaster); the host computes the same value
+// from the approved guest's user id and matches the joined remote
+// uid to it — so the host knows the remote is a co-guest (small
+// box, host stays full-screen) and not a 1v1 caller (call layout).
+// No signalling round-trip is needed for the match.
+export function agoraUidForUser(userId) {
+  const s = String(userId || '');
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return ((h >>> 0) % 2147483646) + 1;
+}
+
 function registerEngineEvents(lib) {
   engine.registerEventHandler({
     onJoinChannelSuccess: () => {
@@ -508,6 +526,13 @@ export function setAgoraBeauty(enabled) {
 //              local preview, no remote video view.
 //   uid      — numeric uid (0 = Agora assigns one). Default 0.
 //   style    — container style
+//   coGuestUids — [Live room] numeric Agora uids of the host's
+//     APPROVED co-guests (agoraUidForUser of their user ids).
+//     A joined remote whose uid is in this list is a co-guest:
+//     the host stays full-screen and the guest shows in a small
+//     box. Any other joined remote is a 1v1 caller and drives the
+//     call layout (caller main + host small preview). Empty =
+//     no co-guests, behaviour exactly as before.
 //   onRemoteJoin(uid) / onRemoteLeave(uid) — optional callbacks
 //   onJoin() — the local user actually joined the channel
 //     (onJoinChannelSuccess). Call screens use it as the "connected"
@@ -533,6 +558,7 @@ export default function LiveVideo({
   uid = 0,
   style,
   showLiveChip = true, // [New UI] false = the parent draws its own top UI (timer pills, LIVE badge)
+  coGuestUids = [], // [Live room] approved co-guest Agora uids (see above)
   onRemoteJoin,
   onRemoteLeave,
   onJoin,
@@ -542,7 +568,10 @@ export default function LiveVideo({
 }) {
   const [status, setStatus] = React.useState('idle'); // idle | joining | joined | error
   const [error, setError] = React.useState('');
-  const [remoteUid, setRemoteUid] = React.useState(null);
+  // All currently-joined remote uids (a 1v1 caller and/or approved
+  // co-guests). Split below into callerUid (call layout) and
+  // guestUids (small co-guest boxes on the host's live).
+  const [remoteUids, setRemoteUids] = React.useState([]);
   const [localUid, setLocalUid] = React.useState(0);
   // Instant live: true once the local camera preview has started
   // (before the token fetch). joinAttempt re-runs the join effect
@@ -604,12 +633,12 @@ export default function LiveVideo({
     const unsubscribe = onAgoraRemoteUser((event) => {
       const cb = callbacksRef.current;
       if (event.type === 'joined') {
-        setRemoteUid(event.uid);
+        setRemoteUids((prev) => (prev.includes(event.uid) ? prev : [...prev, event.uid]));
         if (cb.onRemoteJoin) {
           cb.onRemoteJoin(event.uid);
         }
       } else if (event.type === 'left') {
-        setRemoteUid((current) => (current === event.uid ? null : current));
+        setRemoteUids((prev) => prev.filter((u) => u !== event.uid));
         if (cb.onRemoteLeave) {
           cb.onRemoteLeave(event.uid);
         }
@@ -714,6 +743,20 @@ export default function LiveVideo({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channel, role, audioOnly, joinAttempt]); // [F2] audioOnly added to deps
 
+  // Multi-guest split (defined here so the audio-only early return
+  // below can use remoteUid): a joined remote whose uid matches an
+  // approved co-guest is a guest (small box); any other joined
+  // remote is the 1v1 caller (call layout). With no coGuestUids
+  // the split is a no-op and behaviour is exactly as before.
+  // remoteUid = first joined remote, for the audio-only text.
+  const coGuestSet = React.useMemo(
+    () => new Set((coGuestUids || []).map((u) => Number(u))),
+    [coGuestUids],
+  );
+  const guestUids = remoteUids.filter((u) => coGuestSet.has(Number(u)));
+  const callerUid = remoteUids.find((u) => !coGuestSet.has(Number(u))) ?? null;
+  const remoteUid = remoteUids.length > 0 ? remoteUids[0] : null;
+
   if (AGORA_APP_ID_IS_PLACEHOLDER) {
     return (
       <View style={[styles.box, style]}>
@@ -811,14 +854,12 @@ export default function LiveVideo({
   }
 
   const isHost = role === 'host';
-  // Live broadcast: while the host has no remote yet (going live
-  // alone, or a caller waiting for the callee), show the host's OWN
-  // camera full-screen instead of a black waiting placeholder — the
-  // host sees themselves big, like a real live broadcast. The
-  // small "You" preview is hidden in this state (same camera).
-  // When a remote joins, the layout flips to remote main + the
-  // small "You" preview; when they leave it flips back.
-  //
+  // Live broadcast: while the host has no 1v1 caller (a co-guest
+  // does not count — they are a small box, not the main view),
+  // show the host's OWN camera full-screen instead of a black
+  // waiting placeholder. When a 1v1 caller joins, the layout flips
+  // to caller main + the small "You" preview; when they leave it
+  // flips back (and any co-guest boxes return).
   // The self view is a TextureView, NOT a SurfaceView: a plain
   // SurfaceView renders black here (its surface sits behind the
   // window and the videoBox's opaque background occludes it — the
@@ -833,13 +874,13 @@ export default function LiveVideo({
   // if the TextureView is unavailable in this build, use a
   // media-overlay SurfaceView (camera visible, overlays covered)
   // rather than a black screen.
-  const showSelfFullscreen = isHost && !remoteUid;
+  const showSelfFullscreen = isHost && !callerUid;
   return (
     <View style={[styles.videoBox, style]}>
-      {remoteUid ? (
+      {callerUid ? (
         <RtcSurfaceView
           style={styles.remoteVideo}
-          canvas={{ uid: remoteUid, renderMode: RENDER_MODE_HIDDEN }}
+          canvas={{ uid: callerUid, renderMode: RENDER_MODE_HIDDEN }}
         />
       ) : showSelfFullscreen ? (
         RtcTextureView ? (
@@ -871,7 +912,7 @@ export default function LiveVideo({
           </View>
         </View>
       ) : null}
-      {isHost && remoteUid ? (
+      {isHost && callerUid ? (
         <View style={styles.localPreview}>
           <RtcSurfaceView
             style={styles.localVideo}
@@ -879,6 +920,24 @@ export default function LiveVideo({
             zOrderMediaOverlay
           />
           <Text style={styles.localLabel}>You</Text>
+        </View>
+      ) : null}
+      {/* Co-guest video boxes: approved guests publish in the same
+          channel; the host stays full-screen and each guest shows
+          in a small box (reference "Waiting…(2)" box). Hidden
+          during a 1v1 call — the caller layout takes over then. */}
+      {showSelfFullscreen && guestUids.length > 0 ? (
+        <View style={styles.guestRow}>
+          {guestUids.map((uid) => (
+            <View key={String(uid)} style={styles.guestBox}>
+              <RtcSurfaceView
+                style={styles.guestVideo}
+                canvas={{ uid, renderMode: RENDER_MODE_HIDDEN }}
+                zOrderMediaOverlay
+              />
+              <Text style={styles.guestLabel}>Guest</Text>
+            </View>
+          ))}
         </View>
       ) : null}
       {showLiveChip ? (
@@ -907,6 +966,11 @@ const styles = StyleSheet.create({
   localLabel: { color: '#fff', fontSize: 11, fontWeight: 'bold', marginTop: 2, textAlign: 'center' },
   localPreview: { borderRadius: 10, overflow: 'hidden', position: 'absolute', right: 10, top: 10, width: 96 },
   localVideo: { height: 128, width: 96 },
+  // Co-guest small boxes (top-right, stacked) on the host's live.
+  guestRow: { gap: 8, position: 'absolute', right: 10, top: 10 },
+  guestBox: { borderRadius: 10, overflow: 'hidden', width: 96 },
+  guestVideo: { height: 128, width: 96 },
+  guestLabel: { color: '#fff', fontSize: 11, fontWeight: 'bold', marginTop: 2, textAlign: 'center' },
   note: { color: '#fbbf24', fontSize: 12, marginTop: 12, textAlign: 'center' },
   remoteVideo: { flex: 1 },
   text: { color: '#d1d5db', fontSize: 13, lineHeight: 20, textAlign: 'center' },
