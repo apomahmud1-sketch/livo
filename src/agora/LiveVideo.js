@@ -581,6 +581,12 @@ export default function LiveVideo({
   // guestUids (small co-guest boxes on the host's live).
   const [remoteUids, setRemoteUids] = React.useState([]);
   const [localUid, setLocalUid] = React.useState(0);
+  // True only once onJoinChannelSuccess has actually fired — the join is
+  // confirmed, not just attempted. The full-screen self view is keyed on
+  // this so its setupLocalVideo runs AGAIN after joining: the join path
+  // resets the engine (enableVideo), which detaches the pre-join binding
+  // and leaves the view black until it re-binds post-join.
+  const [joinConfirmed, setJoinConfirmed] = React.useState(false);
   // Instant live: true once the local camera preview has started
   // (before the token fetch). joinAttempt re-runs the join effect
   // when the host taps "Try again" after a failed join.
@@ -610,6 +616,7 @@ export default function LiveVideo({
   const retryJoin = () => {
     setError('');
     setStatus('joining');
+    setJoinConfirmed(false);
     setJoinAttempt((n) => n + 1);
   };
 
@@ -638,6 +645,7 @@ export default function LiveVideo({
     // is configured, resolveAgoraToken throws and the error view
     // below shows the message — never join without a token.
     setStatus('joining');
+    setJoinConfirmed(false);
     const unsubscribe = onAgoraRemoteUser((event) => {
       const cb = callbacksRef.current;
       if (event.type === 'joined') {
@@ -652,6 +660,7 @@ export default function LiveVideo({
         }
       } else if (event.type === 'joined-self') {
         setStatus('joined');
+        setJoinConfirmed(true);
         if (cb.onJoin) {
           cb.onJoin();
         }
@@ -907,11 +916,13 @@ export default function LiveVideo({
       ) : showSelfFullscreen ? (
         RtcTextureView ? (
           <RtcTextureView
+            key={joinConfirmed ? 'self-joined' : 'self-preview'}
             style={styles.remoteVideo}
             canvas={{ uid: localUid, renderMode: RENDER_MODE_HIDDEN }}
           />
         ) : (
           <RtcSurfaceView
+            key={joinConfirmed ? 'self-joined' : 'self-preview'}
             style={styles.remoteVideo}
             canvas={{ uid: localUid, renderMode: RENDER_MODE_HIDDEN }}
             zOrderMediaOverlay
