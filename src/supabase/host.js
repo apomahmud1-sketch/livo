@@ -223,13 +223,101 @@ export async function markLiveCheckExpired(checkId) {
 export async function setHostOnline(hostRowId, online) {
   if (!supabase || !hostRowId) return false;
   try {
+    // Going live stamps live_started_at too — the heartbeat only
+    // refreshes last_seen, so the start time survives and viewers
+    // see the real live duration (2026-11-28 live-room rebuild).
+    const patch = { is_online: online, last_seen: new Date().toISOString() };
+    if (online) patch.live_started_at = new Date().toISOString();
     const { error } = await supabase
       .from('hosts')
-      .update({ is_online: online, last_seen: new Date().toISOString() })
+      .update(patch)
       .eq('id', hostRowId);
     return !error;
   } catch (e) {
     return false;
+  }
+}
+
+// ── Live room controls (2026-11-28) ────────────────────────────
+// Chat on/off for the host's own live room. The viewers' screens
+// poll the hosts row and disable their input while it is true.
+// Takes the public host_id string (u-...), not the row uuid.
+export async function setLiveChatDisabled(hostId, disabled) {
+  if (!supabase || !hostId) return false;
+  try {
+    const { error } = await supabase
+      .from('hosts')
+      .update({ live_chat_disabled: !!disabled })
+      .eq('host_id', String(hostId));
+    return !error;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Room-level block: the blocked viewer can no longer enter THIS
+// host's live room. It is NOT an app-wide ban (bans table) — the
+// viewer keeps their account and can watch other hosts.
+export async function blockRoomUser(hostId, blockedUserId, blockedName) {
+  if (!supabase || !hostId || !blockedUserId) return false;
+  try {
+    const { error } = await supabase.from('room_blocks').insert({
+      host_id: String(hostId),
+      blocked_user_id: blockedUserId,
+      blocked_name: blockedName || null,
+    });
+    return !error;
+  } catch (e) {
+    return false;
+  }
+}
+
+export async function unblockRoomUser(hostId, blockedUserId) {
+  if (!supabase || !hostId || !blockedUserId) return false;
+  try {
+    const { error } = await supabase
+      .from('room_blocks')
+      .delete()
+      .eq('host_id', String(hostId))
+      .eq('blocked_user_id', blockedUserId);
+    return !error;
+  } catch (e) {
+    return false;
+  }
+}
+
+export async function isRoomBlocked(hostId, userId) {
+  if (!supabase || !hostId || !userId) return false;
+  try {
+    const res = await withTimeout(
+      supabase
+        .from('room_blocks')
+        .select('id')
+        .eq('host_id', String(hostId))
+        .eq('blocked_user_id', userId)
+        .maybeSingle(),
+    );
+    return !!(res && !res.error && res.data);
+  } catch (e) {
+    return false;
+  }
+}
+
+export async function fetchRoomBlocks(hostId) {
+  if (!supabase || !hostId) return [];
+  try {
+    const res = await withTimeout(
+      supabase
+        .from('room_blocks')
+        .select('id,blocked_user_id,blocked_name,created_at')
+        .eq('host_id', String(hostId))
+        .order('created_at', { ascending: false })
+        .limit(50),
+    );
+    if (!res || res.error || !Array.isArray(res.data)) return [];
+    return res.data;
+  } catch (e) {
+    return [];
   }
 }
 
