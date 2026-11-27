@@ -5,7 +5,8 @@
 // (scrolls to the Buy from Agent section). Diamonds do NOT live
 // here any more — the Diamonds section and Buy Diamonds button were
 // removed (user 2026-11-27); Diamonds live on the My Income screen
-// for hosts. The diamond packs stay in the DB/panel and the
+// for hosts. Bill · History is the coin ledger only — diamond
+// earnings (calls/gifts) are listed on My Income, not here. The diamond packs stay in the DB/panel and the
 // buyDiamondPack billing code stays in the store — only this
 // screen stopped showing them. Tapping an agent card opens the
 // agent's detail inside the app (AgentDetail screen).
@@ -45,9 +46,6 @@ function txText(t) {
   if (t.amountCoins) {
     return `${t.amountCoins > 0 ? '+' : ''}${t.amountCoins.toLocaleString()} coins · ${t.kind}`;
   }
-  if (t.amountDiamonds) {
-    return `${t.amountDiamonds > 0 ? '+' : ''}${t.amountDiamonds.toLocaleString()} 💎 · ${t.kind}`;
-  }
   return String(t.kind || 'transaction');
 }
 
@@ -58,13 +56,15 @@ function coinTotal(p) {
 
 export default function WalletScreen({ navigation }) {
   const {
-    coins, diamonds, buyCoinPack, coinPacks,
+    coins, buyCoinPack, coinPacks,
     showToast, signedIn, transactions, refreshTransactions,
   } = useApp();
   const [selectedCoinId, setSelectedCoinId] = useState(null);
   const [showBill, setShowBill] = useState(false);
-  // Bill · History filter: All / Received / Sent. Received =
-  // a positive coins or diamonds amount; Sent = a negative one.
+  // Bill · History filter: All / Received / Sent, over COIN
+  // transactions only — Received = a positive coins amount,
+  // Sent = a negative one. Diamond transactions (call/gift
+  // earnings) are not listed here; they live on My Income.
   const [billFilter, setBillFilter] = useState('all');
   // Approved coin agents (Wallet "Buy from Agent" section, below
   // the coin packs). null = still loading, [] = none or load failed
@@ -102,9 +102,12 @@ export default function WalletScreen({ navigation }) {
     } catch (e) { /* layout not ready — ignore */ }
   };
 
-  const visibleTx = transactions.filter((h) => {
-    if (billFilter === 'received') return (h.amountCoins || 0) > 0 || (h.amountDiamonds || 0) > 0;
-    if (billFilter === 'sent') return (h.amountCoins || 0) < 0 || (h.amountDiamonds || 0) < 0;
+  // Coin ledger only: diamond-only transactions (call/gift
+  // earnings) belong to My Income, not to the Wallet history.
+  const coinTx = transactions.filter((h) => (h.amountCoins || 0) !== 0);
+  const visibleTx = coinTx.filter((h) => {
+    if (billFilter === 'received') return (h.amountCoins || 0) > 0;
+    if (billFilter === 'sent') return (h.amountCoins || 0) < 0;
     return true;
   });
   // Totals for the visible filter only (never the whole list when
@@ -112,9 +115,8 @@ export default function WalletScreen({ navigation }) {
   const visibleTotals = visibleTx.reduce(
     (acc, h) => ({
       coins: acc.coins + (h.amountCoins || 0),
-      diamonds: acc.diamonds + (h.amountDiamonds || 0),
     }),
-    { coins: 0, diamonds: 0 },
+    { coins: 0 },
   );
   const signed = (n) => `${n > 0 ? '+' : ''}${n.toLocaleString()}`;
 
@@ -177,16 +179,16 @@ export default function WalletScreen({ navigation }) {
         <ScrollView contentContainerStyle={styles.billWrap}>
           {!signedIn ? (
             <Text style={styles.empty}>Please sign in to see your transactions.</Text>
-          ) : transactions.length === 0 ? (
+          ) : coinTx.length === 0 ? (
             <Text style={styles.empty}>No transactions yet</Text>
           ) : visibleTx.length === 0 ? (
             <Text style={styles.empty}>
-              {billFilter === 'received' ? 'No received transactions yet' : 'No sent transactions yet'}
+              {billFilter === 'received' ? 'No received transactions yet' : billFilter === 'sent' ? 'No sent transactions yet' : 'No coin transactions yet'}
             </Text>
           ) : (
             <View>
               <Text style={styles.totals}>
-                Total: {signed(visibleTotals.coins)} coins · {signed(visibleTotals.diamonds)} 💎
+                Total: {signed(visibleTotals.coins)} coins
               </Text>
               {visibleTx.map((h) => (
                 <View key={h.id} style={styles.histRow}>
