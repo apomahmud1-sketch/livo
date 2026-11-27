@@ -496,6 +496,10 @@ export default function LiveVideo({
   const [localUid, setLocalUid] = React.useState(0);
   const joinedChannelRef = React.useRef(null);
   const RtcSurfaceViewRef = React.useRef(null);
+  // TextureView for the full-screen self view (see the render
+  // section): it draws inside the window, so the waiting pill
+  // and the call overlays stay visible on top of it.
+  const RtcTextureViewRef = React.useRef(null);
   // Latest callbacks, read by the join effect (which must NOT
   // re-run when a parent re-renders with new inline callbacks).
   const callbacksRef = React.useRef({});
@@ -512,6 +516,9 @@ export default function LiveVideo({
     const lib = loadAgora();
     if (lib && lib.RtcSurfaceView) {
       RtcSurfaceViewRef.current = lib.RtcSurfaceView;
+    }
+    if (lib && lib.RtcTextureView) {
+      RtcTextureViewRef.current = lib.RtcTextureView;
     }
 
     if (AGORA_APP_ID_IS_PLACEHOLDER) {
@@ -669,6 +676,7 @@ export default function LiveVideo({
   // [/F2]
 
   const RtcSurfaceView = RtcSurfaceViewRef.current;
+  const RtcTextureView = RtcTextureViewRef.current;
   if (!RtcSurfaceView) {
     return (
       <View style={[styles.box, style]}>
@@ -686,6 +694,21 @@ export default function LiveVideo({
   // small "You" preview is hidden in this state (same camera).
   // When a remote joins, the layout flips to remote main + the
   // small "You" preview; when they leave it flips back.
+  //
+  // The self view is a TextureView, NOT a SurfaceView: a plain
+  // SurfaceView renders black here (its surface sits behind the
+  // window and the videoBox's opaque background occludes it — the
+  // 9c1244b full-screen SurfaceView showed black on the owner's
+  // phone while the identical canvas on the small preview worked),
+  // and adding zOrderMediaOverlay would put the surface ABOVE the
+  // window and hide the waiting pill, the timer and the call
+  // controls. A TextureView draws inside the window, so the
+  // camera shows AND the pill/overlays stay visible on top of it.
+  // The small "You" preview keeps working as a media-overlay
+  // SurfaceView because it is tiny and overlaps no UI. Fallback:
+  // if the TextureView is unavailable in this build, use a
+  // media-overlay SurfaceView (camera visible, overlays covered)
+  // rather than a black screen.
   const showSelfFullscreen = isHost && !remoteUid;
   return (
     <View style={[styles.videoBox, style]}>
@@ -695,10 +718,18 @@ export default function LiveVideo({
           canvas={{ uid: remoteUid, renderMode: RENDER_MODE_HIDDEN }}
         />
       ) : showSelfFullscreen ? (
-        <RtcSurfaceView
-          style={styles.remoteVideo}
-          canvas={{ uid: localUid, renderMode: RENDER_MODE_HIDDEN }}
-        />
+        RtcTextureView ? (
+          <RtcTextureView
+            style={styles.remoteVideo}
+            canvas={{ uid: localUid, renderMode: RENDER_MODE_HIDDEN }}
+          />
+        ) : (
+          <RtcSurfaceView
+            style={styles.remoteVideo}
+            canvas={{ uid: localUid, renderMode: RENDER_MODE_HIDDEN }}
+            zOrderMediaOverlay
+          />
+        )
       ) : (
         <View style={styles.waiting}>
           <Text style={styles.waitingEmoji}>📹</Text>
@@ -760,7 +791,11 @@ const styles = StyleSheet.create({
   waiting: { alignItems: 'center', flex: 1, justifyContent: 'center', padding: 20 },
   waitingEmoji: { fontSize: 40, marginBottom: 8 },
   waitingText: { color: '#d1d5db', fontSize: 14, textAlign: 'center' },
-  waitingOverlay: { alignItems: 'center', bottom: 12, left: 0, position: 'absolute', right: 0 },
+  // Top, just under the timer/coins pills (which end ~y=110):
+  // the bottom of the screen is covered by VideoCallScreen's
+  // bottom overlay (name, rate, controls, footer hint), which the
+  // pill used to overlap when it sat at bottom: 12.
+  waitingOverlay: { alignItems: 'center', left: 0, position: 'absolute', right: 0, top: 132 },
   waitingPill: { backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 6 },
   waitingPillText: { color: '#fff', fontSize: 13, fontWeight: 'bold' },
 });
