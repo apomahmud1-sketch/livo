@@ -159,6 +159,63 @@ export async function updateHostVerification(hostRowId, { verificationVideoUrl }
   }
 }
 
+// ── Surprise live checks (host verification) ─────────────────────
+// The Mother Panel can request a surprise live check for a host
+// (a live_checks row, status 'requested', with a deadline). The
+// host sees a banner on the Host Dashboard and must go live
+// before the deadline. The app only ever moves a check to 'live'
+// (the host went live) or 'expired' (the deadline passed) —
+// 'passed' / 'failed' are set ONLY by the owner from the
+// verification console, and the live_checks RLS blocks the app
+// from writing them. These helpers never throw: any failure
+// returns null / false and the dashboard simply shows no banner.
+
+export async function fetchRequestedLiveCheck(hostId) {
+  if (!supabase || !hostId) return null;
+  try {
+    const res = await withTimeout(
+      supabase
+        .from('live_checks')
+        .select('id,host_id,report_id,status,requested_at,deadline_at,decided_at,note,created_at')
+        .eq('host_id', hostId)
+        .eq('status', 'requested')
+        .order('requested_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    );
+    if (!res || res.error || !res.data) return null;
+    return res.data;
+  } catch (e) {
+    return null;
+  }
+}
+
+export async function markLiveCheckLive(checkId) {
+  if (!supabase || !checkId) return false;
+  try {
+    const { error } = await supabase
+      .from('live_checks')
+      .update({ status: 'live' })
+      .eq('id', checkId);
+    return !error;
+  } catch (e) {
+    return false;
+  }
+}
+
+export async function markLiveCheckExpired(checkId) {
+  if (!supabase || !checkId) return false;
+  try {
+    const { error } = await supabase
+      .from('live_checks')
+      .update({ status: 'expired' })
+      .eq('id', checkId);
+    return !error;
+  } catch (e) {
+    return false;
+  }
+}
+
 // Online state lives in is_online + last_seen — never in status,
 // because status is the approval state ('pending' / 'approved').
 // last_seen is stamped on every change so Home can tell a stale
