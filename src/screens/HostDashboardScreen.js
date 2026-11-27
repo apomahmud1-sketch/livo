@@ -50,9 +50,12 @@ import {
   ensureHostRow,
   fetchHostEarnings,
   fetchMyWithdrawals,
+  fetchRequestedLiveCheck,
   getCurrentUser,
   getMyHostRow,
   getMyProfile,
+  markLiveCheckExpired,
+  markLiveCheckLive,
   requestWithdrawal,
   setHostOnline,
   setHostRateTier,
@@ -67,6 +70,16 @@ function fmt(n) {
   return Number(n || 0).toLocaleString('en-US');
 }
 
+// Live-check countdown: "MM:SS", or "H:MM:SS" past an hour.
+function fmtCountdown(totalSecs) {
+  const s = Math.max(0, Math.floor(totalSecs || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
 export default function HostDashboardScreen({ navigation, route }) {
   const { showToast, hosts, setHostOnline: setStoreHostOnline, setHostRate: setStoreHostRate, callRates, getLiveCallRate, diamonds } = useApp();
   const [loading, setLoading] = useState(true);
@@ -75,6 +88,14 @@ export default function HostDashboardScreen({ navigation, route }) {
   const [hostRow, setHostRow] = useState(null);
   const [applying, setApplying] = useState(false);
   const [verifying, setVerifying] = useState(false);
+  // Surprise live check (Mother Panel verification): the pending
+  // 'requested' live_checks row for this host, if any. liveCheck
+  // = banner + countdown; liveCheckMissed = the deadline passed.
+  const [liveCheck, setLiveCheck] = useState(null);
+  const [liveCheckMissed, setLiveCheckMissed] = useState(false);
+  const [liveCheckSecs, setLiveCheckSecs] = useState(0);
+  const liveCheckRef = useRef(null);
+  liveCheckRef.current = liveCheck;
   const [earnings, setEarnings] = useState(null);
   const [withdrawals, setWithdrawals] = useState([]);
   const [online, setOnline] = useState(false);
@@ -150,6 +171,24 @@ export default function HostDashboardScreen({ navigation, route }) {
         if (cancelled) return;
         setEarnings(earn);
         setWithdrawals(wds);
+        // Surprise live check: a 'requested' check for this host
+        // (the Mother Panel asked the host to go live before a
+        // deadline). Deadline in the future → banner + countdown;
+        // already past → mark it expired and show the missed
+        // message instead of the prompt.
+        const check = await fetchRequestedLiveCheck(row.host_id);
+        if (cancelled) return;
+        if (check) {
+          const deadline = check.deadline_at ? new Date(check.deadline_at).getTime() : 0;
+          const remaining = Math.floor((deadline - Date.now()) / 1000);
+          if (deadline && remaining > 0) {
+            setLiveCheck(check);
+            setLiveCheckSecs(remaining);
+          } else {
+            markLiveCheckExpired(check.id);
+            setLiveCheckMissed(true);
+          }
+        }
       } else {
         setEarnings({
           todayCoins: 0, todayDiamonds: 0, todayCalls: 0, todayMinutes: 0,
@@ -165,6 +204,28 @@ export default function HostDashboardScreen({ navigation, route }) {
       // The toggle-off path stops it with markOffline=true.
     };
   }, []);
+
+  // Live-check countdown: ticks once a second while a check is
+  // pending. When it hits zero the check has expired — mark it
+  // expired and show the missed message instead of the prompt.
+  useEffect(() => {
+    if (!liveCheck || !liveCheck.deadline_at) return undefined;
+    const deadline = new Date(liveCheck.deadline_at).getTime();
+    let done = false;
+    const tick = () => {
+      const remaining = Math.max(0, Math.floor((deadline - Date.now()) / 1000));
+      setLiveCheckSecs(remaining);
+      if (remaining <= 0 && !done) {
+        done = true;
+        markLiveCheckExpired(liveCheck.id);
+        setLiveCheck(null);
+        setLiveCheckMissed(true);
+      }
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [liveCheck]);
 
   const refreshMoney = async () => {
     const row = hostRowRef.current;
@@ -385,6 +446,14 @@ export default function HostDashboardScreen({ navigation, route }) {
       showToast('Your host profile has not loaded yet — please try again in a moment');
       return;
     }
+    // Surprise live check: going live while a check is pending
+    // marks that check 'live' so the Mother Panel can review it.
+    // Fire-and-forget — never block going live on the write.
+    const pendingCheck = liveCheckRef.current;
+    if (pendingCheck) {
+      markLiveCheckLive(pendingCheck.id);
+      setLiveCheck(null);
+    }
     showToast("You're live — control your mic, camera and beauty settings from here");
     navigation.navigate('VideoCall', { host, asHost: true });
   };
@@ -508,6 +577,33 @@ export default function HostDashboardScreen({ navigation, route }) {
         <Text style={styles.title}>Host Dashboard</Text>
         <View style={styles.headSpacer} />
       </View>
+
+      {/* surprise live check — the Mother Panel asked this host to
+          go live before a deadline so it can verify them. The
+          banner only shows while a check is pending; going live
+          marks the check 'live'. */}
+      {liveCheck ? (
+        <View style={styles.liveCheckBanner}>
+          <Text style={styles.liveCheckTitle}>⚠️ Verification check — go live now</Text>
+          <Text style={styles.liveCheckSub}>
+            The Mother Panel asked you to go live for a verification check. Time left: {fmtCountdown(liveCheckSecs)}
+          </Text>
+          <TouchableOpacity
+            style={[styles.goLiveBtn, (!approved || !isFemale) && styles.goLiveDisabled]}
+            onPress={goLive}
+            disabled={!approved || !isFemale}
+          >
+            <Text style={styles.goLiveText}>🎥  Go live now</Text>
+          </TouchableOpacity>
+          {(!approved || !isFemale) ? (
+            <Text style={styles.liveCheckNote}>Go Live is only for approved female hosts — finish your approval first.</Text>
+          ) : null}
+        </View>
+      ) : liveCheckMissed ? (
+        <View style={styles.liveCheckMissed}>
+          <Text style={styles.liveCheckMissedText}>Verification check missed — contact the owner</Text>
+        </View>
+      ) : null}
 
       {/* host profile — the signed-in host, never a hardcoded host */}
       <View style={styles.card}>
@@ -801,6 +897,12 @@ const styles = StyleSheet.create({
   goLiveDisabled: { opacity: 0.5 },
   goLiveNote: { color: COLORS.grey, fontSize: 12, lineHeight: 17, marginTop: 8, textAlign: 'center' },
   goLiveText: { color: '#fff', fontSize: 19, fontWeight: 'bold' },
+  liveCheckBanner: { backgroundColor: '#fef3c7', borderColor: '#f59e0b', borderRadius: 16, borderWidth: 1, elevation: 1, marginTop: 12, padding: 16 },
+  liveCheckMissed: { backgroundColor: '#fee2e2', borderColor: '#ef4444', borderRadius: 16, borderWidth: 1, marginTop: 12, padding: 14 },
+  liveCheckMissedText: { color: '#991b1b', fontSize: 14, fontWeight: 'bold', textAlign: 'center' },
+  liveCheckNote: { color: '#92400e', fontSize: 12, lineHeight: 17, marginTop: 8, textAlign: 'center' },
+  liveCheckSub: { color: '#78350f', fontSize: 13, lineHeight: 19, marginTop: 6 },
+  liveCheckTitle: { color: '#92400e', fontSize: 17, fontWeight: 'bold' },
   head: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
   headSpacer: { width: 28 },
   historyMain: { fontSize: 14, fontWeight: 'bold' },
