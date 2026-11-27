@@ -7,9 +7,10 @@
 // Edit Profile (real, writes via store.updateMyProfile), Second
 // Language (persisted), My Level and VIP Member Centre.
 //
-// Balances: the Wallet card shows the LIVE store Diamonds balance
-// (shared with WalletScreen via useApp). There are no Beans in the
-// app — the old Exchange / Withdraw (Beans) UI is deleted, and no
+// Balances: the Wallet card shows NO amounts — tapping it opens
+// WalletScreen, where the LIVE store Coins / Diamonds balances are
+// shown (shared with WalletScreen via useApp). There are no Beans in
+// the app — the old Exchange / Withdraw (Beans) UI is deleted, and no
 // Diamonds are ever spent from this screen.
 // Check-in lives ONLY in RewardsScreen (header button navigates
 // there); Tasks live ONLY in TasksScreen. There is no invite /
@@ -60,7 +61,7 @@ function vipLabel(v) {
 }
 
 export default function ProfileScreen({ navigation }) {
-  const { coins, diamonds, showToast, vipLevel, vipUntil, following, levelInfo, updateMyProfile, frames } = useApp();
+  const { diamonds, showToast, vipLevel, vipUntil, following, levelInfo, updateMyProfile, frames } = useApp();
   // Panel-driven config (app_config): theme colours + feature toggles
   // + the App Builder layout (app_pages).
   const { theme: cfgTheme, features, app_pages } = useAppConfig();
@@ -722,7 +723,6 @@ export default function ProfileScreen({ navigation }) {
             <Text style={styles.goldBannerIcon}>🪙</Text>
             <View style={{ flex: 1 }}>
               <Text style={styles.goldBannerTitle}>My Wallet</Text>
-              <Text style={styles.goldBannerValue}>🪙 {Number(coins || 0).toLocaleString()} Coins · 💎 {diamonds.toLocaleString()} Diamonds</Text>
             </View>
             <Text style={styles.goldBannerChev}>›</Text>
           </TouchableOpacity>)}
