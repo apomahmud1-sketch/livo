@@ -198,7 +198,7 @@ export async function fetchLiveHosts() {
   // the whole live host list.
   let rows = await safeSelect(
     'hosts',
-    'host_id,profile_id,rate_tier,status,total_minutes,total_gifts,earnings_diamonds,is_online,last_seen',
+    'host_id,profile_id,rate_tier,status,total_minutes,total_gifts,earnings_diamonds,is_online,last_seen,live_started_at,live_chat_disabled,verification_status',
     (q) => q.order('created_at', { ascending: true })
   );
   let withPresence = true;
@@ -220,7 +220,7 @@ export async function fetchLiveHosts() {
   const profileIds = [...new Set(listable.map((r) => r.profile_id).filter(Boolean))];
   let profilesById = new Map();
   if (profileIds.length > 0) {
-    const profRows = await safeSelect('profiles', 'id,user_id,username,country,language,gender,avatar_url', (q) =>
+    const profRows = await safeSelect('profiles', 'id,user_id,username,country,language,gender,avatar_url,vip_level', (q) =>
       q.in('id', profileIds)
     );
     if (profRows) {
@@ -264,6 +264,17 @@ export async function fetchLiveHosts() {
       // "unknown", never a made-up number.
       viewerCount: null,
       lastSeen: row.last_seen || null,
+      // Live-room rebuild (2026-11-28): real live start (for the
+      // LIVE timer viewers see), host chat on/off, video-verified
+      // badge and VIP level (vip1/vip2/vip3 → 1/2/3). Null/false
+      // when unknown — never invented.
+      liveStartedAt: row.live_started_at || null,
+      chatDisabled: row.live_chat_disabled === true,
+      verified: String(row.verification_status || '').toLowerCase() === 'verified',
+      vipLevel: (() => {
+        const m = /^vip(\d+)$/.exec(String(prof.vip_level || '').toLowerCase());
+        return m ? Number(m[1]) : null;
+      })(),
       status:
         (demo && demo.status) ||
         'Online now — video call 💬',
