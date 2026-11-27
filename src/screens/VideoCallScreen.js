@@ -183,6 +183,19 @@ export default function VideoCallScreen({ route, navigation }) {
   const rate = getLiveCallRate(host ? host.rateTier : 'tier2');
   const [stage, setStage] = useState(asHost || isOutgoingCall ? 'calling' : 'incoming');
   stageRef.current = stage;
+  // ── Pre-live (host going live) ─────────────────────────────
+  // The host enters on the pre-live screen: full-screen camera
+  // preview only, a gold "Start Live" button and an X to exit —
+  // no name, rate, controls, gift or timer. Tapping Start Live
+  // flips preLive off: <LiveVideo> then fetches the token and
+  // joins, and the live-room UI appears only once the join
+  // succeeds (liveJoined). Callers / callees never see pre-live
+  // (asHost is only set by HostDashboardScreen.goLive()).
+  const [preLive, setPreLive] = useState(!!asHost);
+  // True once the host's Agora channel actually joined
+  // (LiveVideo onJoin). The live-room UI + room data wait for
+  // this — tapping Start Live alone is not "live" yet.
+  const [liveJoined, setLiveJoined] = useState(false);
   // The signed-in user's real username, for the full-screen gift
   // animation ("<name> sent"). Loaded once from their profiles row.
   const [senderName, setSenderName] = useState('');
@@ -265,11 +278,13 @@ export default function VideoCallScreen({ route, navigation }) {
   // effect when a call starts: a car slides across the screen once.
   const vehicleX = useRef(new Animated.Value(-140)).current;
   useEffect(() => {
-    if (stage === 'calling' && vipLevel) {
+    // [Pre-live] The entrance plays when the host actually goes
+    // live, not on the pre-live screen.
+    if (stage === 'calling' && vipLevel && (!asHost || liveJoined)) {
       vehicleX.setValue(-140);
       Animated.timing(vehicleX, { toValue: Dimensions.get('window').width + 140, duration: 2600, useNativeDriver: true }).start();
     }
-  }, [stage, vipLevel, vehicleX]);
+  }, [stage, vipLevel, vehicleX, asHost, liveJoined]);
   // [/Vero]
   const timerRef = useRef(null);
 
@@ -284,7 +299,9 @@ export default function VideoCallScreen({ route, navigation }) {
   // connects, so the host's viewer count is real (see
   // src/supabase/presence.js). Leaves on unmount / endCall.
   useEffect(() => {
-    if (stage !== 'calling') return undefined;
+    // [Pre-live] The host's presence starts only once the channel
+    // actually joined — pre-live / joining is not "live" yet.
+    if (stage !== 'calling' || (asHost && !liveJoined)) return undefined;
     let cancelled = false;
     (async () => {
       let viewer = { id: undefined, name: 'Guest' };
@@ -311,12 +328,12 @@ export default function VideoCallScreen({ route, navigation }) {
         roomChannelRef.current = null;
       }
     };
-  }, [stage, host]);
+  }, [stage, host, asHost, liveJoined]);
 
   // ── Live room data (host broadcasting only) ────────────────
   // Live chat for this room (room_messages, same as LiveRoomScreen).
   useEffect(() => {
-    if (!asHost || stage !== 'calling' || !host) return undefined;
+    if (!asHost || stage !== 'calling' || !host || !liveJoined) return undefined;
     let cancelled = false;
     fetchRoomMessages(host.id, 50).then((rows) => {
       if (!cancelled) setRoomMessages(rows);
@@ -331,7 +348,7 @@ export default function VideoCallScreen({ route, navigation }) {
       cancelled = true;
       unsub();
     };
-  }, [asHost, stage, host]);
+  }, [asHost, stage, host, liveJoined]);
 
   // Keep the host's room chat scrolled to the newest message.
   useEffect(() => {
@@ -343,20 +360,20 @@ export default function VideoCallScreen({ route, navigation }) {
   // Viewers: count + list (Realtime presence, same channel the
   // call already joins above).
   useEffect(() => {
-    if (!asHost || stage !== 'calling' || !host) return undefined;
+    if (!asHost || stage !== 'calling' || !host || !liveJoined) return undefined;
     const unsubCount = subscribeRoomViewers(host.id, (count) => setViewerCount(count));
     const unsubList = subscribeRoomPresence(host.id, (entries) => setViewerList(entries));
     return () => {
       if (unsubCount) unsubCount();
       if (unsubList) unsubList();
     };
-  }, [asHost, stage, host]);
+  }, [asHost, stage, host, liveJoined]);
 
   // Multi-guest requests for this room: initial list + Realtime.
   // Upsert on insert/update while pending/approved; drop the row
   // when it is declined or ended (it is no longer actionable).
   useEffect(() => {
-    if (!asHost || stage !== 'calling' || !host) return undefined;
+    if (!asHost || stage !== 'calling' || !host || !liveJoined) return undefined;
     let cancelled = false;
     fetchGuestRequests(host.id).then((rows) => {
       if (!cancelled) setGuestRequests(rows);
@@ -376,7 +393,7 @@ export default function VideoCallScreen({ route, navigation }) {
       cancelled = true;
       unsub();
     };
-  }, [asHost, stage, host]);
+  }, [asHost, stage, host, liveJoined]);
 
   if (!host) {
     return (
@@ -409,6 +426,12 @@ export default function VideoCallScreen({ route, navigation }) {
   // only while the host is broadcasting with no 1v1 caller — the
   // moment a caller joins, the call layout takes over.
   const isLiveRoom = asHost && !activeCallerUid;
+  // [Pre-live] Overlays (timer, name, controls, room UI) show for
+  // callers / callees exactly as before. For the host they appear
+  // only once the channel actually joined — pre-live and the
+  // joining window show the camera preview alone (plus
+  // LiveVideo's own "Joining live…" pill / error overlay).
+  const showOverlays = !asHost || liveJoined;
 
   const spawnHearts = () => {
     const batch = [0, 1, 2].map(() => ({
@@ -482,11 +505,17 @@ export default function VideoCallScreen({ route, navigation }) {
   useEffect(() => {
     if (stage !== 'calling' || audioOnly) return undefined;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      // [Pre-live] No call ever started — just leave, with no
+      // "Call ended" toast and no billing path.
+      if (preLive) {
+        navigation.goBack();
+        return true;
+      }
       if (endCallRef.current) endCallRef.current();
       return true;
     });
     return () => sub.remove();
-  }, [stage, audioOnly]);
+  }, [stage, audioOnly, preLive]);
 
   // Outgoing call: ring the host at once — the caller no longer
   // sees their own incoming screen and taps Accept first. The
@@ -817,6 +846,10 @@ export default function VideoCallScreen({ route, navigation }) {
         role="host"
         style={styles.video}
         showLiveChip={false}
+        // [Pre-live] The host's token fetch + join wait for the
+        // "Start Live" tap — the camera preview starts at once
+        // (see LiveVideo deferJoin) and nothing else joins early.
+        deferJoin={preLive}
         // Live room: approved co-guests (matched by agoraUidForUser)
         // render as small boxes on the host's full-screen live;
         // any other joined remote is the 1v1 caller (call layout).
@@ -829,16 +862,25 @@ export default function VideoCallScreen({ route, navigation }) {
           // the channel joins. (For caller/callee the talk clock
           // starts on accept instead; onJoin alone must not start
           // it, or ring time would be billed.)
-          if (asHost) setTalkStarted(true);
+          if (asHost) {
+            setTalkStarted(true);
+            // The channel actually joined: pre-live is over and
+            // the live-room UI may appear now.
+            setLiveJoined(true);
+          }
         }}
         onJoinError={() => {
           joinedRef.current = false;
+          if (asHost) setLiveJoined(false);
         }}
         onTokenExpiring={() => showToast('Call token expiring — the call may end soon.')}
         onTokenRenewalFailed={() => showToast('Could not renew the call token — the call may drop soon.')}
       />
 
-      {/* Top overlay: call timer + coins spent so far */}
+      {/* Top overlay: call timer + coins spent so far — hidden
+          until the host is actually live (pre-live shows the
+          camera alone). */}
+      {showOverlays ? (
       <View style={styles.topOverlay} pointerEvents="box-none">
         <View style={styles.timerPill}>
           <View style={styles.timerDot} />
@@ -848,6 +890,7 @@ export default function VideoCallScreen({ route, navigation }) {
           <Text style={styles.spentTxt}>🪙 -{liveCost.toLocaleString()}</Text>
         </View>
       </View>
+      ) : null}
       {/* Report: the caller (not the host) can report this host —
           the report goes to the Mother Panel for review. */}
       {isOutgoingCall ? (
@@ -861,7 +904,7 @@ export default function VideoCallScreen({ route, navigation }) {
       ) : null}
       {/* Live room (host broadcasting, no 1v1 caller): viewer count,
           Audience Management and Multi-guest Management. */}
-      {isLiveRoom && stage === 'calling' ? (
+      {isLiveRoom && stage === 'calling' && showOverlays ? (
         <View style={styles.roomTopRight} pointerEvents="box-none">
           {viewerCount != null ? (
             <TouchableOpacity style={styles.roomViewerPill} onPress={() => setAudienceOpen(true)} activeOpacity={0.8}>
@@ -891,7 +934,7 @@ export default function VideoCallScreen({ route, navigation }) {
 
       {/* Live room overlays (host broadcasting, no 1v1 caller):
           live chat + Like. Hidden during a 1v1 call. */}
-      {isLiveRoom && stage === 'calling' ? (
+      {isLiveRoom && stage === 'calling' && showOverlays ? (
         <>
           <View style={styles.roomHeartsZone} pointerEvents="none">
             {hearts.map((h) => (
@@ -955,7 +998,11 @@ export default function VideoCallScreen({ route, navigation }) {
         </>
       ) : null}
 
-      {/* Bottom overlay: host, rate, controls, actions */}
+      {/* Bottom overlay: host, rate, controls, actions — only
+          once live (or for a 1v1 call, as before). Pre-live shows
+          the Start Live button instead; the joining window shows
+          just the camera + LiveVideo's own pill. */}
+      {showOverlays ? (
       <View style={styles.bottomOverlay} pointerEvents="box-none">
         <View style={styles.callNameRow}>
           <Text style={styles.callName}>{host.name}</Text>
@@ -1048,6 +1095,21 @@ export default function VideoCallScreen({ route, navigation }) {
         <Text style={styles.hint}>Beauty {beauty ? 'on' : 'off'} · Mic {muted ? 'muted' : 'on'} · Voice {getVoicePresetLabel(voicePreset)} · Live video via Agora</Text>
         {/* [/F7] */}
       </View>
+      ) : preLive ? (
+      // [Pre-live] Full-screen camera + ONE gold Start Live button
+      // centred at the bottom, and a small X (top-left) to leave
+      // without going live. Nothing else on this screen.
+      <View style={styles.preLiveOverlay} pointerEvents="box-none">
+        <TouchableOpacity style={styles.preLiveExit} onPress={() => navigation.goBack()} activeOpacity={0.8}>
+          <X size={22} color="#fff" strokeWidth={2.5} />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.startLiveBtn} onPress={() => setPreLive(false)} activeOpacity={0.9}>
+          <LinearGradient colors={[THEME.gold2, THEME.gold]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.startLiveGrad}>
+            <Text style={styles.startLiveTxt}>🎥  Start Live</Text>
+          </LinearGradient>
+        </TouchableOpacity>
+      </View>
+      ) : null}
       {/* [F5] Full-screen animation overlay for an expensive gift (pointerEvents="none" inside — never blocks the call controls). senderName is the signed-in user's real username (fetched from their profiles row), not demo data. */}
       <FullScreenGift gift={bigGift} senderName={senderName || 'You'} visible={!!bigGift} onDone={() => setBigGift(null)} />
       {/* [/F5] */}
@@ -1300,6 +1362,33 @@ const styles = StyleSheet.create({
   },
   moreBtnOn: { backgroundColor: THEME.pink },
   hint: { color: 'rgba(255,255,255,0.55)', fontSize: 11.5, marginTop: 14, textAlign: 'center' },
+  // ── Pre-live (host going live) ──────────────────────────
+  // Full-screen camera + ONE gold Start Live button centred at
+  // the bottom and a small X top-left. Nothing else on screen.
+  preLiveOverlay: { alignItems: 'center', bottom: 0, justifyContent: 'flex-end', left: 0, paddingBottom: 48, position: 'absolute', right: 0, top: 0 },
+  preLiveExit: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(10,0,20,0.5)',
+    borderColor: 'rgba(255,255,255,0.25)',
+    borderRadius: 22,
+    borderWidth: 1,
+    height: 44,
+    justifyContent: 'center',
+    left: 16,
+    position: 'absolute',
+    top: 48,
+    width: 44,
+  },
+  startLiveBtn: {
+    borderRadius: 999,
+    elevation: 8,
+    shadowColor: '#f7b733',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.55,
+    shadowRadius: 26,
+  },
+  startLiveGrad: { alignItems: 'center', borderRadius: 999, paddingHorizontal: 44, paddingVertical: 16 },
+  startLiveTxt: { color: THEME.goldDark, fontSize: 19, fontWeight: '900' },
   // ── Live room (host broadcasting) ──────────────────────────
   // Top-right: viewer count + Audience + Guests buttons (stacked,
   // like the reference room — a single row would overflow a phone).
