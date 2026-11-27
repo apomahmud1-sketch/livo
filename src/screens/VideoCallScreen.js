@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, BackHandler, Dimensions, Image, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Animated, BackHandler, Dimensions, Image, Modal, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
-import { Camera, Check, Ellipsis, Gift, Heart, Mic, MicOff, Phone, RefreshCw, UserPlus, Users, Video, Volume2, VolumeX, X } from 'lucide-react-native';
-import { COLORS, PLATFORM_COMMISSION_PERCENT, THEME } from '../config';
+import { Ban, Camera, Check, Coins, Crown, Ellipsis, Eye, Gift, Heart, History, Mic, MicOff, Phone, RefreshCw, Share2, UserPlus, Users, Video, Volume2, VolumeX, X } from 'lucide-react-native';
+import { COLORS, PLATFORM_COMMISSION_PERCENT, THEME, formatViewers } from '../config';
 import { useApp } from '../store';
 import { supabase } from '../supabase/client';
 import { fetchMyProfile, getSessionUser } from '../supabase/auth';
@@ -56,6 +56,8 @@ import LiveVideo, {
   setAgoraSpeakerphone,
   switchAgoraCamera,
 } from '../agora/LiveVideo';
+import { fetchSessionEarnings } from '../supabase/wallet';
+import { blockRoomUser, fetchRoomBlocks, setLiveChatDisabled, unblockRoomUser } from '../supabase/host';
 import VoiceCallScreen from './VoiceCallScreen'; // [F2] audio-only variant
 // [F7] Voice changer — Agora voice presets, see src/utils/voiceChanger.js
 import { VOICE_PRESETS, applyVoicePreset, getVoicePresetLabel, resetVoicePreset } from '../utils/voiceChanger';
@@ -126,6 +128,24 @@ function FloatingHeart({ left, color, size, onDone }) {
       ❤️
     </Animated.Text>
   );
+}
+
+// Live duration, HH:MM:SS like the reference room (00:45:32).
+function formatLiveDuration(totalSeconds) {
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(h)}:${p(m)}:${p(s)}`;
+}
+
+// Stable avatar colour per sender (live chat bubbles).
+const AVATAR_COLORS = ['#f472b6', '#a78bfa', '#60a5fa', '#fbbf24', '#34d399', '#fb7185'];
+function avatarColorFor(key) {
+  const s = String(key || '?');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
 }
 export default function VideoCallScreen({ route, navigation }) {
   const { host, asHost, audioOnly: audioOnlyParam, callId: incomingCallId, callType, isCallee, caller } = route.params || {}; // [F2] audioOnly added; [Calls] callId/isCallee/caller for real invites
@@ -274,6 +294,22 @@ export default function VideoCallScreen({ route, navigation }) {
   const [hearts, setHearts] = useState([]);
   const [likeCount, setLikeCount] = useState(0);
   const heartsIdRef = useRef(0);
+  // ── Photo-layout live room controls (2026-11-28) ─────────────
+  // More sheet + Gift History + Live Income + Blocked users, chat
+  // on/off, join notices, and the host's own VIP/verified badge.
+  // The 1v1 call layout below is untouched — all of this only
+  // renders while the host is broadcasting with no caller.
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [giftHistoryOpen, setGiftHistoryOpen] = useState(false);
+  const [incomeOpen, setIncomeOpen] = useState(false);
+  const [blocksOpen, setBlocksOpen] = useState(false);
+  const [chatDisabled, setChatDisabled] = useState(false);
+  const [joinNotice, setJoinNotice] = useState(null);
+  const [hostVip, setHostVip] = useState(host ? host.vipLevel || null : null);
+  const [hostVerified, setHostVerified] = useState(host ? host.verified === true : false);
+  const [liveStartIso, setLiveStartIso] = useState(null);
+  const [sessionEarnings, setSessionEarnings] = useState([]);
+  const [roomBlocks, setRoomBlocks] = useState([]);
   // [Vero] Rare Vehicle — Premium members get a vehicle entrance
   // effect when a call starts: a car slides across the screen once.
   const vehicleX = useRef(new Animated.Value(-140)).current;
@@ -395,6 +431,51 @@ export default function VideoCallScreen({ route, navigation }) {
     };
   }, [asHost, stage, host, liveJoined]);
 
+  // Live start (for session earnings + income): the moment this
+  // live actually joined.
+  useEffect(() => {
+    if (asHost && liveJoined && !liveStartIso) setLiveStartIso(new Date().toISOString());
+  }, [asHost, liveJoined, liveStartIso]);
+
+  // Own VIP level + verified badge for the host chip (the route
+  // host object may predate the live.js mapping).
+  useEffect(() => {
+    if (!asHost || !myId) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const h = await supabase.from('hosts').select('verification_status,live_chat_disabled').eq('profile_id', myId).maybeSingle();
+        if (!cancelled && h && !h.error && h.data) {
+          setHostVerified(String(h.data.verification_status || '').toLowerCase() === 'verified');
+          setChatDisabled(h.data.live_chat_disabled === true);
+        }
+        const p = await supabase.from('profiles').select('vip_level').eq('id', myId).maybeSingle();
+        if (!cancelled && p && !p.error && p.data) {
+          const m = /^vip(\d+)$/.exec(String(p.data.vip_level || '').toLowerCase());
+          setHostVip(m ? Number(m[1]) : null);
+        }
+      } catch (e) { /* keep mapped values */ }
+    })();
+    return () => { cancelled = true; };
+  }, [asHost, myId]);
+
+  // "X joined the room" pill when a new viewer appears.
+  const prevViewerIdsRef = useRef(new Set());
+  const joinTimerRef = useRef(null);
+  useEffect(() => {
+    if (!asHost) return undefined;
+    const prev = prevViewerIdsRef.current;
+    const fresh = viewerList.filter((v) => v.userId && !prev.has(String(v.userId)) && String(v.userId) !== String(myId));
+    if (fresh.length > 0) {
+      const last = fresh[fresh.length - 1];
+      setJoinNotice(`${last.name || 'Someone'} joined the room`);
+      if (joinTimerRef.current) clearTimeout(joinTimerRef.current);
+      joinTimerRef.current = setTimeout(() => setJoinNotice(null), 5000);
+    }
+    prevViewerIdsRef.current = new Set(viewerList.map((v) => String(v.userId)));
+    return undefined;
+  }, [viewerList, myId, asHost]);
+
   if (!host) {
     return (
       <View style={styles.center}>
@@ -476,6 +557,75 @@ export default function VideoCallScreen({ route, navigation }) {
     const ok = await endGuestRequest(id);
     if (!ok) {
       fetchGuestRequests(host.id).then((rows) => setGuestRequests(rows));
+    }
+  };
+
+  // ── Host live-room controls (More sheet, 2026-11-28) ─────────
+  const toggleChatDisabled = async () => {
+    const next = !chatDisabled;
+    setChatDisabled(next);
+    const ok = await setLiveChatDisabled(host.id, next);
+    if (!ok) {
+      setChatDisabled(!next);
+      showToast("Couldn't update chat — check your connection and try again.");
+    } else {
+      showToast(next ? 'Chat disabled for viewers' : 'Chat enabled');
+    }
+  };
+
+  const shareRoom = async () => {
+    try {
+      await Share.share({ message: `I'm live on Livo! Watch ${host.name} — ID: ${host.userId || ''}` });
+    } catch (e) { /* dismissed */ }
+  };
+
+  const loadSessionEarnings = async () => {
+    if (!myId) return [];
+    const rows = await fetchSessionEarnings(myId, liveStartIso);
+    setSessionEarnings(rows);
+    return rows;
+  };
+
+  const openGiftHistory = async () => {
+    await loadSessionEarnings();
+    setMoreOpen(false);
+    setGiftHistoryOpen(true);
+  };
+
+  const openIncome = async () => {
+    await loadSessionEarnings();
+    setMoreOpen(false);
+    setIncomeOpen(true);
+  };
+
+  const openBlocks = async () => {
+    const rows = await fetchRoomBlocks(host.id);
+    setRoomBlocks(rows);
+    setMoreOpen(false);
+    setBlocksOpen(true);
+  };
+
+  const blockViewer = async (v) => {
+    if (!v || !v.userId) {
+      showToast('Cannot block this viewer.');
+      return;
+    }
+    const ok = await blockRoomUser(host.id, v.userId, v.name);
+    if (ok) {
+      setViewerList((prev) => prev.filter((x) => String(x.userId) !== String(v.userId)));
+      showToast(`${v.name || 'Viewer'} blocked from your live room.`);
+    } else {
+      showToast("Couldn't block — check your connection and try again.");
+    }
+  };
+
+  const unblockViewer = async (b) => {
+    const ok = await unblockRoomUser(host.id, b.blocked_user_id);
+    if (ok) {
+      setRoomBlocks((prev) => prev.filter((x) => x.id !== b.id));
+      showToast('Unblocked.');
+    } else {
+      showToast("Couldn't unblock — check your connection and try again.");
     }
   };
 
@@ -701,6 +851,13 @@ export default function VideoCallScreen({ route, navigation }) {
     showToast('Call ended');
     navigation.goBack();
   };
+
+  // Host ending a live (the X in the live room + More → End live).
+  const endLive = () => {
+    finishCall();
+    showToast('Live ended');
+    navigation.goBack();
+  };
   endCallRef.current = endCall;
   finishCallRef.current = finishCall;
 
@@ -880,7 +1037,7 @@ export default function VideoCallScreen({ route, navigation }) {
       {/* Top overlay: call timer + coins spent so far — hidden
           until the host is actually live (pre-live shows the
           camera alone). */}
-      {showOverlays ? (
+      {showOverlays && !isLiveRoom ? (
       <View style={styles.topOverlay} pointerEvents="box-none">
         <View style={styles.timerPill}>
           <View style={styles.timerDot} />
@@ -902,29 +1059,57 @@ export default function VideoCallScreen({ route, navigation }) {
           <Text style={styles.reportBtnTxt}>⚑ Report</Text>
         </TouchableOpacity>
       ) : null}
-      {/* Live room (host broadcasting, no 1v1 caller): viewer count,
-          Audience Management and Multi-guest Management. */}
+      {/* Live room top bar (host, photo layout): host chip (avatar +
+          crown, name + verified check, ID, VIP badge), viewer count
+          + X (ends the live). No Follow pill — this is your own room. */}
       {isLiveRoom && stage === 'calling' && showOverlays ? (
-        <View style={styles.roomTopRight} pointerEvents="box-none">
-          {viewerCount != null ? (
-            <TouchableOpacity style={styles.roomViewerPill} onPress={() => setAudienceOpen(true)} activeOpacity={0.8}>
-              <Text style={styles.roomViewerTxt}>👁 {viewerCount} viewers</Text>
-            </TouchableOpacity>
-          ) : null}
-          <TouchableOpacity style={styles.roomIconBtn} onPress={() => setAudienceOpen(true)} activeOpacity={0.8}>
-            <Users size={17} color="#fff" strokeWidth={2.2} />
-            <Text style={styles.roomIconBtnTxt}>Audience</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.roomIconBtn} onPress={() => setGuestsOpen(true)} activeOpacity={0.8}>
-            <UserPlus size={17} color="#fff" strokeWidth={2.2} />
-            <Text style={styles.roomIconBtnTxt}>Guests</Text>
-            {pendingRequests.length > 0 ? (
-              <View style={styles.roomBadge}>
-                <Text style={styles.roomBadgeTxt}>{pendingRequests.length}</Text>
+        <>
+          <View style={styles.liveTopRow} pointerEvents="box-none">
+            <View style={styles.liveHostChip}>
+              <View style={styles.liveAvatarWrap}>
+                {host.photo ? (
+                  <Image source={host.photo} style={styles.liveAvatar} resizeMode="cover" />
+                ) : (
+                  <View style={[styles.liveAvatar, styles.liveAvatarFallback]}>
+                    <Text style={styles.liveAvatarLetter}>{host.name ? host.name[0].toUpperCase() : '?'}</Text>
+                  </View>
+                )}
+                <Text style={styles.liveCrown}>👑</Text>
               </View>
+              <View style={styles.liveHostMeta}>
+                <Text style={styles.liveHostName} numberOfLines={1}>
+                  {host.name}
+                  {hostVerified ? <Text style={styles.liveVerified}> ✓</Text> : null}
+                </Text>
+                <Text style={styles.liveHostId}>ID: {host.userId || '—'}</Text>
+                {hostVip ? (
+                  <View style={styles.liveVipBadge}>
+                    <Text style={styles.liveVipTxt}>👑 VIP {hostVip}</Text>
+                  </View>
+                ) : null}
+              </View>
+            </View>
+            <View style={{ flex: 1 }} />
+            {viewerCount != null ? (
+              <TouchableOpacity style={styles.liveViewerPill} onPress={() => setAudienceOpen(true)} activeOpacity={0.8}>
+                <Eye size={14} color="#fff" strokeWidth={2} />
+                <Text style={styles.liveViewerTxt}>{formatViewers(viewerCount)}</Text>
+              </TouchableOpacity>
             ) : null}
-          </TouchableOpacity>
-        </View>
+            <TouchableOpacity style={styles.liveCloseBtn} onPress={endLive} activeOpacity={0.8}>
+              <X size={20} color="#fff" strokeWidth={2.5} />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.liveRow} pointerEvents="box-none">
+            <View style={styles.liveBadge}>
+              <View style={styles.liveDot} />
+              <Text style={styles.liveText}>LIVE</Text>
+            </View>
+            <View style={styles.liveTimerPill}>
+              <Text style={styles.liveTimerTxt}>{formatLiveDuration(seconds)}</Text>
+            </View>
+          </View>
+        </>
       ) : null}
       {vipLevel && (
         <Animated.View style={[styles.vehicle, { transform: [{ translateX: vehicleX }] }]}>
@@ -933,9 +1118,13 @@ export default function VideoCallScreen({ route, navigation }) {
       )}
 
       {/* Live room overlays (host broadcasting, no 1v1 caller):
-          live chat + Like. Hidden during a 1v1 call. */}
+          tap-the-empty-screen hearts, live chat, and the photo
+          bottom bar (comment box + Gift + Share + More). Hidden
+          during a 1v1 call. */}
       {isLiveRoom && stage === 'calling' && showOverlays ? (
         <>
+          {/* Tap the empty video area → floating hearts (right side). */}
+          <Pressable style={styles.liveTapLayer} onPress={spawnHearts} />
           <View style={styles.roomHeartsZone} pointerEvents="none">
             {hearts.map((h) => (
               <FloatingHeart
@@ -947,18 +1136,12 @@ export default function VideoCallScreen({ route, navigation }) {
               />
             ))}
           </View>
-          <TouchableOpacity
-            style={styles.roomLikeBtn}
-            onPress={() => {
-              spawnHearts();
-              setLikeCount((c) => c + 1);
-            }}
-            activeOpacity={0.8}
-          >
-            <Heart size={24} color="#ff5da2" strokeWidth={2.2} fill="#ff5da2" />
-            {likeCount > 0 ? <Text style={styles.roomLikeCountTxt}>{likeCount}</Text> : null}
-          </TouchableOpacity>
           <View style={styles.roomChatWrap} pointerEvents="box-none">
+            {joinNotice ? (
+              <View style={styles.liveJoinPill}>
+                <Text style={styles.liveJoinTxt}>👤 {joinNotice}</Text>
+              </View>
+            ) : null}
             <ScrollView
               ref={roomChatScrollRef}
               showsVerticalScrollIndicator={false}
@@ -970,19 +1153,30 @@ export default function VideoCallScreen({ route, navigation }) {
                   <Text style={styles.roomChatText}>No messages yet — say hi to your viewers! 👋</Text>
                 </View>
               ) : (
-                roomMessages.slice(-4).map((m) => (
-                  <View key={String(m.id)} style={styles.roomChatBubble}>
-                    <Text style={styles.roomChatText}>
-                      <Text style={styles.roomChatName}>{m.senderName}</Text> {m.text}
-                    </Text>
+                roomMessages.slice(-5).map((m) => (
+                  <View key={String(m.id)} style={styles.liveChatRow}>
+                    <View style={[styles.liveChatAvatar, { backgroundColor: avatarColorFor(m.senderId || m.senderName) }]}>
+                      <Text style={styles.liveChatAvatarTxt}>{(m.senderName || '?')[0].toUpperCase()}</Text>
+                    </View>
+                    <View style={styles.roomChatBubble}>
+                      <Text style={styles.roomChatText}>
+                        <Text style={styles.roomChatName}>{m.senderName}</Text>
+                        {'\n'}
+                        {m.text}
+                      </Text>
+                    </View>
                   </View>
                 ))
               )}
             </ScrollView>
-            <View style={styles.roomChatInputWrap}>
+          </View>
+          {/* Bottom bar (host, photo layout): comment box + Gift
+              (opens Gift History) + Share + More (host controls). */}
+          <View style={styles.liveBottomBar}>
+            <View style={styles.liveInputWrap}>
               <TextInput
-                style={styles.roomChatInput}
-                placeholder="Reply to chat..."
+                style={styles.liveInput}
+                placeholder="Say something..."
                 placeholderTextColor="#cdbcf0"
                 value={roomInput}
                 onChangeText={setRoomInput}
@@ -990,9 +1184,32 @@ export default function VideoCallScreen({ route, navigation }) {
                 returnKeyType="send"
                 onSubmitEditing={sendRoomChat}
               />
-              <TouchableOpacity style={styles.roomChatSendBtn} onPress={sendRoomChat} activeOpacity={0.8}>
-                <Text style={styles.roomChatSendTxt}>➤</Text>
+              <TouchableOpacity style={styles.liveSmileBtn} onPress={() => setRoomInput((t) => `${t}😊`)} activeOpacity={0.8}>
+                <Text style={styles.liveSmileTxt}>😊</Text>
               </TouchableOpacity>
+            </View>
+            <View style={styles.liveBottomBtnWrap}>
+              <TouchableOpacity style={styles.liveBottomBtnGift} onPress={openGiftHistory} activeOpacity={0.85}>
+                <Gift size={22} color="#fff" strokeWidth={2.2} />
+              </TouchableOpacity>
+              <Text style={styles.liveBottomBtnLabel}>Gift</Text>
+            </View>
+            <View style={styles.liveBottomBtnWrap}>
+              <TouchableOpacity style={styles.liveBottomBtn} onPress={shareRoom} activeOpacity={0.85}>
+                <Share2 size={22} color="#fff" strokeWidth={2.2} />
+              </TouchableOpacity>
+              <Text style={styles.liveBottomBtnLabel}>Share</Text>
+            </View>
+            <View style={styles.liveBottomBtnWrap}>
+              <TouchableOpacity style={styles.liveBottomBtn} onPress={() => setMoreOpen(true)} activeOpacity={0.85}>
+                <Ellipsis size={22} color="#fff" strokeWidth={2.4} />
+                {pendingRequests.length > 0 ? (
+                  <View style={styles.liveMoreBadge}>
+                    <Text style={styles.liveMoreBadgeTxt}>{pendingRequests.length}</Text>
+                  </View>
+                ) : null}
+              </TouchableOpacity>
+              <Text style={styles.liveBottomBtnLabel}>More</Text>
             </View>
           </View>
         </>
@@ -1002,7 +1219,7 @@ export default function VideoCallScreen({ route, navigation }) {
           once live (or for a 1v1 call, as before). Pre-live shows
           the Start Live button instead; the joining window shows
           just the camera + LiveVideo's own pill. */}
-      {showOverlays ? (
+      {showOverlays && !isLiveRoom ? (
       <View style={styles.bottomOverlay} pointerEvents="box-none">
         <View style={styles.callNameRow}>
           <Text style={styles.callName}>{host.name}</Text>
@@ -1143,6 +1360,164 @@ export default function VideoCallScreen({ route, navigation }) {
       {/* Report sheet: the caller reports this host to the owner. */}
       <ReportSheet visible={reportOpen} host={host} onClose={() => setReportOpen(false)} />
 
+      {/* Host More sheet: every extra live control in one place. */}
+      <Modal visible={moreOpen} transparent animationType="slide" onRequestClose={() => setMoreOpen(false)}>
+        <View style={styles.modalShade}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHead}>
+              <Text style={styles.modalTitle}>Live controls</Text>
+              <TouchableOpacity onPress={() => setMoreOpen(false)} activeOpacity={0.8}>
+                <X size={20} color="#fff" strokeWidth={2.5} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <TouchableOpacity style={styles.moreRow} onPress={toggleCameraEnabled} activeOpacity={0.8}>
+                <Camera size={20} color="#fff" strokeWidth={2.2} />
+                <Text style={styles.moreRowTxt}>Camera</Text>
+                <Text style={[styles.moreRowState, !cameraOn && styles.moreRowStateOff]}>{cameraOn ? 'On' : 'Off'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.moreRow} onPress={toggleMute} activeOpacity={0.8}>
+                {muted ? <MicOff size={20} color="#fff" strokeWidth={2.2} /> : <Mic size={20} color="#fff" strokeWidth={2.2} />}
+                <Text style={styles.moreRowTxt}>Microphone</Text>
+                <Text style={[styles.moreRowState, muted && styles.moreRowStateOff]}>{muted ? 'Off' : 'On'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.moreRow} onPress={toggleCamera} activeOpacity={0.8}>
+                <RefreshCw size={20} color="#fff" strokeWidth={2.2} />
+                <Text style={styles.moreRowTxt}>Switch camera</Text>
+                <Text style={styles.moreRowState}>{frontCamera ? 'Front' : 'Back'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.moreRow} onPress={toggleChatDisabled} activeOpacity={0.8}>
+                <Text style={styles.moreRowEmoji}>💬</Text>
+                <Text style={styles.moreRowTxt}>Live chat</Text>
+                <Text style={[styles.moreRowState, chatDisabled && styles.moreRowStateOff]}>{chatDisabled ? 'Disabled' : 'Enabled'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.moreRow} onPress={() => { setMoreOpen(false); setAudienceOpen(true); }} activeOpacity={0.8}>
+                <Users size={20} color="#fff" strokeWidth={2.2} />
+                <Text style={styles.moreRowTxt}>Audience & block user</Text>
+                <Text style={styles.moreRowState}>{viewerCount != null ? formatViewers(viewerCount) : ''}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.moreRow} onPress={() => { setMoreOpen(false); setGuestsOpen(true); }} activeOpacity={0.8}>
+                <UserPlus size={20} color="#fff" strokeWidth={2.2} />
+                <Text style={styles.moreRowTxt}>Multi-guest requests</Text>
+                {pendingRequests.length > 0 ? (
+                  <View style={styles.roomBadge}><Text style={styles.roomBadgeTxt}>{pendingRequests.length}</Text></View>
+                ) : null}
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.moreRow} onPress={openBlocks} activeOpacity={0.8}>
+                <Ban size={20} color="#fff" strokeWidth={2.2} />
+                <Text style={styles.moreRowTxt}>Blocked users</Text>
+                <Text style={styles.moreRowState}>{roomBlocks.length > 0 ? String(roomBlocks.length) : ''}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.moreRow} onPress={openGiftHistory} activeOpacity={0.8}>
+                <History size={20} color="#fff" strokeWidth={2.2} />
+                <Text style={styles.moreRowTxt}>Gift history</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.moreRow} onPress={openIncome} activeOpacity={0.8}>
+                <Coins size={20} color="#fff" strokeWidth={2.2} />
+                <Text style={styles.moreRowTxt}>Live income</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.moreRow, styles.moreRowDanger]} onPress={() => { setMoreOpen(false); endLive(); }} activeOpacity={0.8}>
+                <Phone size={20} color="#ff8fa3" strokeWidth={2.2} style={{ transform: [{ rotate: '135deg' }] }} />
+                <Text style={[styles.moreRowTxt, styles.moreRowDangerTxt]}>End live</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Gift history: gifts received in THIS live (real rows). */}
+      <Modal visible={giftHistoryOpen} transparent animationType="slide" onRequestClose={() => setGiftHistoryOpen(false)}>
+        <View style={styles.modalShade}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHead}>
+              <Text style={styles.modalTitle}>🎁 Gift history — this live</Text>
+              <TouchableOpacity onPress={() => setGiftHistoryOpen(false)} activeOpacity={0.8}>
+                <X size={20} color="#fff" strokeWidth={2.5} />
+              </TouchableOpacity>
+            </View>
+            {sessionEarnings.filter((r) => r.kind === 'gift_received').length === 0 ? (
+              <Text style={styles.modalEmpty}>No gifts yet in this live.</Text>
+            ) : (
+              <ScrollView style={styles.modalList} showsVerticalScrollIndicator={false}>
+                {sessionEarnings.filter((r) => r.kind === 'gift_received').map((r) => (
+                  <View key={String(r.id)} style={styles.modalRow}>
+                    <Text style={styles.modalRowEmoji}>🎁</Text>
+                    <View style={styles.modalRowMain}>
+                      <Text style={styles.modalName} numberOfLines={1}>{r.reference || 'Gift'}</Text>
+                      <Text style={styles.modalSub}>{r.createdAt ? new Date(r.createdAt).toLocaleTimeString() : ''}</Text>
+                    </View>
+                    <Text style={styles.modalEarnTxt}>+{r.amountDiamonds} 💎</Text>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Live income: diamonds earned in THIS live (real rows). */}
+      <Modal visible={incomeOpen} transparent animationType="slide" onRequestClose={() => setIncomeOpen(false)}>
+        <View style={styles.modalShade}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHead}>
+              <Text style={styles.modalTitle}>💎 Live income — this live</Text>
+              <TouchableOpacity onPress={() => setIncomeOpen(false)} activeOpacity={0.8}>
+                <X size={20} color="#fff" strokeWidth={2.5} />
+              </TouchableOpacity>
+            </View>
+            {(() => {
+              const gifts = sessionEarnings.filter((r) => r.kind === 'gift_received');
+              const diamonds = sessionEarnings.reduce((s, r) => s + (r.amountDiamonds || 0), 0);
+              return (
+                <View>
+                  <Text style={styles.incomeBig}>💎 {diamonds.toLocaleString()}</Text>
+                  <Text style={styles.incomeSub}>diamonds earned this live (70% host share)</Text>
+                  <View style={styles.incomeRow}>
+                    <Text style={styles.incomeLabel}>🎁 Gifts received</Text>
+                    <Text style={styles.incomeValue}>{gifts.length}</Text>
+                  </View>
+                  <Text style={styles.incomeNote}>Diamonds land in My Income — withdraw from there after the live.</Text>
+                </View>
+              );
+            })()}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Blocked users: room-level blocks for this live room. */}
+      <Modal visible={blocksOpen} transparent animationType="slide" onRequestClose={() => setBlocksOpen(false)}>
+        <View style={styles.modalShade}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHead}>
+              <Text style={styles.modalTitle}>🚫 Blocked users</Text>
+              <TouchableOpacity onPress={() => setBlocksOpen(false)} activeOpacity={0.8}>
+                <X size={20} color="#fff" strokeWidth={2.5} />
+              </TouchableOpacity>
+            </View>
+            {roomBlocks.length === 0 ? (
+              <Text style={styles.modalEmpty}>Nobody is blocked from your live room.</Text>
+            ) : (
+              <ScrollView style={styles.modalList} showsVerticalScrollIndicator={false}>
+                {roomBlocks.map((b) => (
+                  <View key={String(b.id)} style={styles.modalRow}>
+                    <View style={styles.modalAvatar}>
+                      <Text style={styles.modalAvatarTxt}>{(b.blocked_name || '?')[0].toUpperCase()}</Text>
+                    </View>
+                    <View style={styles.modalRowMain}>
+                      <Text style={styles.modalName} numberOfLines={1}>{b.blocked_name || 'Viewer'}</Text>
+                      <Text style={styles.modalSub}>Blocked from this room</Text>
+                    </View>
+                    <TouchableOpacity style={[styles.guestDecideBtn, styles.guestDeclineBtn]} onPress={() => unblockViewer(b)} activeOpacity={0.85}>
+                      <Text style={styles.guestDecideTxt}>Unblock</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
       {/* Audience Management: real viewers in this room (presence). */}
       <Modal visible={audienceOpen} transparent animationType="slide" onRequestClose={() => setAudienceOpen(false)}>
         <View style={styles.modalShade}>
@@ -1162,7 +1537,14 @@ export default function VideoCallScreen({ route, navigation }) {
                     <View style={styles.modalAvatar}>
                       <Text style={styles.modalAvatarTxt}>{(v.name || '?')[0].toUpperCase()}</Text>
                     </View>
-                    <Text style={styles.modalName} numberOfLines={1}>{v.name || 'Guest'}</Text>
+                    <View style={styles.modalRowMain}>
+                      <Text style={styles.modalName} numberOfLines={1}>{v.name || 'Guest'}</Text>
+                    </View>
+                    {isLiveRoom ? (
+                      <TouchableOpacity style={styles.blockBtn} onPress={() => blockViewer(v)} activeOpacity={0.85}>
+                        <Text style={styles.blockBtnTxt}>Block</Text>
+                      </TouchableOpacity>
+                    ) : null}
                   </View>
                 ))}
               </ScrollView>
@@ -1419,8 +1801,8 @@ const styles = StyleSheet.create({
   roomBadge: { alignItems: 'center', backgroundColor: '#ef2b3c', borderRadius: 9, height: 18, justifyContent: 'center', minWidth: 18, paddingHorizontal: 4 },
   roomBadgeTxt: { color: '#fff', fontSize: 11, fontWeight: '900' },
   // Floating hearts + Like button (right side, above the controls).
-  roomHeartsZone: { bottom: 350, height: 150, position: 'absolute', right: 0, width: 90 },
-  floatHeart: { position: 'absolute', top: 130 },
+  roomHeartsZone: { bottom: 110, height: 220, position: 'absolute', right: 0, width: 90 },
+  floatHeart: { position: 'absolute', top: 200 },
   roomLikeBtn: {
     alignItems: 'center',
     backgroundColor: 'rgba(10,0,20,0.6)',
@@ -1435,10 +1817,10 @@ const styles = StyleSheet.create({
     width: 52,
   },
   roomLikeCountTxt: { color: '#ff8fc0', fontSize: 11, fontWeight: '900', marginTop: 1 },
-  // Live chat overlay (bottom-left, above the call controls).
-  roomChatWrap: { bottom: 340, left: 12, maxHeight: 150, position: 'absolute', right: 84 },
+  // Live chat overlay (bottom-left, above the bottom bar).
+  roomChatWrap: { bottom: 104, left: 12, maxHeight: 200, position: 'absolute', right: 96 },
   roomChatList: { gap: 6 },
-  roomChatBubble: { alignSelf: 'flex-start', backgroundColor: 'rgba(10,0,20,0.52)', borderRadius: 12, maxWidth: '100%', paddingHorizontal: 10, paddingVertical: 5 },
+  roomChatBubble: { alignSelf: 'flex-start', backgroundColor: 'rgba(10,0,20,0.52)', borderRadius: 12, flexShrink: 1, maxWidth: '100%', paddingHorizontal: 10, paddingVertical: 5 },
   roomChatText: { color: '#f1eaff', fontSize: 12.5, fontWeight: '600', lineHeight: 17 },
   roomChatName: { color: THEME.gold2, fontWeight: '900' },
   roomChatInputWrap: {
@@ -1497,4 +1879,128 @@ const styles = StyleSheet.create({
   voicePill: { alignSelf: 'center', backgroundColor: 'rgba(20,4,40,0.55)', borderRadius: 16, marginTop: 12, paddingHorizontal: 16, paddingVertical: 8 },
   voicePillText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
   // [/F7]
+  // ── Photo-layout live room (host, 2026-11-28) ───────────────
+  liveTapLayer: { bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 },
+  liveTopRow: { alignItems: 'center', flexDirection: 'row', gap: 7, left: 0, paddingHorizontal: 12, paddingTop: 48, position: 'absolute', right: 0, top: 0 },
+  liveHostChip: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(10,0,20,0.52)',
+    borderColor: 'rgba(255,255,255,0.16)',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    maxWidth: '64%',
+    paddingBottom: 4,
+    paddingLeft: 4,
+    paddingRight: 10,
+    paddingTop: 4,
+  },
+  liveAvatarWrap: { position: 'relative' },
+  liveAvatar: { borderRadius: 20, height: 40, width: 40 },
+  liveAvatarFallback: { alignItems: 'center', backgroundColor: THEME.violet, justifyContent: 'center' },
+  liveAvatarLetter: { color: '#fff', fontSize: 17, fontWeight: '900' },
+  liveCrown: { fontSize: 16, position: 'absolute', right: -6, top: -10 },
+  liveHostMeta: { flexShrink: 1, marginLeft: 8 },
+  liveHostName: { color: '#fff', fontSize: 14, fontWeight: '800' },
+  liveVerified: { color: '#ff5da2', fontSize: 14, fontWeight: '900' },
+  liveHostId: { color: '#d9ccf5', fontSize: 11, fontWeight: '700', marginTop: 1 },
+  liveVipBadge: { alignSelf: 'flex-start', backgroundColor: '#f7b733', borderRadius: 999, marginTop: 3, paddingHorizontal: 8, paddingVertical: 2 },
+  liveVipTxt: { color: '#3d2400', fontSize: 10.5, fontWeight: '900' },
+  liveViewerPill: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(10,0,20,0.52)',
+    borderColor: 'rgba(255,255,255,0.16)',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  liveViewerTxt: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  liveCloseBtn: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(10,0,20,0.52)',
+    borderColor: 'rgba(255,255,255,0.16)',
+    borderRadius: 999,
+    borderWidth: 1,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  liveRow: { alignItems: 'center', flexDirection: 'row', gap: 8, left: 0, paddingHorizontal: 12, position: 'absolute', right: 0, top: 112 },
+  liveBadge: { alignItems: 'center', backgroundColor: THEME.red, borderRadius: 6, flexDirection: 'row', gap: 4, paddingHorizontal: 7, paddingVertical: 3 },
+  liveDot: { backgroundColor: '#fff', borderRadius: 3, height: 6, width: 6 },
+  liveText: { color: '#fff', fontSize: 10, fontWeight: '900', letterSpacing: 0.6 },
+  liveTimerPill: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(10,0,20,0.52)',
+    borderColor: 'rgba(255,255,255,0.16)',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  liveTimerTxt: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  liveJoinPill: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(124,58,237,0.75)',
+    borderRadius: 999,
+    marginBottom: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  liveJoinTxt: { color: '#fff', fontSize: 12, fontWeight: '800' },
+  liveChatRow: { alignItems: 'flex-start', flexDirection: 'row', gap: 6 },
+  liveChatAvatar: { alignItems: 'center', borderRadius: 14, height: 28, justifyContent: 'center', width: 28 },
+  liveChatAvatarTxt: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  liveBottomBar: { alignItems: 'flex-end', bottom: 0, flexDirection: 'row', gap: 6, left: 0, paddingBottom: 16, paddingHorizontal: 12, paddingTop: 10, position: 'absolute', right: 0 },
+  liveInputWrap: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(10,0,20,0.55)',
+    borderColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 999,
+    borderWidth: 1,
+    flex: 1,
+    flexDirection: 'row',
+    minHeight: 44,
+    paddingLeft: 14,
+    paddingRight: 5,
+  },
+  liveInput: { color: '#fff', flex: 1, fontSize: 13.5, fontWeight: '600' },
+  liveSmileBtn: { alignItems: 'center', height: 32, justifyContent: 'center', width: 32 },
+  liveSmileTxt: { fontSize: 20 },
+  liveBottomBtnWrap: { alignItems: 'center', width: 52 },
+  liveBottomBtn: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(10,0,20,0.6)',
+    borderColor: 'rgba(255,255,255,0.25)',
+    borderRadius: 26,
+    borderWidth: 1,
+    height: 52,
+    justifyContent: 'center',
+    width: 52,
+  },
+  liveBottomBtnGift: { alignItems: 'center', backgroundColor: '#a855f7', borderRadius: 26, height: 52, justifyContent: 'center', width: 52 },
+  liveBottomBtnLabel: { color: '#fff', fontSize: 10.5, fontWeight: '800', marginTop: 3 },
+  liveMoreBadge: { alignItems: 'center', backgroundColor: '#ef2b3c', borderRadius: 9, height: 18, justifyContent: 'center', minWidth: 18, paddingHorizontal: 4, position: 'absolute', right: -2, top: -4 },
+  liveMoreBadgeTxt: { color: '#fff', fontSize: 10, fontWeight: '900' },
+  // Host More sheet rows.
+  moreRow: { alignItems: 'center', flexDirection: 'row', gap: 12, paddingVertical: 13 },
+  moreRowEmoji: { fontSize: 20, width: 20, textAlign: 'center' },
+  moreRowTxt: { color: '#fff', flex: 1, fontSize: 15, fontWeight: '800' },
+  moreRowState: { color: '#8be28b', fontSize: 13, fontWeight: '900' },
+  moreRowStateOff: { color: '#ff8fa3' },
+  moreRowDanger: { borderTopColor: 'rgba(255,255,255,0.12)', borderTopWidth: 1, marginTop: 6, paddingTop: 16 },
+  moreRowDangerTxt: { color: '#ff8fa3' },
+  blockBtn: { alignItems: 'center', backgroundColor: 'rgba(239,43,60,0.75)', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
+  blockBtnTxt: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  modalRowEmoji: { fontSize: 20 },
+  modalEarnTxt: { color: '#ffe9a8', fontSize: 13, fontWeight: '900' },
+  incomeBig: { color: '#fff', fontSize: 34, fontWeight: '900', textAlign: 'center' },
+  incomeSub: { color: '#cdbcf0', fontSize: 13, fontWeight: '700', marginTop: 4, textAlign: 'center' },
+  incomeRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginTop: 16 },
+  incomeLabel: { color: '#fff', fontSize: 14, fontWeight: '800' },
+  incomeValue: { color: '#ffe9a8', fontSize: 15, fontWeight: '900' },
+  incomeNote: { color: '#cdbcf0', fontSize: 12, lineHeight: 17, marginTop: 16, textAlign: 'center' },
 });
