@@ -16,6 +16,18 @@
 // can approve it, so a pending host sees "Approval Pending" and
 // cannot go live until then.
 //
+// Identity verification (2026-11-27): applying REQUIRES a short
+// verification video recorded live in the app (camera only, never
+// the gallery, so it cannot be someone else's pre-recorded clip).
+// The video is uploaded to the 'host-verification-videos' bucket
+// under the user's own UID folder and the host row is marked
+// verification_status 'pending' for Mother Panel review. The app
+// never writes 'verified' / 'rejected' — a DB trigger blocks that;
+// only the owner sets those from the panel. Existing approved
+// hosts without a video (verification_status 'none') get a
+// "Verify my identity" button that records + uploads the same
+// way. No application is ever submitted without a video URL.
+//
 // Online presence: toggling Online sets hosts.is_online + a
 // last_seen heartbeat every 30s (stops on toggle-off / unmount).
 // Home treats a host as online only while the heartbeat is fresh.
@@ -27,9 +39,12 @@
 // call requests need a requests backend (not built yet).
 import React, { useEffect, useRef, useState } from 'react';
 import { Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { COLORS, MIN_WITHDRAW_DIAMONDS, WITHDRAW_METHODS } from '../config';
 import { useApp } from '../store';
 import { useAppConfig, genderViewFor } from '../appConfig';
+import { supabase } from '../supabase/client';
+import { withTimeout } from '../supabase/timeout';
 import { fetchMyProfile } from '../supabase/auth';
 import {
   ensureHostRow,
@@ -43,6 +58,7 @@ import {
   setHostRateTier,
   startHostHeartbeat,
   stopHostHeartbeat,
+  updateHostVerification,
 } from '../supabase/host';
 
 const CHART_H = 120;
@@ -58,6 +74,7 @@ export default function HostDashboardScreen({ navigation, route }) {
   const [profile, setProfile] = useState(null);
   const [hostRow, setHostRow] = useState(null);
   const [applying, setApplying] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   const [earnings, setEarnings] = useState(null);
   const [withdrawals, setWithdrawals] = useState([]);
   const [online, setOnline] = useState(false);
@@ -160,25 +177,119 @@ export default function HostDashboardScreen({ navigation, route }) {
     setWithdrawals(wds);
   };
 
+  // Identity verification state: 'none' | 'pending' | 'verified' |
+  // 'rejected' (hosts.verification_status). The app only ever
+  // writes 'pending' — see updateHostVerification (host.js).
+  const verificationStatus = (hostRow && hostRow.verification_status) || 'none';
+
+  // Record a verification video (camera only — never the gallery,
+  // so the clip is recorded live in the app and cannot be someone
+  // else's pre-recorded video) and upload it to the
+  // 'host-verification-videos' bucket under this user's own UID
+  // folder. Returns the public URL, or null when the host
+  // cancelled or the upload failed (a message is shown on failure;
+  // a plain cancel stays silent so retry is one tap away).
+  const recordAndUploadVerificationVideo = async () => {
+    if (!user) return null;
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (perm.status !== 'granted') {
+        showToast('Please allow camera access in Settings to record the verification video');
+        return null;
+      }
+      const res = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['videos'],
+        quality: 0.8,
+        videoMaxDuration: 30,
+      });
+      if (res.canceled || !res.assets || !res.assets[0] || !res.assets[0].uri) return null;
+      const uri = res.assets[0].uri;
+      showToast('Uploading your verification video…');
+      const resp = await fetch(uri);
+      const blob = await resp.blob();
+      const path = `${user.id}/verification-${Date.now()}.mp4`;
+      const upRes = await withTimeout(
+        supabase.storage.from('host-verification-videos').upload(path, blob, {
+          contentType: 'video/mp4',
+          upsert: true,
+        }),
+        60000,
+      );
+      if (!upRes || upRes.error) {
+        showToast('Video upload failed — check your connection and try again');
+        return null;
+      }
+      const { data: pub } = supabase.storage.from('host-verification-videos').getPublicUrl(path);
+      const url = pub && pub.publicUrl;
+      if (!url) {
+        showToast('Video upload failed — check your connection and try again');
+        return null;
+      }
+      return url;
+    } catch (e) {
+      showToast('Could not record or upload the video — please try again');
+      return null;
+    }
+  };
+
+  // Re-record / first-time verify for an existing host row
+  // (verification 'none' or 'rejected'). Marks the row 'pending'
+  // for Mother Panel review — never 'verified' / 'rejected'.
+  const recordVerificationVideo = async () => {
+    if (!user || !hostRow || verifying) return;
+    setVerifying(true);
+    const url = await recordAndUploadVerificationVideo();
+    if (!url) {
+      setVerifying(false);
+      return;
+    }
+    const ok = await updateHostVerification(hostRow.id, { verificationVideoUrl: url });
+    setVerifying(false);
+    if (!ok) {
+      showToast('Video uploaded but could not be saved — please try again');
+      return;
+    }
+    setHostRow({ ...hostRow, verification_video_url: url, verification_status: 'pending' });
+    showToast('Verification video submitted — the Mother Panel will review it');
+  };
+
   // Explicit Apply step: the only way a host row gets created.
-  // The new row has status 'pending'; the Mother Panel approves it.
+  // The verification video comes FIRST — the application is never
+  // submitted without a video URL. The new row has status
+  // 'pending'; the Mother Panel approves it.
   const applyToBecomeHost = async () => {
     if (!user || applying) return;
     setApplying(true);
+    const videoUrl = await recordAndUploadVerificationVideo();
+    if (!videoUrl) {
+      // Cancelled or upload failed — no host row is created, so
+      // the host can simply tap Apply again and retry.
+      setApplying(false);
+      return;
+    }
     const row = await ensureHostRow(user);
-    setApplying(false);
     if (!row) {
+      setApplying(false);
       showToast('Apply was not submitted — please try again');
       return;
     }
-    setHostRow(row);
+    const ok = await updateHostVerification(row.id, { verificationVideoUrl: videoUrl });
+    const finalRow = ok
+      ? { ...row, verification_video_url: videoUrl, verification_status: 'pending' }
+      : row;
+    setHostRow(finalRow);
     setOnline(!!row.is_online);
     setMyTier(row.rate_tier || 'tier2');
     setEarnings({
       todayCoins: 0, todayDiamonds: 0, todayCalls: 0, todayMinutes: 0,
       totalCoins: 0, totalDiamonds: 0, totalCalls: 0, totalMinutes: 0, week: [],
     });
-    showToast('Application sent — the Mother Panel will review it');
+    setApplying(false);
+    if (ok) {
+      showToast('Application sent — the Mother Panel will review it');
+    } else {
+      showToast('Application sent, but the video could not be saved — record it again from the dashboard');
+    }
   };
 
   const toggleOnline = async () => {
@@ -367,12 +478,17 @@ export default function HostDashboardScreen({ navigation, route }) {
             Earn coins from video calls. Tap Apply and the Mother Panel will review your application — you can
             go live once it is approved. Go Live is for female hosts only.
           </Text>
+          <Text style={styles.verifyNote}>
+            🎥 First, record a short verification video in the app: show your face and say your name and Livo
+            ID (under 30 seconds). The Mother Panel checks the video before approving you — this proves you
+            are the person in your profile photo.
+          </Text>
           <TouchableOpacity
             style={[styles.goLiveBtn, applying && styles.goLiveDisabled]}
             onPress={applyToBecomeHost}
             disabled={applying}
           >
-            <Text style={styles.goLiveText}>{applying ? 'Applying…' : '📝  Apply to Become a Host'}</Text>
+            <Text style={styles.goLiveText}>{applying ? 'Applying…' : '🎥  Record verification video & Apply'}</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -422,6 +538,45 @@ export default function HostDashboardScreen({ navigation, route }) {
             Your host account is not approved yet — you can go live once the Mother Panel approves it.
           </Text>
         )}
+
+        {/* identity verification — video recorded live in the app,
+            reviewed by the Mother Panel. The app only ever sets
+            'pending'; 'verified' / 'rejected' come from the panel. */}
+        <View style={styles.verifyBox}>
+          {verificationStatus === 'verified' ? (
+            <Text style={styles.verifyOk}>✅ Identity verified</Text>
+          ) : verificationStatus === 'pending' ? (
+            <Text style={styles.verifyPending}>
+              ⏳ Verification video submitted — waiting for review
+            </Text>
+          ) : verificationStatus === 'rejected' ? (
+            <>
+              <Text style={styles.verifyBad}>❌ Verification rejected — record again</Text>
+              <TouchableOpacity
+                style={[styles.verifyBtn, verifying && styles.verifyBtnDisabled]}
+                onPress={recordVerificationVideo}
+                disabled={verifying}
+              >
+                <Text style={styles.verifyBtnText}>
+                  {verifying ? 'Recording…' : '🎥  Record verification video again'}
+                </Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <Text style={styles.verifyNone}>🪪 Identity not verified yet</Text>
+              <TouchableOpacity
+                style={[styles.verifyBtn, verifying && styles.verifyBtnDisabled]}
+                onPress={recordVerificationVideo}
+                disabled={verifying}
+              >
+                <Text style={styles.verifyBtnText}>
+                  {verifying ? 'Recording…' : '🎥  Verify my identity'}
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
       </View>
 
       {/* online / offline switch — persisted to the hosts table */}
@@ -701,6 +856,15 @@ const styles = StyleSheet.create({
   switchTrack: { backgroundColor: '#d1d5db', borderRadius: 17, height: 34, justifyContent: 'center', paddingHorizontal: 4, width: 60 },
   title: { fontSize: 21, fontWeight: 'bold' },
   totalNote: { color: COLORS.grey, fontSize: 13, lineHeight: 19, marginTop: 4 },
+  verifyBad: { color: '#b91c1c', fontSize: 13, fontWeight: 'bold', lineHeight: 19 },
+  verifyBox: { backgroundColor: '#f5f3ff', borderRadius: 12, marginTop: 12, padding: 12 },
+  verifyBtn: { alignItems: 'center', backgroundColor: COLORS.purple, borderRadius: 12, marginTop: 10, paddingVertical: 12 },
+  verifyBtnDisabled: { opacity: 0.6 },
+  verifyBtnText: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
+  verifyNone: { color: COLORS.dark, fontSize: 13, lineHeight: 19 },
+  verifyNote: { color: COLORS.dark, fontSize: 13, lineHeight: 19, marginTop: 10 },
+  verifyOk: { color: '#15803d', fontSize: 14, fontWeight: 'bold' },
+  verifyPending: { color: '#92400e', fontSize: 13, lineHeight: 19 },
   withdrawBtn: { alignItems: 'center', backgroundColor: '#f59e0b', borderRadius: 16, elevation: 2, marginTop: 16, paddingVertical: 15 },
   withdrawDisabled: { opacity: 0.6 },
   withdrawNote: { color: COLORS.grey, fontSize: 12, lineHeight: 17, marginTop: 10, textAlign: 'center' },
