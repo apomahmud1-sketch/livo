@@ -1,13 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, BackHandler, Dimensions, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, BackHandler, Dimensions, Image, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
-import { Camera, Ellipsis, Gift, Mic, MicOff, Phone, RefreshCw, Video, Volume2, VolumeX } from 'lucide-react-native';
+import { Camera, Check, Ellipsis, Gift, Heart, Mic, MicOff, Phone, RefreshCw, UserPlus, Users, Video, Volume2, VolumeX, X } from 'lucide-react-native';
 import { COLORS, PLATFORM_COMMISSION_PERCENT, THEME } from '../config';
 import { useApp } from '../store';
 import { supabase } from '../supabase/client';
 import { fetchMyProfile, getSessionUser } from '../supabase/auth';
-import { joinLiveRoom, leaveLiveRoom } from '../supabase/presence';
+import { joinLiveRoom, leaveLiveRoom, subscribeRoomPresence, subscribeRoomViewers } from '../supabase/presence';
+import { fetchRoomMessages, sendRoomMessage, subscribeRoomMessages } from '../supabase/room_messages';
+// Multi-guest (co-anchor): viewers ask to join this live; the host
+// agrees/declines in the Multi-guest Management panel. An approved
+// guest switches to broadcaster in the same Agora channel.
+import {
+  decideGuestRequest,
+  endGuestRequest,
+  fetchGuestRequests,
+  subscribeGuestRequests,
+} from '../supabase/guest_requests';
 import GiftSheet from '../components/GiftSheet';
 // Report a host to the Mother Panel (see ReportSheet): the caller
 // in a 1v1 call can report the host — the report lands in the
@@ -37,6 +47,7 @@ import FullScreenGift from '../components/FullScreenGift';
 // failure — see the onSent handler below.
 import GiftAnimationOverlay, { giftAnimationUrl } from '../components/GiftAnimationOverlay';
 import LiveVideo, {
+  agoraUidForUser,
   getAgoraEngine,
   leaveAgoraChannel,
   setAgoraBeauty,
@@ -93,6 +104,29 @@ import { VOICE_PRESETS, applyVoicePreset, getVoicePresetLabel, resetVoicePreset 
 // How long the caller waits for an answer before the call is
 // marked missed (the callee never answered).
 const RING_TIMEOUT_MS = 60 * 1000;
+
+const HEART_COLORS = ['#ff5da2', '#f43f9e', '#c084fc', '#ffd76a'];
+
+// One floating heart: rises and fades over 2.4s, then removes itself.
+// (Live-room Like button — local in-room effect only, no likes table.)
+function FloatingHeart({ left, color, size, onDone }) {
+  const rise = useRef(new Animated.Value(0)).current;
+  const fade = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(rise, { toValue: -150, duration: 2400, useNativeDriver: true }),
+      Animated.timing(fade, { toValue: 0, duration: 2400, useNativeDriver: true }),
+    ]).start(() => onDone());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <Animated.Text
+      style={[styles.floatHeart, { left, color, fontSize: size, opacity: fade, transform: [{ translateY: rise }] }]}
+    >
+      ❤️
+    </Animated.Text>
+  );
+}
 export default function VideoCallScreen({ route, navigation }) {
   const { host, asHost, audioOnly: audioOnlyParam, callId: incomingCallId, callType, isCallee, caller } = route.params || {}; // [F2] audioOnly added; [Calls] callId/isCallee/caller for real invites
   // Voice invites (callType 'voice') render the audio-only screen,
@@ -161,6 +195,7 @@ export default function VideoCallScreen({ route, navigation }) {
         const sessionUser = await getSessionUser();
         const uid = sessionUser && sessionUser.id;
         if (!uid) return;
+        if (!cancelled) setMyId(uid);
         const { profile } = await fetchMyProfile(uid);
         if (!cancelled && profile && profile.username) setSenderName(profile.username);
       } catch (e) {
@@ -202,6 +237,30 @@ export default function VideoCallScreen({ route, navigation }) {
   const [voicePreset, setVoicePreset] = useState('normal');
   const [voicePanelOpen, setVoicePanelOpen] = useState(false);
   // [/F7]
+  // ── Live room (host broadcasting, asHost, no 1v1 caller yet) ──
+  // The host's live room overlays the broadcast: live chat, Like,
+  // viewer count + Audience Management, and Multi-guest Management
+  // (co-anchor requests). All of it hides the moment a 1v1 caller
+  // joins — the call layout takes over, exactly as before.
+  const [myId, setMyId] = useState(null);
+  // Remote Agora uids currently in the channel (a 1v1 caller and/or
+  // approved co-guests). Tracked via LiveVideo's onRemoteJoin/Leave.
+  const [remoteUids, setRemoteUids] = useState([]);
+  // Live chat for this room (room_messages).
+  const [roomMessages, setRoomMessages] = useState([]);
+  const [roomInput, setRoomInput] = useState('');
+  const roomChatScrollRef = useRef(null);
+  // Viewers (Realtime presence) + panels.
+  const [viewerCount, setViewerCount] = useState(null);
+  const [viewerList, setViewerList] = useState([]);
+  const [audienceOpen, setAudienceOpen] = useState(false);
+  const [guestsOpen, setGuestsOpen] = useState(false);
+  // Multi-guest requests for this room (pending + approved).
+  const [guestRequests, setGuestRequests] = useState([]);
+  // Like: local in-room effect only (no likes table exists).
+  const [hearts, setHearts] = useState([]);
+  const [likeCount, setLikeCount] = useState(0);
+  const heartsIdRef = useRef(0);
   // [Vero] Rare Vehicle — Premium members get a vehicle entrance
   // effect when a call starts: a car slides across the screen once.
   const vehicleX = useRef(new Animated.Value(-140)).current;
@@ -254,6 +313,71 @@ export default function VideoCallScreen({ route, navigation }) {
     };
   }, [stage, host]);
 
+  // ── Live room data (host broadcasting only) ────────────────
+  // Live chat for this room (room_messages, same as LiveRoomScreen).
+  useEffect(() => {
+    if (!asHost || stage !== 'calling' || !host) return undefined;
+    let cancelled = false;
+    fetchRoomMessages(host.id, 50).then((rows) => {
+      if (!cancelled) setRoomMessages(rows);
+    });
+    const unsub = subscribeRoomMessages(host.id, (msg) => {
+      setRoomMessages((prev) => {
+        if (prev.some((m) => m.id === msg.id)) return prev;
+        return [...prev.slice(-49), msg];
+      });
+    });
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [asHost, stage, host]);
+
+  // Keep the host's room chat scrolled to the newest message.
+  useEffect(() => {
+    if (roomChatScrollRef.current) {
+      roomChatScrollRef.current.scrollToEnd({ animated: true });
+    }
+  }, [roomMessages]);
+
+  // Viewers: count + list (Realtime presence, same channel the
+  // call already joins above).
+  useEffect(() => {
+    if (!asHost || stage !== 'calling' || !host) return undefined;
+    const unsubCount = subscribeRoomViewers(host.id, (count) => setViewerCount(count));
+    const unsubList = subscribeRoomPresence(host.id, (entries) => setViewerList(entries));
+    return () => {
+      if (unsubCount) unsubCount();
+      if (unsubList) unsubList();
+    };
+  }, [asHost, stage, host]);
+
+  // Multi-guest requests for this room: initial list + Realtime.
+  // Upsert on insert/update while pending/approved; drop the row
+  // when it is declined or ended (it is no longer actionable).
+  useEffect(() => {
+    if (!asHost || stage !== 'calling' || !host) return undefined;
+    let cancelled = false;
+    fetchGuestRequests(host.id).then((rows) => {
+      if (!cancelled) setGuestRequests(rows);
+    });
+    const unsub = subscribeGuestRequests(host.id, (row) => {
+      setGuestRequests((prev) => {
+        if (row.status === 'pending' || row.status === 'approved') {
+          if (prev.some((r) => r.id === row.id)) {
+            return prev.map((r) => (r.id === row.id ? row : r));
+          }
+          return [row, ...prev];
+        }
+        return prev.filter((r) => r.id !== row.id);
+      });
+    });
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [asHost, stage, host]);
+
   if (!host) {
     return (
       <View style={styles.center}>
@@ -268,6 +392,69 @@ export default function VideoCallScreen({ route, navigation }) {
   const mm = String(Math.floor(seconds / 60)).padStart(2, '0');
   const ss = String(seconds % 60).padStart(2, '0');
   const liveCost = Math.ceil(seconds / 60) * rate.coinsPerMinute;
+
+  // ── Live room derived state ──────────────────────────────────
+  // Approved co-guests (their deterministic Agora uids) and the
+  // pending requests the host must decide. A joined remote whose
+  // uid matches an approved guest is a co-guest (small box); any
+  // other joined remote is the 1v1 caller (call layout).
+  // (Plain computation, not useMemo: this sits after the `if
+  // (!host)` early return, where hooks must not be added.)
+  const approvedGuests = guestRequests.filter((r) => r.status === 'approved');
+  const pendingRequests = guestRequests.filter((r) => r.status === 'pending');
+  const approvedGuestUidSet = new Set(approvedGuests.map((r) => agoraUidForUser(r.guestId)));
+  const approvedGuestUids = [...approvedGuestUidSet];
+  const activeCallerUid = remoteUids.find((u) => !approvedGuestUidSet.has(Number(u))) ?? null;
+  // Live-room overlays (chat, Like, audience, multi-guest) show
+  // only while the host is broadcasting with no 1v1 caller — the
+  // moment a caller joins, the call layout takes over.
+  const isLiveRoom = asHost && !activeCallerUid;
+
+  const spawnHearts = () => {
+    const batch = [0, 1, 2].map(() => ({
+      id: ++heartsIdRef.current,
+      left: 10 + Math.random() * 60,
+      color: HEART_COLORS[Math.floor(Math.random() * HEART_COLORS.length)],
+      size: 17 + Math.random() * 6,
+    }));
+    setHearts((prev) => [...prev, ...batch]);
+  };
+
+  const sendRoomChat = async () => {
+    const text = roomInput.trim();
+    if (!text) return;
+    if (!myId) {
+      showToast('Please sign in first.');
+      return;
+    }
+    setRoomInput('');
+    const row = await sendRoomMessage({ hostId: host.id, senderId: myId, senderName: senderName || 'Host', body: text });
+    if (row) {
+      setRoomMessages((prev) => [...prev.slice(-49), row]);
+    } else {
+      showToast("Couldn't send — check your connection and try again.");
+    }
+  };
+
+  // Multi-guest decisions. Optimistic: the panel updates at once
+  // (the Realtime subscription will confirm it). A failed write
+  // reloads the list from the server so the panel never lies.
+  const decideGuest = async (id, status) => {
+    setGuestRequests((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
+    const row = await decideGuestRequest(id, status);
+    if (!row) {
+      showToast("Couldn't update — check your connection and try again.");
+      fetchGuestRequests(host.id).then((rows) => setGuestRequests(rows));
+    }
+  };
+
+  const endGuest = async (id) => {
+    setGuestRequests((prev) => prev.filter((r) => r.id !== id));
+    const ok = await endGuestRequest(id);
+    if (!ok) {
+      fetchGuestRequests(host.id).then((rows) => setGuestRequests(rows));
+    }
+  };
 
   // Callee side: watch the invite row while the incoming screen
   // is up, so it dismisses itself if the caller backs out
@@ -630,6 +817,12 @@ export default function VideoCallScreen({ route, navigation }) {
         role="host"
         style={styles.video}
         showLiveChip={false}
+        // Live room: approved co-guests (matched by agoraUidForUser)
+        // render as small boxes on the host's full-screen live;
+        // any other joined remote is the 1v1 caller (call layout).
+        coGuestUids={approvedGuestUids}
+        onRemoteJoin={(uid) => setRemoteUids((prev) => (prev.includes(uid) ? prev : [...prev, uid]))}
+        onRemoteLeave={(uid) => setRemoteUids((prev) => prev.filter((u) => u !== uid))}
         onJoin={() => {
           joinedRef.current = true;
           // Host going live has no accept step — talk starts when
@@ -666,11 +859,101 @@ export default function VideoCallScreen({ route, navigation }) {
           <Text style={styles.reportBtnTxt}>⚑ Report</Text>
         </TouchableOpacity>
       ) : null}
+      {/* Live room (host broadcasting, no 1v1 caller): viewer count,
+          Audience Management and Multi-guest Management. */}
+      {isLiveRoom && stage === 'calling' ? (
+        <View style={styles.roomTopRight} pointerEvents="box-none">
+          {viewerCount != null ? (
+            <TouchableOpacity style={styles.roomViewerPill} onPress={() => setAudienceOpen(true)} activeOpacity={0.8}>
+              <Text style={styles.roomViewerTxt}>👁 {viewerCount} viewers</Text>
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity style={styles.roomIconBtn} onPress={() => setAudienceOpen(true)} activeOpacity={0.8}>
+            <Users size={17} color="#fff" strokeWidth={2.2} />
+            <Text style={styles.roomIconBtnTxt}>Audience</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.roomIconBtn} onPress={() => setGuestsOpen(true)} activeOpacity={0.8}>
+            <UserPlus size={17} color="#fff" strokeWidth={2.2} />
+            <Text style={styles.roomIconBtnTxt}>Guests</Text>
+            {pendingRequests.length > 0 ? (
+              <View style={styles.roomBadge}>
+                <Text style={styles.roomBadgeTxt}>{pendingRequests.length}</Text>
+              </View>
+            ) : null}
+          </TouchableOpacity>
+        </View>
+      ) : null}
       {vipLevel && (
         <Animated.View style={[styles.vehicle, { transform: [{ translateX: vehicleX }] }]}>
           <Text style={styles.vehicleText}>🏎️</Text>
         </Animated.View>
       )}
+
+      {/* Live room overlays (host broadcasting, no 1v1 caller):
+          live chat + Like. Hidden during a 1v1 call. */}
+      {isLiveRoom && stage === 'calling' ? (
+        <>
+          <View style={styles.roomHeartsZone} pointerEvents="none">
+            {hearts.map((h) => (
+              <FloatingHeart
+                key={h.id}
+                left={h.left}
+                color={h.color}
+                size={h.size}
+                onDone={() => setHearts((prev) => prev.filter((x) => x.id !== h.id))}
+              />
+            ))}
+          </View>
+          <TouchableOpacity
+            style={styles.roomLikeBtn}
+            onPress={() => {
+              spawnHearts();
+              setLikeCount((c) => c + 1);
+            }}
+            activeOpacity={0.8}
+          >
+            <Heart size={24} color="#ff5da2" strokeWidth={2.2} fill="#ff5da2" />
+            {likeCount > 0 ? <Text style={styles.roomLikeCountTxt}>{likeCount}</Text> : null}
+          </TouchableOpacity>
+          <View style={styles.roomChatWrap} pointerEvents="box-none">
+            <ScrollView
+              ref={roomChatScrollRef}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.roomChatList}
+              onContentSizeChange={() => roomChatScrollRef.current && roomChatScrollRef.current.scrollToEnd({ animated: true })}
+            >
+              {roomMessages.length === 0 ? (
+                <View style={styles.roomChatBubble}>
+                  <Text style={styles.roomChatText}>No messages yet — say hi to your viewers! 👋</Text>
+                </View>
+              ) : (
+                roomMessages.slice(-4).map((m) => (
+                  <View key={String(m.id)} style={styles.roomChatBubble}>
+                    <Text style={styles.roomChatText}>
+                      <Text style={styles.roomChatName}>{m.senderName}</Text> {m.text}
+                    </Text>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+            <View style={styles.roomChatInputWrap}>
+              <TextInput
+                style={styles.roomChatInput}
+                placeholder="Reply to chat..."
+                placeholderTextColor="#cdbcf0"
+                value={roomInput}
+                onChangeText={setRoomInput}
+                maxLength={120}
+                returnKeyType="send"
+                onSubmitEditing={sendRoomChat}
+              />
+              <TouchableOpacity style={styles.roomChatSendBtn} onPress={sendRoomChat} activeOpacity={0.8}>
+                <Text style={styles.roomChatSendTxt}>➤</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </>
+      ) : null}
 
       {/* Bottom overlay: host, rate, controls, actions */}
       <View style={styles.bottomOverlay} pointerEvents="box-none">
@@ -797,6 +1080,92 @@ export default function VideoCallScreen({ route, navigation }) {
       />
       {/* Report sheet: the caller reports this host to the owner. */}
       <ReportSheet visible={reportOpen} host={host} onClose={() => setReportOpen(false)} />
+
+      {/* Audience Management: real viewers in this room (presence). */}
+      <Modal visible={audienceOpen} transparent animationType="slide" onRequestClose={() => setAudienceOpen(false)}>
+        <View style={styles.modalShade}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHead}>
+              <Text style={styles.modalTitle}>👥 Audience ({viewerList.length})</Text>
+              <TouchableOpacity onPress={() => setAudienceOpen(false)} activeOpacity={0.8}>
+                <X size={20} color="#fff" strokeWidth={2.5} />
+              </TouchableOpacity>
+            </View>
+            {viewerList.length === 0 ? (
+              <Text style={styles.modalEmpty}>No viewers in this room yet.</Text>
+            ) : (
+              <ScrollView style={styles.modalList} showsVerticalScrollIndicator={false}>
+                {viewerList.map((v, i) => (
+                  <View key={String(v.userId) + i} style={styles.modalRow}>
+                    <View style={styles.modalAvatar}>
+                      <Text style={styles.modalAvatarTxt}>{(v.name || '?')[0].toUpperCase()}</Text>
+                    </View>
+                    <Text style={styles.modalName} numberOfLines={1}>{v.name || 'Guest'}</Text>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Multi-guest Management: viewers asking to join this live
+          as co-guests. Agree = they switch to broadcaster in this
+          channel and show in a small box on your live; Decline
+          turns them away; End removes an approved co-guest. */}
+      <Modal visible={guestsOpen} transparent animationType="slide" onRequestClose={() => setGuestsOpen(false)}>
+        <View style={styles.modalShade}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHead}>
+              <Text style={styles.modalTitle}>🎥 Multi-guest</Text>
+              <TouchableOpacity onPress={() => setGuestsOpen(false)} activeOpacity={0.8}>
+                <X size={20} color="#fff" strokeWidth={2.5} />
+              </TouchableOpacity>
+            </View>
+            {pendingRequests.length === 0 && approvedGuests.length === 0 ? (
+              <Text style={styles.modalEmpty}>No guest requests yet. When a viewer asks to join your live, it shows here.</Text>
+            ) : (
+              <ScrollView style={styles.modalList} showsVerticalScrollIndicator={false}>
+                {pendingRequests.map((r) => (
+                  <View key={String(r.id)} style={styles.modalRow}>
+                    <View style={styles.modalAvatar}>
+                      <Text style={styles.modalAvatarTxt}>{(r.guestName || '?')[0].toUpperCase()}</Text>
+                    </View>
+                    <View style={styles.modalRowMain}>
+                      <Text style={styles.modalName} numberOfLines={1}>{r.guestName}</Text>
+                      <Text style={styles.modalSub}>{r.guestDisplayId ? `ID: ${r.guestDisplayId}` : 'wants to join your live'}</Text>
+                    </View>
+                    <TouchableOpacity style={[styles.guestDecideBtn, styles.guestAgreeBtn]} onPress={() => decideGuest(r.id, 'approved')} activeOpacity={0.85}>
+                      <Check size={15} color="#fff" strokeWidth={2.5} />
+                      <Text style={styles.guestDecideTxt}>Agree</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.guestDecideBtn, styles.guestDeclineBtn]} onPress={() => decideGuest(r.id, 'declined')} activeOpacity={0.85}>
+                      <Text style={styles.guestDecideTxt}>Decline</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+                {approvedGuests.map((r) => {
+                  const live = remoteUids.includes(agoraUidForUser(r.guestId));
+                  return (
+                    <View key={String(r.id)} style={styles.modalRow}>
+                      <View style={styles.modalAvatar}>
+                        <Text style={styles.modalAvatarTxt}>{(r.guestName || '?')[0].toUpperCase()}</Text>
+                      </View>
+                      <View style={styles.modalRowMain}>
+                        <Text style={styles.modalName} numberOfLines={1}>{r.guestName}</Text>
+                        <Text style={styles.modalSub}>{live ? '● Live as co-guest' : 'Approved — not in the room yet'}</Text>
+                      </View>
+                      <TouchableOpacity style={[styles.guestDecideBtn, styles.guestDeclineBtn]} onPress={() => endGuest(r.id)} activeOpacity={0.85}>
+                        <Text style={styles.guestDecideTxt}>End</Text>
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -931,6 +1300,99 @@ const styles = StyleSheet.create({
   },
   moreBtnOn: { backgroundColor: THEME.pink },
   hint: { color: 'rgba(255,255,255,0.55)', fontSize: 11.5, marginTop: 14, textAlign: 'center' },
+  // ── Live room (host broadcasting) ──────────────────────────
+  // Top-right: viewer count + Audience + Guests buttons (stacked,
+  // like the reference room — a single row would overflow a phone).
+  roomTopRight: { alignItems: 'flex-end', flexDirection: 'column', gap: 7, position: 'absolute', right: 16, top: 48 },
+  roomViewerPill: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(10,0,20,0.5)',
+    borderColor: 'rgba(255,255,255,0.25)',
+    borderRadius: 999,
+    borderWidth: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  roomViewerTxt: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  roomIconBtn: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(10,0,20,0.5)',
+    borderColor: 'rgba(255,255,255,0.25)',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  roomIconBtnTxt: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  roomBadge: { alignItems: 'center', backgroundColor: '#ef2b3c', borderRadius: 9, height: 18, justifyContent: 'center', minWidth: 18, paddingHorizontal: 4 },
+  roomBadgeTxt: { color: '#fff', fontSize: 11, fontWeight: '900' },
+  // Floating hearts + Like button (right side, above the controls).
+  roomHeartsZone: { bottom: 350, height: 150, position: 'absolute', right: 0, width: 90 },
+  floatHeart: { position: 'absolute', top: 130 },
+  roomLikeBtn: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(10,0,20,0.6)',
+    borderColor: 'rgba(255,93,162,0.5)',
+    borderRadius: 26,
+    borderWidth: 1,
+    height: 52,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 14,
+    bottom: 352,
+    width: 52,
+  },
+  roomLikeCountTxt: { color: '#ff8fc0', fontSize: 11, fontWeight: '900', marginTop: 1 },
+  // Live chat overlay (bottom-left, above the call controls).
+  roomChatWrap: { bottom: 340, left: 12, maxHeight: 150, position: 'absolute', right: 84 },
+  roomChatList: { gap: 6 },
+  roomChatBubble: { alignSelf: 'flex-start', backgroundColor: 'rgba(10,0,20,0.52)', borderRadius: 12, maxWidth: '100%', paddingHorizontal: 10, paddingVertical: 5 },
+  roomChatText: { color: '#f1eaff', fontSize: 12.5, fontWeight: '600', lineHeight: 17 },
+  roomChatName: { color: THEME.gold2, fontWeight: '900' },
+  roomChatInputWrap: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(10,0,20,0.55)',
+    borderColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    marginTop: 6,
+    minHeight: 36,
+    paddingLeft: 12,
+    paddingRight: 4,
+  },
+  roomChatInput: { color: '#fff', flex: 1, fontSize: 13, fontWeight: '600' },
+  roomChatSendBtn: { alignItems: 'center', backgroundColor: THEME.violet, borderRadius: 14, height: 28, justifyContent: 'center', width: 28 },
+  roomChatSendTxt: { color: '#fff', fontSize: 13, fontWeight: '900' },
+  // Audience + Multi-guest modals.
+  modalShade: { alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.6)', flex: 1, justifyContent: 'flex-end' },
+  modalCard: {
+    backgroundColor: '#1c0b33',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '60%',
+    paddingBottom: 24,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    width: '100%',
+  },
+  modalHead: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
+  modalTitle: { color: '#fff', fontSize: 16, fontWeight: '900' },
+  modalEmpty: { color: '#cdbcf0', fontSize: 13, lineHeight: 19, paddingVertical: 12, textAlign: 'center' },
+  modalList: { flexGrow: 0 },
+  modalRow: { alignItems: 'center', flexDirection: 'row', gap: 10, paddingVertical: 8 },
+  modalRowMain: { flex: 1 },
+  modalAvatar: { alignItems: 'center', backgroundColor: THEME.violet, borderRadius: 16, height: 32, justifyContent: 'center', width: 32 },
+  modalAvatarTxt: { color: '#fff', fontSize: 14, fontWeight: '900' },
+  modalName: { color: '#fff', fontSize: 14, fontWeight: '800' },
+  modalSub: { color: '#cdbcf0', fontSize: 12, fontWeight: '600', marginTop: 2 },
+  guestDecideBtn: { alignItems: 'center', borderRadius: 999, flexDirection: 'row', gap: 3, paddingHorizontal: 11, paddingVertical: 7 },
+  guestAgreeBtn: { backgroundColor: '#1fc457' },
+  guestDeclineBtn: { backgroundColor: 'rgba(255,255,255,0.18)' },
+  guestDecideTxt: { color: '#fff', fontSize: 12, fontWeight: '900' },
   title: { color: COLORS.dark, fontSize: 26, fontWeight: 'bold', marginTop: 16, textAlign: 'center' },
   // [Vero] Rare Vehicle entrance effect.
   vehicle: { position: 'absolute', top: 64, zIndex: 5 },
