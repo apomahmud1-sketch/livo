@@ -93,7 +93,7 @@ export async function getMyHostRow(userId) {
     const res = await withTimeout(
       supabase
         .from('hosts')
-        .select('id,host_id,profile_id,status,rate_tier,is_online,last_seen')
+        .select('id,host_id,profile_id,status,rate_tier,is_online,last_seen,verification_video_url,verification_status')
         .eq('profile_id', userId)
         .maybeSingle(),
     );
@@ -125,7 +125,7 @@ export async function ensureHostRow(user) {
         rate_tier: 'tier2',
         is_online: false,
       })
-      .select('id,host_id,profile_id,status,rate_tier,is_online,last_seen')
+      .select('id,host_id,profile_id,status,rate_tier,is_online,last_seen,verification_video_url,verification_status')
       .single();
     if (error || !data) {
       // A race (row created between the check and the insert) —
@@ -139,6 +139,25 @@ export async function ensureHostRow(user) {
 }
 
 // ── Host controls (persisted) ────────────────────────────────────
+
+// Identity verification: the app only ever records + uploads a
+// verification video and marks it 'pending' for Mother Panel
+// review. 'verified' / 'rejected' are set ONLY by the owner — a DB
+// trigger (hosts_verification_status_guard) blocks the app from
+// writing them, so this helper never writes those values. Returns
+// true when the row was updated.
+export async function updateHostVerification(hostRowId, { verificationVideoUrl }) {
+  if (!supabase || !hostRowId || !verificationVideoUrl) return false;
+  try {
+    const { error } = await supabase
+      .from('hosts')
+      .update({ verification_video_url: verificationVideoUrl, verification_status: 'pending' })
+      .eq('id', hostRowId);
+    return !error;
+  } catch (e) {
+    return false;
+  }
+}
 
 // Online state lives in is_online + last_seen — never in status,
 // because status is the approval state ('pending' / 'approved').
