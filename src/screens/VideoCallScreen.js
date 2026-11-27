@@ -9,6 +9,10 @@ import { supabase } from '../supabase/client';
 import { fetchMyProfile, getSessionUser } from '../supabase/auth';
 import { joinLiveRoom, leaveLiveRoom } from '../supabase/presence';
 import GiftSheet from '../components/GiftSheet';
+// Report a host to the Mother Panel (see ReportSheet): the caller
+// in a 1v1 call can report the host — the report lands in the
+// public.reports table for the owner to review.
+import ReportSheet from '../components/ReportSheet';
 // [Calls] Real signalling over Supabase Realtime (src/calls/signalling.js):
 // an OUTGOING call places its ringing row at once (no self-accept
 // step — see placeOutgoingCall); the callee's app (listening via
@@ -181,6 +185,9 @@ export default function VideoCallScreen({ route, navigation }) {
   const [cameraOn, setCameraOn] = useState(true);
   const [speakerOn, setSpeakerOn] = useState(true);
   const [giftOpen, setGiftOpen] = useState(false);
+  // Report sheet: only the caller (not the host going live and
+  // not the host answering) can report the host in this call.
+  const [reportOpen, setReportOpen] = useState(false);
   // [F5] Gift currently playing the full-screen animation (null = none).
   // Only expensive gifts (price >= EXPENSIVE_GIFT_MIN_COINS) ever set this.
   const [bigGift, setBigGift] = useState(null);
@@ -648,6 +655,17 @@ export default function VideoCallScreen({ route, navigation }) {
           <Text style={styles.spentTxt}>🪙 -{liveCost.toLocaleString()}</Text>
         </View>
       </View>
+      {/* Report: the caller (not the host) can report this host —
+          the report goes to the Mother Panel for review. */}
+      {isOutgoingCall ? (
+        <TouchableOpacity
+          style={styles.reportBtn}
+          onPress={() => setReportOpen(true)}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.reportBtnTxt}>⚑ Report</Text>
+        </TouchableOpacity>
+      ) : null}
       {vipLevel && (
         <Animated.View style={[styles.vehicle, { transform: [{ translateX: vehicleX }] }]}>
           <Text style={styles.vehicleText}>🏎️</Text>
@@ -777,6 +795,8 @@ export default function VideoCallScreen({ route, navigation }) {
           else if (gift.price >= EXPENSIVE_GIFT_MIN_COINS) setBigGift(gift);
         }}
       />
+      {/* Report sheet: the caller reports this host to the owner. */}
+      <ReportSheet visible={reportOpen} host={host} onClose={() => setReportOpen(false)} />
     </View>
   );
 }
@@ -841,6 +861,8 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   spentTxt: { color: THEME.gold2, fontSize: 13.5, fontWeight: '900' },
+  reportBtn: { backgroundColor: 'rgba(10,0,20,0.5)', borderColor: 'rgba(255,255,255,0.25)', borderRadius: 999, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 6, position: 'absolute', right: 16, top: 48 },
+  reportBtnTxt: { color: '#fff', fontSize: 13, fontWeight: 'bold' },
   bottomOverlay: { bottom: 0, left: 0, paddingBottom: 20, paddingHorizontal: 16, position: 'absolute', right: 0 },
   callNameRow: { alignItems: 'center', flexDirection: 'row', gap: 6 },
   callName: { color: '#fff', fontSize: 16, fontWeight: '900', textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 8 },
