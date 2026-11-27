@@ -19,6 +19,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Image,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -28,14 +29,21 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
-import { Eye, Gift, Send, Video, X } from 'lucide-react-native';
+import { Eye, Gift, Heart, Send, UserPlus, Video, X } from 'lucide-react-native';
 import { THEME, formatViewers } from '../config';
 import { useApp } from '../store';
 import { fetchMyProfile, getSessionUser } from '../supabase/auth';
 import { joinLiveRoom, leaveLiveRoom, subscribeRoomPresence, subscribeRoomViewers } from '../supabase/presence';
 import { fetchRoomMessages, sendRoomMessage, subscribeRoomMessages } from '../supabase/room_messages';
-import { buildChannelName } from '../calls/signalling';
-import LiveVideo from '../agora/LiveVideo';
+// Multi-guest (co-anchor): a viewer asks to join the live; the host
+// agrees in the Multi-guest Management panel and the guest switches
+// to broadcaster in the same Agora channel (see agoraUidForUser).
+import {
+  endGuestRequest,
+  requestGuestJoin,
+  subscribeMyGuestRequest,
+} from '../supabase/guest_requests';
+import LiveVideo, { agoraUidForUser } from '../agora/LiveVideo';
 import GiftSheet from '../components/GiftSheet';
 // Report a host to the Mother Panel (see ReportSheet): a viewer
 // watching this live room can report the host — the report lands
@@ -82,6 +90,17 @@ export default function LiveRoomScreen({ route, navigation }) {
   const [hearts, setHearts] = useState([]);
   const [myId, setMyId] = useState(null);
   const [myName, setMyName] = useState('Guest');
+  const [myDisplayId, setMyDisplayId] = useState(null);
+  // Like: local in-room effect only (no likes table exists) — a tap
+  // bursts floating hearts and bumps the counter shown by the button.
+  const [likeCount, setLikeCount] = useState(0);
+  // Multi-guest (co-anchor): 'none' | 'pending' | 'approved' |
+  // 'declined'. isCoGuest = approved and currently broadcasting.
+  const [guestStatus, setGuestStatus] = useState('none');
+  const [guestRequestId, setGuestRequestId] = useState(null);
+  const [isCoGuest, setIsCoGuest] = useState(false);
+  // Audience Management panel (viewer list).
+  const [audienceOpen, setAudienceOpen] = useState(false);
   const chatScrollRef = useRef(null);
   const roomChannelRef = useRef(null);
   const heartsIdRef = useRef(0);
@@ -98,6 +117,7 @@ export default function LiveRoomScreen({ route, navigation }) {
         const { profile } = await fetchMyProfile(u.id);
         if (!cancelled && profile && profile.username) {
           setMyName(profile.username);
+          if (profile.user_id) setMyDisplayId(profile.user_id);
           return;
         }
         const meta = u.user_metadata || {};
@@ -211,6 +231,76 @@ export default function LiveRoomScreen({ route, navigation }) {
     }
   };
 
+  // ── Multi-guest (co-anchor) ─────────────────────────────────
+  // Ask the host to join this live as a co-guest. The host agrees
+  // in the Multi-guest Management panel; the subscription below
+  // then flips this viewer to broadcaster (same Agora channel).
+  const requestJoin = async () => {
+    if (!myId) {
+      showToast('Please sign in first.');
+      return;
+    }
+    if (guestStatus !== 'none' && guestStatus !== 'declined') return;
+    const row = await requestGuestJoin({
+      hostId: host.id,
+      guestId: myId,
+      guestName: myName,
+      guestDisplayId: myDisplayId,
+    });
+    if (row) {
+      setGuestRequestId(row.id);
+      setGuestStatus('pending');
+      showToast('Request sent — waiting for the host.');
+    } else {
+      showToast("Couldn't send the request — check your connection and try again.");
+    }
+  };
+
+  // Leave the co-guest state (the host may also end it — the
+  // subscription below then flips this viewer back to audience).
+  const endCoGuest = async () => {
+    if (guestRequestId) {
+      endGuestRequest(guestRequestId).catch(() => {});
+    }
+    setIsCoGuest(false);
+    setGuestStatus('none');
+    setGuestRequestId(null);
+  };
+
+  // Watch my own request row: the host's Agree flips me to
+  // broadcaster, Decline sends me back, Ended (host removed me)
+  // drops me back to audience.
+  useEffect(() => {
+    if (!guestRequestId) return undefined;
+    const unsub = subscribeMyGuestRequest(guestRequestId, (row) => {
+      if (row.status === 'approved') {
+        setGuestStatus('approved');
+        setIsCoGuest(true);
+        showToast("You're live as co-guest!");
+      } else if (row.status === 'declined') {
+        setIsCoGuest(false);
+        setGuestStatus('declined');
+        showToast('The host declined your request.');
+      } else if (row.status === 'ended') {
+        setIsCoGuest(false);
+        setGuestStatus('none');
+        setGuestRequestId(null);
+      }
+    });
+    return unsub;
+  }, [guestRequestId]);
+
+  // Leaving the room while co-guest ends the request (best-effort)
+  // so the host's panel does not keep showing a gone guest.
+  const coGuestRef = useRef({ isCoGuest, guestRequestId });
+  coGuestRef.current = { isCoGuest, guestRequestId };
+  useEffect(() => () => {
+    const cur = coGuestRef.current;
+    if (cur.isCoGuest && cur.guestRequestId) {
+      endGuestRequest(cur.guestRequestId).catch(() => {});
+    }
+  }, []);
+
   const onGiftSent = (gift) => {
     // A real event that just happened: show it in this room's feed
     // as a local line (gold, like the preview) + floating hearts.
@@ -240,12 +330,18 @@ export default function LiveRoomScreen({ route, navigation }) {
       <StatusBar style="light" />
       <LiveVideo
         channel={buildChannelName(host.id)}
-        role="audience"
+        // Co-guest: an approved guest joins as a broadcaster with
+        // their deterministic uid (the host matches it to the
+        // approved request). Role change re-runs the join effect —
+        // the guest leaves as audience and re-joins as broadcaster
+        // with a publisher token. Everyone else stays audience.
+        role={isCoGuest ? 'host' : 'audience'}
+        uid={isCoGuest && myId ? agoraUidForUser(myId) : 0}
         style={styles.video}
         showLiveChip={false}
       />
 
-      {/* Top row: host chip, LIVE badge, viewer count, close */}
+      {/* Top row: host chip, LIVE badge, viewer count (tap = Audience Management) */}
       <View style={styles.topRow} pointerEvents="box-none">
         <View style={styles.hostChip}>
           {host.photo ? (
@@ -273,33 +369,47 @@ export default function LiveRoomScreen({ route, navigation }) {
           <Text style={styles.liveText}>LIVE</Text>
         </View>
         {viewerCount != null ? (
-          <View style={styles.viewerPill}>
+          <TouchableOpacity style={styles.viewerPill} onPress={() => setAudienceOpen(true)} activeOpacity={0.8}>
             <Eye size={14} color="#fff" strokeWidth={2} />
             <Text style={styles.viewerTxt}>{formatViewers(viewerCount)}</Text>
-          </View>
+          </TouchableOpacity>
         ) : null}
-        <TouchableOpacity style={styles.reportBtn} onPress={() => setReportOpen(true)} activeOpacity={0.8}>
-          <Text style={styles.reportTxt}>⚑ Report</Text>
+      </View>
+
+      {/* Second row: top viewers (left) + Quit Room / Report (right) */}
+      <View style={styles.subRow} pointerEvents="box-none">
+        {viewerList.length > 0 ? (
+          <View style={styles.viewersRow} pointerEvents="none">
+            {shownViewers.map((v, i) => (
+              <View key={String(v.userId) + i} style={[styles.viewerAvatar, i > 0 && styles.viewerAvatarOverlap]}>
+                <Text style={styles.viewerAvatarTxt}>{(v.name || '?')[0].toUpperCase()}</Text>
+              </View>
+            ))}
+            {extraViewers > 0 ? (
+              <View style={[styles.viewerAvatar, styles.viewerMore]}>
+                <Text style={styles.viewerMoreTxt}>+{extraViewers}</Text>
+              </View>
+            ) : null}
+          </View>
+        ) : (
+          <View style={{ flex: 1 }} />
+        )}
+        <View style={{ flex: 1 }} />
+        <TouchableOpacity style={styles.pillBtn} onPress={() => setReportOpen(true)} activeOpacity={0.8}>
+          <Text style={styles.pillBtnTxt}>⚑ Report</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.closeBtn} onPress={() => navigation.goBack()} activeOpacity={0.8}>
-          <X size={18} color="#fff" strokeWidth={2.5} />
+        <TouchableOpacity style={[styles.pillBtn, styles.quitBtn]} onPress={() => navigation.goBack()} activeOpacity={0.8}>
+          <Text style={styles.pillBtnTxt}>Quit Room</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Top viewers — real presence entries only */}
-      {viewerList.length > 0 ? (
-        <View style={styles.viewersRow} pointerEvents="none">
-          {shownViewers.map((v, i) => (
-            <View key={String(v.userId) + i} style={[styles.viewerAvatar, i > 0 && styles.viewerAvatarOverlap]}>
-              <Text style={styles.viewerAvatarTxt}>{(v.name || '?')[0].toUpperCase()}</Text>
-            </View>
-          ))}
-          {extraViewers > 0 ? (
-            <View style={[styles.viewerAvatar, styles.viewerMore]}>
-              <Text style={styles.viewerMoreTxt}>+{extraViewers}</Text>
-            </View>
-          ) : null}
-          <Text style={styles.viewersLabel}>Top viewers in this room</Text>
+      {/* Co-guest banner: approved guests see they are live */}
+      {isCoGuest ? (
+        <View style={styles.coGuestBanner} pointerEvents="box-none">
+          <Text style={styles.coGuestBannerTxt}>🎥 You're live as co-guest</Text>
+          <TouchableOpacity style={styles.coGuestEndBtn} onPress={endCoGuest} activeOpacity={0.85}>
+            <Text style={styles.coGuestEndTxt}>End</Text>
+          </TouchableOpacity>
         </View>
       ) : null}
 
@@ -314,6 +424,35 @@ export default function LiveRoomScreen({ route, navigation }) {
             onDone={() => setHearts((prev) => prev.filter((x) => x.id !== h.id))}
           />
         ))}
+      </View>
+
+      {/* Right-side actions: multi-guest request + Like */}
+      <View style={styles.sideActions} pointerEvents="box-none">
+        {isCoGuest ? (
+          <TouchableOpacity style={[styles.sideBtn, styles.sideBtnRed]} onPress={endCoGuest} activeOpacity={0.85}>
+            <Text style={styles.sideBtnTxt}>End co-guest</Text>
+          </TouchableOpacity>
+        ) : guestStatus === 'pending' ? (
+          <View style={[styles.sideBtn, styles.sideBtnDim]}>
+            <Text style={styles.sideBtnTxt}>Request sent…</Text>
+          </View>
+        ) : (
+          <TouchableOpacity style={styles.sideBtn} onPress={requestJoin} activeOpacity={0.85}>
+            <UserPlus size={15} color="#fff" strokeWidth={2.2} />
+            <Text style={styles.sideBtnTxt}>{guestStatus === 'declined' ? 'Request again' : 'Join live'}</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity
+          style={styles.likeBtn}
+          onPress={() => {
+            spawnHearts();
+            setLikeCount((c) => c + 1);
+          }}
+          activeOpacity={0.8}
+        >
+          <Heart size={24} color="#ff5da2" strokeWidth={2.2} fill="#ff5da2" />
+          {likeCount > 0 ? <Text style={styles.likeCountTxt}>{likeCount}</Text> : null}
+        </TouchableOpacity>
       </View>
 
       {/* Live chat feed */}
@@ -379,6 +518,34 @@ export default function LiveRoomScreen({ route, navigation }) {
         </TouchableOpacity>
       </View>
 
+      {/* Audience Management: real viewers in this room (presence) */}
+      <Modal visible={audienceOpen} transparent animationType="slide" onRequestClose={() => setAudienceOpen(false)}>
+        <View style={styles.modalShade}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHead}>
+              <Text style={styles.modalTitle}>👥 Audience ({viewerList.length})</Text>
+              <TouchableOpacity onPress={() => setAudienceOpen(false)} activeOpacity={0.8}>
+                <X size={20} color="#fff" strokeWidth={2.5} />
+              </TouchableOpacity>
+            </View>
+            {viewerList.length === 0 ? (
+              <Text style={styles.modalEmpty}>No viewers in this room yet.</Text>
+            ) : (
+              <ScrollView style={styles.modalList} showsVerticalScrollIndicator={false}>
+                {viewerList.map((v, i) => (
+                  <View key={String(v.userId) + i} style={styles.modalRow}>
+                    <View style={styles.modalAvatar}>
+                      <Text style={styles.modalAvatarTxt}>{(v.name || '?')[0].toUpperCase()}</Text>
+                    </View>
+                    <Text style={styles.modalName} numberOfLines={1}>{v.name || 'Guest'}</Text>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
       {/* Uploaded gift animation overlay (video/GIF, auto-dismiss;
           silent fallback to the chat line + hearts on load failure). */}
       <GiftAnimationOverlay
@@ -443,29 +610,8 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   viewerTxt: { color: '#fff', fontSize: 12, fontWeight: '900' },
-  reportBtn: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(10,0,20,0.52)',
-    borderColor: 'rgba(255,255,255,0.16)',
-    borderRadius: 999,
-    borderWidth: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  reportTxt: { color: '#fff', fontSize: 12, fontWeight: '900' },
-  closeBtn: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(10,0,20,0.52)',
-    borderColor: 'rgba(255,255,255,0.16)',
-    borderRadius: 17,
-    borderWidth: 1,
-    height: 34,
-    justifyContent: 'center',
-    width: 34,
-  },
-  // Top viewers row.
-  viewersRow: { alignItems: 'center', flexDirection: 'row', paddingHorizontal: 14, paddingTop: 9 },
+  // Top viewers row (avatars, inside the second row).
+  viewersRow: { alignItems: 'center', flexDirection: 'row' },
   viewerAvatar: {
     alignItems: 'center',
     backgroundColor: THEME.violet,
@@ -480,12 +626,87 @@ const styles = StyleSheet.create({
   viewerAvatarTxt: { color: '#fff', fontSize: 11, fontWeight: '900' },
   viewerMore: { backgroundColor: 'rgba(139,61,255,0.85)', borderColor: 'rgba(255,255,255,0.35)' },
   viewerMoreTxt: { color: '#fff', fontSize: 9.5, fontWeight: '900' },
-  viewersLabel: { color: '#e7dcff', fontSize: 11.5, fontWeight: '800', marginLeft: 8, textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6 },
+  // Second row: top viewers (left) + Quit Room / Report (right).
+  subRow: { alignItems: 'center', flexDirection: 'row', gap: 8, paddingHorizontal: 14, paddingTop: 9 },
+  pillBtn: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(10,0,20,0.52)',
+    borderColor: 'rgba(255,255,255,0.16)',
+    borderRadius: 999,
+    borderWidth: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  pillBtnTxt: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  quitBtn: { backgroundColor: 'rgba(239,43,60,0.55)' },
+  // Co-guest banner (approved guest is live).
+  coGuestBanner: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    backgroundColor: 'rgba(124,58,237,0.85)',
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  coGuestBannerTxt: { color: '#fff', fontSize: 13, fontWeight: '900' },
+  coGuestEndBtn: { backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 5 },
+  coGuestEndTxt: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  // Right-side actions: Join live + Like (hearts rise from here).
+  sideActions: { alignItems: 'center', bottom: 150, gap: 12, position: 'absolute', right: 12 },
+  sideBtn: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(10,0,20,0.6)',
+    borderColor: 'rgba(255,255,255,0.25)',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 5,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+  },
+  sideBtnDim: { backgroundColor: 'rgba(10,0,20,0.35)' },
+  sideBtnRed: { backgroundColor: 'rgba(239,43,60,0.7)' },
+  sideBtnTxt: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  likeBtn: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(10,0,20,0.6)',
+    borderColor: 'rgba(255,93,162,0.5)',
+    borderRadius: 26,
+    borderWidth: 1,
+    height: 52,
+    justifyContent: 'center',
+    width: 52,
+  },
+  likeCountTxt: { color: '#ff8fc0', fontSize: 11, fontWeight: '900', marginTop: 1 },
+  // Audience Management modal.
+  modalShade: { alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.6)', flex: 1, justifyContent: 'flex-end' },
+  modalCard: {
+    backgroundColor: '#1c0b33',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '60%',
+    paddingBottom: 24,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    width: '100%',
+  },
+  modalHead: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
+  modalTitle: { color: '#fff', fontSize: 16, fontWeight: '900' },
+  modalEmpty: { color: '#cdbcf0', fontSize: 13, paddingVertical: 12, textAlign: 'center' },
+  modalList: { flexGrow: 0 },
+  modalRow: { alignItems: 'center', flexDirection: 'row', gap: 10, paddingVertical: 8 },
+  modalAvatar: { alignItems: 'center', backgroundColor: THEME.violet, borderRadius: 16, height: 32, justifyContent: 'center', width: 32 },
+  modalAvatarTxt: { color: '#fff', fontSize: 14, fontWeight: '900' },
+  modalName: { color: '#fff', fontSize: 14, fontWeight: '800' },
   // Floating hearts.
   heartsZone: { bottom: 150, height: 170, position: 'absolute', right: 0, width: 90 },
   floatHeart: { position: 'absolute', top: 150 },
-  // Chat feed.
-  chatWrap: { bottom: 88, left: 12, position: 'absolute', right: 78 },
+  // Chat feed (bottom-left; right edge clears the Join/Like column).
+  chatWrap: { bottom: 88, left: 12, position: 'absolute', right: 118 },
   chatList: { gap: 6 },
   chatBubble: { alignSelf: 'flex-start', backgroundColor: 'rgba(10,0,20,0.52)', borderRadius: 12, maxWidth: '100%', paddingHorizontal: 10, paddingVertical: 5 },
   chatText: { color: '#f1eaff', fontSize: 12.5, fontWeight: '600', lineHeight: 17 },
