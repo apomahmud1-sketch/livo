@@ -53,7 +53,7 @@
 // (see src/config.js). It is NOT a secret.
 // ─────────────────────────────────────────────────────────────────
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { AGORA_APP_ID, AGORA_APP_ID_IS_PLACEHOLDER, COLORS } from '../config';
 import { requestCallPermissions } from '../permissions';
 
@@ -272,6 +272,68 @@ function registerEngineEvents(lib) {
   });
 }
 
+// Create the shared engine (if needed) and register its event
+// handlers. Idempotent — a second call is a no-op.
+function ensureEngine(lib) {
+  if (engine) return;
+  engine = lib.createAgoraRtcEngine();
+  const initCode = engine.initialize({
+    appId: AGORA_APP_ID,
+    channelProfile: lib.ChannelProfileType.ChannelProfileLiveBroadcasting,
+  });
+  if (initCode !== 0) {
+    const broken = engine;
+    engine = null;
+    throw new Error(`Agora initialize failed (code ${initCode}). Check the App ID.`);
+  }
+  registerEngineEvents(lib);
+}
+
+// ── Local preview (instant live) ───────────────────────────────
+// Start the local camera preview WITHOUT joining a channel.
+// Go Live calls this BEFORE the token fetch, so the host sees
+// themselves at once while the token server wakes up and the join
+// runs in the background — the reference live apps feel instant
+// because the camera is on screen first and the connection
+// happens behind it. Idempotent: joinAgoraChannel runs the same
+// enableVideo / startPreview steps before joining, so calling
+// this first changes nothing about the join itself.
+// Throws a plain Error when the native module or the App ID is
+// missing. A denied camera permission does NOT throw here — the
+// preview simply stays black and the join proceeds as before.
+export function startLocalPreview({ role = 'host', audioOnly = false } = {}) {
+  const lib = loadAgora();
+  if (!lib) {
+    throw new Error(
+      'react-native-agora is not available in this build. Use a dev build / EAS build — it does not work in Expo Go.',
+    );
+  }
+  if (AGORA_APP_ID_IS_PLACEHOLDER) {
+    throw new Error('Agora App ID is not set. Put it in app.json → extra → AGORA_APP_ID.');
+  }
+  if (audioOnly) return;
+  ensureEngine(lib);
+  const isHost = role === 'host';
+  const clientRole = isHost
+    ? lib.ClientRoleType.ClientRoleBroadcaster
+    : lib.ClientRoleType.ClientRoleAudience;
+  engine.setClientRole(clientRole);
+  engine.enableVideo();
+  if (isHost) {
+    engine.startPreview();
+  }
+}
+
+/** Stop the local camera preview. Safe to call when not started. */
+export function stopLocalPreview() {
+  if (!engine) return;
+  try {
+    engine.stopPreview();
+  } catch (e) {
+    // Already stopped — ignore.
+  }
+}
+
 /**
  * Create the engine (if needed) and join a channel.
  *   token       — RTC token for this channel (Temp Token for testing,
@@ -310,19 +372,7 @@ export function joinAgoraChannel({ token, channelName, uid = 0, role = 'audience
     throw new Error('Agora channel name is missing.');
   }
 
-  if (!engine) {
-    engine = lib.createAgoraRtcEngine();
-    const initCode = engine.initialize({
-      appId: AGORA_APP_ID,
-      channelProfile: lib.ChannelProfileType.ChannelProfileLiveBroadcasting,
-    });
-    if (initCode !== 0) {
-      const broken = engine;
-      engine = null;
-      throw new Error(`Agora initialize failed (code ${initCode}). Check the App ID.`);
-    }
-    registerEngineEvents(lib);
-  }
+  ensureEngine(lib);
 
   const isHost = role === 'host';
   const clientRole = isHost
@@ -494,6 +544,11 @@ export default function LiveVideo({
   const [error, setError] = React.useState('');
   const [remoteUid, setRemoteUid] = React.useState(null);
   const [localUid, setLocalUid] = React.useState(0);
+  // Instant live: true once the local camera preview has started
+  // (before the token fetch). joinAttempt re-runs the join effect
+  // when the host taps "Try again" after a failed join.
+  const [previewStarted, setPreviewStarted] = React.useState(false);
+  const [joinAttempt, setJoinAttempt] = React.useState(0);
   const joinedChannelRef = React.useRef(null);
   const RtcSurfaceViewRef = React.useRef(null);
   // TextureView for the full-screen self view (see the render
@@ -510,6 +565,15 @@ export default function LiveVideo({
     onJoinError,
     onTokenExpiring,
     onTokenRenewalFailed,
+  };
+
+  // Retry after a failed join: clear the error and re-run the
+  // join effect (permissions + preview + token + join). The token
+  // server is often awake by the second attempt.
+  const retryJoin = () => {
+    setError('');
+    setStatus('joining');
+    setJoinAttempt((n) => n + 1);
   };
 
   React.useEffect(() => {
@@ -581,10 +645,28 @@ export default function LiveVideo({
           } catch (e) {
             // Best-effort — join anyway.
           }
+          // Instant live: start the local camera preview FIRST,
+          // before the token fetch — the host sees themselves at
+          // once (the full-screen self view renders the running
+          // preview) while the token server wakes up and the join
+          // runs in the background. A preview failure never blocks
+          // the join; the error view below is the fallback.
+          if (!audioOnly && !cancelled) {
+            try {
+              startLocalPreview({ role, audioOnly });
+              if (!cancelled) setPreviewStarted(true);
+            } catch (e) {
+              // Best-effort — the join below still runs.
+            }
+          }
         }
-        // Token fetch happens BEFORE joinChannel: a token is
-        // minted per call, per channel (role publisher for the
-        // host side, subscriber for the audience side).
+        if (cancelled) return;
+        // Token fetch happens in the BACKGROUND of the running
+        // preview: a token is minted per call, per channel (role
+        // publisher for the host side, subscriber for the audience
+        // side). On a cold Render Free server this can take
+        // seconds — the host watches their own camera meanwhile
+        // instead of a black "Joining live…" screen.
         const effectiveToken = await resolveAgoraToken({
           token,
           channelName: channel,
@@ -619,11 +701,18 @@ export default function LiveVideo({
       unsubscribe();
       unsubscribeToken();
       leaveAgoraChannel();
+      // The preview was started on mount (instant live) — stop it
+      // when this screen goes away so the camera does not keep
+      // running after the call ends. Harmless for audience (the
+      // preview never started) and for a retry re-run (the effect
+      // starts it again right after).
+      stopLocalPreview();
       joinedChannelRef.current = null;
     };
-    // Re-join only when the channel, role or audio mode changes.
+    // Re-join only when the channel, role or audio mode changes,
+    // or when the host taps "Try again" after a failed join.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channel, role, audioOnly]); // [F2] audioOnly added to deps
+  }, [channel, role, audioOnly, joinAttempt]); // [F2] audioOnly added to deps
 
   if (AGORA_APP_ID_IS_PLACEHOLDER) {
     return (
@@ -642,6 +731,41 @@ export default function LiveVideo({
   }
 
   if (status === 'error') {
+    // Instant live: the camera preview is already running — keep
+    // it on screen and show the error as an overlay with a retry
+    // button, instead of a black error box. The host sees
+    // themselves and can tap retry (the token server is often
+    // awake by the second attempt). Without a running preview
+    // (audience, voice call, or the preview never started) fall
+    // through to the plain error box below.
+    const RtcTextureView = RtcTextureViewRef.current;
+    const RtcSurfaceView = RtcSurfaceViewRef.current;
+    if (previewStarted && role === 'host' && !audioOnly && (RtcTextureView || RtcSurfaceView)) {
+      return (
+        <View style={[styles.videoBox, style]}>
+          {RtcTextureView ? (
+            <RtcTextureView
+              style={styles.remoteVideo}
+              canvas={{ uid: localUid, renderMode: RENDER_MODE_HIDDEN }}
+            />
+          ) : (
+            <RtcSurfaceView
+              style={styles.remoteVideo}
+              canvas={{ uid: localUid, renderMode: RENDER_MODE_HIDDEN }}
+              zOrderMediaOverlay
+            />
+          )}
+          <View style={styles.errorOverlay}>
+            <View style={styles.errorPill}>
+              <Text style={styles.errorPillText}>⚠️ {error}</Text>
+              <TouchableOpacity style={styles.retryBtn} onPress={retryJoin} activeOpacity={0.85}>
+                <Text style={styles.retryBtnText}>↻ Try again</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      );
+    }
     return (
       <View style={[styles.box, style]}>
         <Text style={styles.emoji}>⚠️</Text>
@@ -798,4 +922,12 @@ const styles = StyleSheet.create({
   waitingOverlay: { alignItems: 'center', left: 0, position: 'absolute', right: 0, top: 132 },
   waitingPill: { backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 6 },
   waitingPillText: { color: '#fff', fontSize: 13, fontWeight: 'bold' },
+  // Join failed with the camera preview already running: the
+  // error sits as a centred overlay on top of the host's own
+  // video (never a black screen) with a retry button.
+  errorOverlay: { alignItems: 'center', bottom: 0, justifyContent: 'center', left: 0, position: 'absolute', right: 0, top: 0 },
+  errorPill: { backgroundColor: 'rgba(0,0,0,0.65)', borderRadius: 14, marginHorizontal: 28, padding: 14 },
+  errorPillText: { color: '#fff', fontSize: 13, lineHeight: 18, textAlign: 'center' },
+  retryBtn: { alignSelf: 'center', backgroundColor: '#ec4899', borderRadius: 20, marginTop: 12, paddingHorizontal: 20, paddingVertical: 9 },
+  retryBtnText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
 });
