@@ -679,6 +679,14 @@ export default function LiveVideo({
   }
 
   const isHost = role === 'host';
+  // Live broadcast: while the host has no remote yet (going live
+  // alone, or a caller waiting for the callee), show the host's OWN
+  // camera full-screen instead of a black waiting placeholder — the
+  // host sees themselves big, like a real live broadcast. The
+  // small "You" preview is hidden in this state (same camera).
+  // When a remote joins, the layout flips to remote main + the
+  // small "You" preview; when they leave it flips back.
+  const showSelfFullscreen = isHost && !remoteUid;
   return (
     <View style={[styles.videoBox, style]}>
       {remoteUid ? (
@@ -686,19 +694,29 @@ export default function LiveVideo({
           style={styles.remoteVideo}
           canvas={{ uid: remoteUid, renderMode: RENDER_MODE_HIDDEN }}
         />
+      ) : showSelfFullscreen ? (
+        <RtcSurfaceView
+          style={styles.remoteVideo}
+          canvas={{ uid: localUid, renderMode: RENDER_MODE_HIDDEN }}
+        />
       ) : (
         <View style={styles.waiting}>
           <Text style={styles.waitingEmoji}>📹</Text>
           <Text style={styles.waitingText}>
-            {status === 'joining'
-              ? 'Joining live…'
-              : isHost
-                ? 'You are live — waiting for viewers…'
-                : 'Waiting for the host to join…'}
+            {status === 'joining' ? 'Joining live…' : 'Waiting for the host to join…'}
           </Text>
         </View>
       )}
-      {isHost && (
+      {showSelfFullscreen ? (
+        <View style={styles.waitingOverlay}>
+          <View style={styles.waitingPill}>
+            <Text style={styles.waitingPillText}>
+              {status === 'joining' ? 'Joining live…' : 'You are live — waiting for viewers…'}
+            </Text>
+          </View>
+        </View>
+      ) : null}
+      {isHost && remoteUid ? (
         <View style={styles.localPreview}>
           <RtcSurfaceView
             style={styles.localVideo}
@@ -707,7 +725,7 @@ export default function LiveVideo({
           />
           <Text style={styles.localLabel}>You</Text>
         </View>
-      )}
+      ) : null}
       {showLiveChip ? (
         <View style={styles.liveChip}>
           <Text style={styles.liveChipText}>
@@ -742,4 +760,7 @@ const styles = StyleSheet.create({
   waiting: { alignItems: 'center', flex: 1, justifyContent: 'center', padding: 20 },
   waitingEmoji: { fontSize: 40, marginBottom: 8 },
   waitingText: { color: '#d1d5db', fontSize: 14, textAlign: 'center' },
+  waitingOverlay: { alignItems: 'center', bottom: 12, left: 0, position: 'absolute', right: 0 },
+  waitingPill: { backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 6 },
+  waitingPillText: { color: '#fff', fontSize: 13, fontWeight: 'bold' },
 });
