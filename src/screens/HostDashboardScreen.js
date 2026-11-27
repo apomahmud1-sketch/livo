@@ -83,6 +83,13 @@ function fmtCountdown(totalSecs) {
 export default function HostDashboardScreen({ navigation, route }) {
   const { showToast, hosts, setHostOnline: setStoreHostOnline, setHostRate: setStoreHostRate, callRates, getLiveCallRate, diamonds } = useApp();
   const [loading, setLoading] = useState(true);
+  // Instant live: true once the Go Live gates can be decided
+  // (profile + host row + live check loaded). The earnings /
+  // withdrawals aggregation still loads in the background and
+  // only gates the dashboard spinner (loading), not going live —
+  // the centre Live tab used to wait for all of it before the
+  // camera even started.
+  const [gatesReady, setGatesReady] = useState(false);
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [hostRow, setHostRow] = useState(null);
@@ -164,18 +171,10 @@ export default function HostDashboardScreen({ navigation, route }) {
         setOnline(!!row.is_online);
         setMyTier(row.rate_tier || 'tier2');
         if (row.is_online && row.status === 'approved') startHostHeartbeat(row.id);
-        const [earn, wds] = await Promise.all([
-          fetchHostEarnings(row.id, u.id),
-          fetchMyWithdrawals(row.id),
-        ]);
-        if (cancelled) return;
-        setEarnings(earn);
-        setWithdrawals(wds);
-        // Surprise live check: a 'requested' check for this host
-        // (the Mother Panel asked the host to go live before a
-        // deadline). Deadline in the future → banner + countdown;
-        // already past → mark it expired and show the missed
-        // message instead of the prompt.
+        // Surprise live check FIRST (one quick query): goLive()
+        // marks a pending check 'live', so it must be loaded
+        // before the gates open — unlike the earnings below.
+        // (fetchRequestedLiveCheck never throws; null = none.)
         const check = await fetchRequestedLiveCheck(row.host_id);
         if (cancelled) return;
         if (check) {
@@ -189,11 +188,23 @@ export default function HostDashboardScreen({ navigation, route }) {
             setLiveCheckMissed(true);
           }
         }
+        // Gates are decidable now (profile + host row + live
+        // check) — the centre Live tab may fire goLive() while
+        // the earnings / withdrawals below still load.
+        setGatesReady(true);
+        const [earn, wds] = await Promise.all([
+          fetchHostEarnings(row.id, u.id),
+          fetchMyWithdrawals(row.id),
+        ]);
+        if (cancelled) return;
+        setEarnings(earn);
+        setWithdrawals(wds);
       } else {
         setEarnings({
           todayCoins: 0, todayDiamonds: 0, todayCalls: 0, todayMinutes: 0,
           totalCoins: 0, totalDiamonds: 0, totalCalls: 0, totalMinutes: 0, week: [],
         });
+        setGatesReady(true);
       }
       setLoading(false);
     })();
@@ -461,19 +472,22 @@ export default function HostDashboardScreen({ navigation, route }) {
   // Centre Live tab (autoGoLive): the tab press navigates here
   // with autoGoLive=true so the camera goes live straight away —
   // the dashboard itself is only the fallback surface (not
-  // approved / no host row yet / not female). Fires once the
-  // initial load finishes; the param is cleared first so it never
-  // re-fires on remount or after returning from a call. A missing
-  // host row means the user has never applied — stay on the
-  // dashboard so the Apply card is what they see. The gates and
-  // toasts are goLive()'s own, byte-for-byte.
+  // approved / no host row yet / not female). Fires once the Go
+  // Live gates are decidable (gatesReady: profile + host row +
+  // live check loaded) — NOT after the full dashboard load, so
+  // the earnings / withdrawals aggregation no longer delays the
+  // camera. The param is cleared first so it never re-fires on
+  // remount or after returning from a call. A missing host row
+  // means the user has never applied — stay on the dashboard so
+  // the Apply card is what they see. The gates and toasts are
+  // goLive()'s own, byte-for-byte.
   useEffect(() => {
     const wantAuto = route && route.params && route.params.autoGoLive;
-    if (!wantAuto || loading) return;
+    if (!wantAuto || !gatesReady) return;
     navigation.setParams({ autoGoLive: false });
     if (!hostRow) return;
     goLive();
-  }, [loading, hostRow, route && route.params && route.params.autoGoLive, navigation]);
+  }, [gatesReady, hostRow, route && route.params && route.params.autoGoLive, navigation]);
 
   const doWithdraw = async () => {
     if (!hostRow || withdrawing) return;
