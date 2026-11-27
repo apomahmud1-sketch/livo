@@ -328,6 +328,36 @@ export async function creditHostEarnings(hostId, diamonds, kind = 'call_earnings
 // Recent transactions rows for the signed-in user (newest first),
 // mapped to the shape the Bill · History view renders. Empty array
 // when not signed in or on any failure.
+// ── Live session earnings (2026-11-28 live-room rebuild) ────────
+// Gift + call earnings credited to this host since `sinceIso`
+// (the moment this live started). Powers the host's Live Income
+// and Gift History panels — real transactions rows only.
+export async function fetchSessionEarnings(userId, sinceIso) {
+  if (!userId || !supabase) return [];
+  try {
+    let q = supabase
+      .from('transactions')
+      .select('id,kind,amount_coins,amount_diamonds,reference,created_at')
+      .eq('profile_id', userId)
+      .in('kind', ['gift_received', 'call_earnings'])
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (sinceIso) q = q.gte('created_at', sinceIso);
+    const { data, error } = await q;
+    if (error || !Array.isArray(data)) return [];
+    return data.map((r) => ({
+      id: r.id,
+      kind: r.kind,
+      amountCoins: r.amount_coins || 0,
+      amountDiamonds: r.amount_diamonds || 0,
+      reference: r.reference,
+      createdAt: r.created_at,
+    }));
+  } catch (e) {
+    return [];
+  }
+}
+
 export async function fetchRecentTransactions(limit = 20) {
   const user = await getSignedInUser();
   if (!user || !supabase) return [];
