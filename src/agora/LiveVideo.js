@@ -533,6 +533,13 @@ export function setAgoraBeauty(enabled) {
 //     box. Any other joined remote is a 1v1 caller and drives the
 //     call layout (caller main + host small preview). Empty =
 //     no co-guests, behaviour exactly as before.
+//   deferJoin — [Pre-live] true = start the local camera preview
+//     on mount but do NOT fetch a token or join yet. The parent
+//     flips it to false when the host taps "Start Live" and the
+//     join effect re-runs and joins. While deferred the status
+//     is 'preview' and the waiting pill is hidden (the parent
+//     draws its own Start Live button). Default false — callers,
+//     callees and viewers join on mount exactly as before.
 //   onRemoteJoin(uid) / onRemoteLeave(uid) — optional callbacks
 //   onJoin() — the local user actually joined the channel
 //     (onJoinChannelSuccess). Call screens use it as the "connected"
@@ -559,6 +566,7 @@ export default function LiveVideo({
   style,
   showLiveChip = true, // [New UI] false = the parent draws its own top UI (timer pills, LIVE badge)
   coGuestUids = [], // [Live room] approved co-guest Agora uids (see above)
+  deferJoin = false, // [Pre-live] preview only until the parent flips it off (see above)
   onRemoteJoin,
   onRemoteLeave,
   onJoin,
@@ -566,7 +574,7 @@ export default function LiveVideo({
   onTokenExpiring,
   onTokenRenewalFailed,
 }) {
-  const [status, setStatus] = React.useState('idle'); // idle | joining | joined | error
+  const [status, setStatus] = React.useState('idle'); // idle | joining | joined | error | preview (pre-live: camera on, join deferred)
   const [error, setError] = React.useState('');
   // All currently-joined remote uids (a 1v1 caller and/or approved
   // co-guests). Split below into callerUid (call layout) and
@@ -690,6 +698,18 @@ export default function LiveVideo({
           }
         }
         if (cancelled) return;
+        // [Pre-live] The host is on the pre-live screen: the
+        // camera preview above is already running — stop here and
+        // wait. The parent flips deferJoin to false when the host
+        // taps "Start Live"; the effect re-runs (deferJoin is a
+        // dep) and continues into the token fetch + join below.
+        // The status 'preview' keeps the self view up with no
+        // "Joining live…" pill (the pill is also gated on
+        // !deferJoin in the render below).
+        if (deferJoin) {
+          if (!cancelled) setStatus('preview');
+          return;
+        }
         // Token fetch happens in the BACKGROUND of the running
         // preview: a token is minted per call, per channel (role
         // publisher for the host side, subscriber for the audience
@@ -739,9 +759,11 @@ export default function LiveVideo({
       joinedChannelRef.current = null;
     };
     // Re-join only when the channel, role or audio mode changes,
-    // or when the host taps "Try again" after a failed join.
+    // when the host taps "Try again" after a failed join, or when
+    // deferJoin flips (the host tapped "Start Live" on the
+    // pre-live screen and the token fetch + join may run now).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channel, role, audioOnly, joinAttempt]); // [F2] audioOnly added to deps
+  }, [channel, role, audioOnly, joinAttempt, deferJoin]); // [F2] audioOnly added to deps
 
   // Multi-guest split (defined here so the audio-only early return
   // below can use remoteUid): a joined remote whose uid matches an
@@ -903,7 +925,11 @@ export default function LiveVideo({
           </Text>
         </View>
       )}
-      {showSelfFullscreen ? (
+      {/* [Pre-live] No pill while the join is deferred — the
+          pre-live screen is camera + Start Live button only. The
+          pill returns ("Joining live…") once Start Live is tapped
+          and the join is actually running. */}
+      {showSelfFullscreen && !deferJoin ? (
         <View style={styles.waitingOverlay}>
           <View style={styles.waitingPill}>
             <Text style={styles.waitingPillText}>
