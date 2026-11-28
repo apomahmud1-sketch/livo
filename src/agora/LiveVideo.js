@@ -79,7 +79,7 @@ export const AGORA_TOKEN_IS_MISSING = !AGORA_TOKEN && !AGORA_TOKEN_SERVER_URL;
 // silent join stall is diagnosed from the server side: the
 // screenshot only shows a black screen, the table shows the
 // engine's own connection states.
-const LIVE_DIAG_VERSION = '28c';
+const LIVE_DIAG_VERSION = '28d';
 let liveDiagDeviceId = null;
 function logLiveDiag(stage, detail) {
   try {
@@ -102,6 +102,11 @@ function logLiveDiag(stage, detail) {
 // Throws a plain Error with a readable message on any failure
 // (server not deployed, not configured, network error, bad channel).
 // The server answers { token, channel, uid, role, expiresAt }.
+// Timeout is 45s with ONE retry: Render Free sleeps after
+// inactivity and takes ~18-60s to wake — the old 8s timeout
+// aborted every cold start and the live room sat on CONNECTING
+// forever (2026-11-28). The retry also covers the wake: the
+// first attempt wakes the server, the second finds it awake.
 export async function fetchAgoraToken(channelName, uid = 0, role = 'publisher') {
   if (!AGORA_TOKEN_SERVER_URL) {
     throw new Error(
@@ -115,36 +120,42 @@ export async function fetchAgoraToken(channelName, uid = 0, role = 'publisher') 
   const url =
     `${AGORA_TOKEN_SERVER_URL}/token?channel=${encodeURIComponent(channelName)}` +
     `&uid=${encodeURIComponent(String(uid))}&role=${role === 'subscriber' ? 'subscriber' : 'publisher'}`;
-  let res;
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let res;
     try {
-      res = await fetch(url, { signal: controller.signal });
-    } finally {
-      clearTimeout(timer);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 45000);
+      try {
+        res = await fetch(url, { signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (e) {
+      lastError = new Error(
+        'Could not reach the token server. Check your connection and that the token server is deployed and awake.',
+      );
+      logLiveDiag('token_fetch_failed', `${channelName} attempt=${attempt + 1} ${e && e.name ? e.name : 'fetch failed'}`);
+      continue;
     }
-  } catch (e) {
-    throw new Error(
-      'Could not reach the token server. Check your connection and that the token server is deployed and awake.',
-    );
+    let body = null;
+    try {
+      body = await res.json();
+    } catch (e) {
+      // Non-JSON answer — handled by the status check below.
+    }
+    if (!res.ok) {
+      throw new Error(
+        (body && body.error) ||
+          `Token server error ${res.status}. The server may not be configured yet (its App Certificate is missing).`,
+      );
+    }
+    if (!body || !body.token) {
+      throw new Error('Token server answered without a token. Try again.');
+    }
+    return body.token;
   }
-  let body = null;
-  try {
-    body = await res.json();
-  } catch (e) {
-    // Non-JSON answer — handled by the status check below.
-  }
-  if (!res.ok) {
-    throw new Error(
-      (body && body.error) ||
-        `Token server error ${res.status}. The server may not be configured yet (its App Certificate is missing).`,
-    );
-  }
-  if (!body || !body.token) {
-    throw new Error('Token server answered without a token. Try again.');
-  }
-  return body.token;
+  throw lastError || new Error('Could not reach the token server. Try again.');
 }
 
 // Resolve the token to join with: explicit prop token first, then
@@ -794,6 +805,19 @@ export default function LiveVideo({
         // !deferJoin in the render below).
         if (deferJoin) {
           if (!cancelled) setStatus('preview');
+          // Warm up the token server while the host looks at the
+          // camera: Render Free sleeps, and a cold token fetch
+          // after Start Live would wait ~18-60s for the wake.
+          // Fire-and-forget — a failure here changes nothing.
+          if (AGORA_TOKEN_SERVER_URL) {
+            try {
+              const warmController = new AbortController();
+              const warmTimer = setTimeout(() => warmController.abort(), 45000);
+              fetch(`${AGORA_TOKEN_SERVER_URL}/health`, { signal: warmController.signal })
+                .catch(() => {})
+                .finally(() => clearTimeout(warmTimer));
+            } catch (e) { /* warm-up never blocks the preview */ }
+          }
           return;
         }
         // Token fetch happens in the BACKGROUND of the running
