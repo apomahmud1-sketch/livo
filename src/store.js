@@ -693,7 +693,7 @@ export function AppProvider({ children }) {
     }), false);
     const hostShare = Math.round(cost * (100 - PLATFORM_COMMISSION_PERCENT) / 100);
     if (host && host.id) {
-      creditHostEarnings(host.id, hostShare * COIN_TO_DIAMOND_RATE, 'call_earnings', host.name);
+      creditHostEarnings(host.id, hostShare * COIN_TO_DIAMOND_RATE, 'call_earnings', host.name, user ? user.id : null);
     }
     return settled.then((ok) => (ok ? { cost } : false));
   };
@@ -738,7 +738,7 @@ export function AppProvider({ children }) {
       // currently 100 = full gift price as Diamonds). The call share
       // is 100 - PLATFORM_COMMISSION_PERCENT = 70%.
       const giftShare = Math.round(gift.price * GIFT_HOST_SHARE_PERCENT / 100);
-      creditHostEarnings(host.id, giftShare * COIN_TO_DIAMOND_RATE, 'gift_received', gift.id || gift.name);
+      creditHostEarnings(host.id, giftShare * COIN_TO_DIAMOND_RATE, 'gift_received', gift.id || gift.name, user ? user.id : null);
       // Best-effort: bump the host row's total_gifts. Never blocks
       // the gift and never throws — a failure just leaves the
       // counter one behind until the next gift.
