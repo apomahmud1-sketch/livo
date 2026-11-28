@@ -22,7 +22,6 @@ import {
   Modal,
   Pressable,
   ScrollView,
-  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -31,7 +30,7 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
-import { Crown, Eye, Gift, Heart, Share2, Video, X } from 'lucide-react-native';
+import { Crown, Eye, Gift, Heart, Phone, Video, X } from 'lucide-react-native';
 import { THEME, formatViewers } from '../config';
 import { useApp } from '../store';
 import { supabase } from '../supabase/client';
@@ -49,6 +48,7 @@ import {
 } from '../supabase/guest_requests';
 import LiveVideo, { agoraUidForUser } from '../agora/LiveVideo';
 import GiftSheet from '../components/GiftSheet';
+import DailyGiftRank from '../components/DailyGiftRank';
 // Report a host to the Mother Panel (see ReportSheet): a viewer
 // watching this live room can report the host — the report lands
 // in the public.reports table for the owner to review.
@@ -127,6 +127,15 @@ export default function LiveRoomScreen({ route, navigation }) {
   const [hostVerified, setHostVerified] = useState(host ? host.verified === true : false);
   const [joinNotice, setJoinNotice] = useState(null);
   const [hostSheetOpen, setHostSheetOpen] = useState(false);
+  // Host chip self-heal (2026-11-28): the route host object can
+  // carry a stale "Host u-..." name and no 8-digit ID when the
+  // live.js profile lookup missed — fetch the host's profile
+  // directly (see the effect below) and use it for the chip.
+  const [chipName, setChipName] = useState(null);
+  const [chipUserId, setChipUserId] = useState(null);
+  const [chipPhoto, setChipPhoto] = useState(null);
+  // Daily gift rank modal (left-side 🏆 Rank pill).
+  const [rankOpen, setRankOpen] = useState(false);
   // Multi-guest (co-anchor): 'none' | 'pending' | 'approved' |
   // 'declined'. isCoGuest = approved and currently broadcasting.
   const [guestStatus, setGuestStatus] = useState('none');
@@ -161,6 +170,30 @@ export default function LiveRoomScreen({ route, navigation }) {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  // Host chip self-heal: when the route host object has no
+  // 8-digit ID or a "Host u-..." fallback name, fetch the host's
+  // profile directly (2026-11-28 — the 8-digit ID must show in
+  // every room, everywhere). Runs once per host.
+  useEffect(() => {
+    if (!host || (host.userId && !String(host.name || '').startsWith('Host '))) return undefined;
+    if (!host.profileId) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('username,user_id,avatar_url')
+          .eq('id', host.profileId)
+          .maybeSingle();
+        if (cancelled || error || !data) return;
+        if (data.username) setChipName(String(data.username));
+        if (data.user_id) setChipUserId(String(data.user_id));
+        if (data.avatar_url) setChipPhoto({ uri: String(data.avatar_url) });
+      } catch (e) { /* keep the mapped values */ }
+    })();
+    return () => { cancelled = true; };
+  }, [host]);
 
   // Live timer: ticks from the host's real live start.
   useEffect(() => {
@@ -403,12 +436,6 @@ export default function LiveRoomScreen({ route, navigation }) {
     }
   }, []);
 
-  const shareRoom = async () => {
-    try {
-      await Share.share({ message: `Watch ${host.name} live on Livo! ID: ${host.userId || ''}` });
-    } catch (e) { /* user dismissed the sheet */ }
-  };
-
   const onGiftSent = (gift) => {
     // A real event that just happened: show it in this room's feed
     // as a local line (gold, like the preview) + the uploaded
@@ -457,21 +484,21 @@ export default function LiveRoomScreen({ route, navigation }) {
         <View style={styles.hostChip}>
           <TouchableOpacity style={styles.hostChipMain} onPress={() => setHostSheetOpen(true)} activeOpacity={0.85}>
             <View style={styles.hostAvatarWrap}>
-              {host.photo ? (
-                <Image source={host.photo} style={styles.hostAvatar} resizeMode="cover" />
+              {(chipPhoto || host.photo) ? (
+                <Image source={chipPhoto || host.photo} style={styles.hostAvatar} resizeMode="cover" />
               ) : (
                 <View style={[styles.hostAvatar, styles.hostAvatarFallback]}>
-                  <Text style={styles.hostAvatarLetter}>{host.name ? host.name[0].toUpperCase() : '?'}</Text>
+                  <Text style={styles.hostAvatarLetter}>{(chipName || host.name) ? (chipName || host.name)[0].toUpperCase() : '?'}</Text>
                 </View>
               )}
               <Text style={styles.hostCrown}>👑</Text>
             </View>
             <View style={styles.hostMeta}>
               <Text style={styles.hostName} numberOfLines={1}>
-                {host.name}
+                {chipName || host.name}
                 {hostVerified ? <Text style={styles.verifiedCheck}> ✓</Text> : null}
               </Text>
-              <Text style={styles.hostId}>ID: {host.userId || '—'}</Text>
+              <Text style={styles.hostId}>ID: {chipUserId || host.userId || '—'}</Text>
               {hostVip ? (
                 <View style={styles.vipBadge}>
                   <Text style={styles.vipBadgeTxt}>👑 VIP {hostVip}</Text>
@@ -488,12 +515,13 @@ export default function LiveRoomScreen({ route, navigation }) {
           </TouchableOpacity>
         </View>
         <View style={{ flex: 1 }} />
-        {viewerCount != null ? (
-          <TouchableOpacity style={styles.viewerPill} onPress={() => setAudienceOpen(true)} activeOpacity={0.8}>
-            <Eye size={14} color="#fff" strokeWidth={2} />
-            <Text style={styles.viewerTxt}>{formatViewers(viewerCount)}</Text>
-          </TouchableOpacity>
-        ) : null}
+        {/* Viewer count box, top right — always visible (0 when
+            nobody is in the room yet), never hidden. Tap opens
+            Audience Management. */}
+        <TouchableOpacity style={styles.viewerPill} onPress={() => setAudienceOpen(true)} activeOpacity={0.8}>
+          <Eye size={14} color="#fff" strokeWidth={2} />
+          <Text style={styles.viewerTxt}>{formatViewers(viewerCount ?? viewerList.length)}</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.closeBtn} onPress={() => navigation.goBack()} activeOpacity={0.8}>
           <X size={20} color="#fff" strokeWidth={2.5} />
         </TouchableOpacity>
@@ -511,6 +539,12 @@ export default function LiveRoomScreen({ route, navigation }) {
           </View>
         ) : null}
       </View>
+
+      {/* Daily gift rank (left side): tap → today's top gift
+          senders list. */}
+      <TouchableOpacity style={styles.rankPill} onPress={() => setRankOpen(true)} activeOpacity={0.85}>
+        <Text style={styles.rankTxt}>🏆 Rank</Text>
+      </TouchableOpacity>
 
       {/* Co-guest banner: approved guests see they are live */}
       {isCoGuest ? (
@@ -581,8 +615,9 @@ export default function LiveRoomScreen({ route, navigation }) {
       </View>
 
       {/* Bottom bar (viewer, photo layout): comment box + Like +
-          Gift + Follow + Share. No 1v1 Call here — it lives in the
-          host sheet (tap the host chip at the top). */}
+          Gift + Follow + Call. No Share below (2026-11-28) — the
+          Call button sends a 1v1 video call to the host; when the
+          host accepts, the live room closes and the call starts. */}
       <View style={styles.bottomBar}>
         <View style={[styles.inputWrap, chatDisabled && styles.inputWrapDisabled]}>
           <TextInput
@@ -635,10 +670,14 @@ export default function LiveRoomScreen({ route, navigation }) {
           <Text style={styles.bottomBtnLabel}>{isFollowing ? 'Following' : 'Follow'}</Text>
         </View>
         <View style={styles.bottomBtnWrap}>
-          <TouchableOpacity style={styles.bottomBtn} onPress={shareRoom} activeOpacity={0.85}>
-            <Share2 size={22} color="#fff" strokeWidth={2.2} />
+          <TouchableOpacity
+            style={[styles.bottomBtn, styles.bottomBtnCall]}
+            onPress={() => navigation.navigate('VideoCall', { host })}
+            activeOpacity={0.85}
+          >
+            <Phone size={22} color="#fff" strokeWidth={2.2} />
           </TouchableOpacity>
-          <Text style={styles.bottomBtnLabel}>Share</Text>
+          <Text style={styles.bottomBtnLabel}>Call</Text>
         </View>
       </View>
 
@@ -686,7 +725,7 @@ export default function LiveRoomScreen({ route, navigation }) {
         <View style={styles.modalShade}>
           <View style={styles.modalCard}>
             <View style={styles.modalHead}>
-              <Text style={styles.modalTitle}>{host.name}</Text>
+              <Text style={styles.modalTitle}>{chipName || host.name}</Text>
               <TouchableOpacity onPress={() => setHostSheetOpen(false)} activeOpacity={0.8}>
                 <X size={20} color="#fff" strokeWidth={2.5} />
               </TouchableOpacity>
@@ -699,7 +738,7 @@ export default function LiveRoomScreen({ route, navigation }) {
                   <Text style={styles.sheetAvatarLetter}>{host.name ? host.name[0].toUpperCase() : '?'}</Text>
                 </View>
               )}
-              <Text style={styles.sheetId}>ID: {host.userId || '—'}</Text>
+              <Text style={styles.sheetId}>ID: {chipUserId || host.userId || '—'}</Text>
               {hostVip ? (
                 <View style={styles.vipBadge}>
                   <Text style={styles.vipBadgeTxt}>👑 VIP {hostVip}</Text>
@@ -753,6 +792,8 @@ export default function LiveRoomScreen({ route, navigation }) {
       </Modal>
 
       <GiftSheet visible={giftOpen} host={host} onClose={() => setGiftOpen(false)} onSent={onGiftSent} />
+
+      <DailyGiftRank visible={rankOpen} hostProfileId={host.profileId} hostName={chipName || host.name} onClose={() => setRankOpen(false)} />
 
       {/* Report sheet: a viewer reports this host to the owner. */}
       <ReportSheet visible={reportOpen} host={host} onClose={() => setReportOpen(false)} />
@@ -833,6 +874,9 @@ const styles = StyleSheet.create({
   },
   // LIVE + timer row under the host chip (photo).
   liveRow: { alignItems: 'center', flexDirection: 'row', gap: 8, paddingHorizontal: 12, paddingTop: 8 },
+  // Daily gift rank pill (left side, under the LIVE row).
+  rankPill: { alignSelf: 'flex-start', backgroundColor: 'rgba(10,0,20,0.52)', borderColor: 'rgba(255,255,255,0.16)', borderRadius: 999, borderWidth: 1, marginLeft: 12, marginTop: 8, paddingHorizontal: 10, paddingVertical: 6 },
+  rankTxt: { color: '#ffe9a8', fontSize: 12, fontWeight: '900' },
   timerPill: {
     alignItems: 'center',
     backgroundColor: 'rgba(10,0,20,0.52)',
@@ -994,6 +1038,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 52,
   },
+  bottomBtnCall: { backgroundColor: '#22c55e', borderWidth: 0 },
   bottomBtnOn: { borderColor: '#f7b733' },
   bottomBtnLabel: { color: '#fff', fontSize: 10.5, fontWeight: '800', marginTop: 3 },
   likeBadge: { alignItems: 'center', backgroundColor: '#ff5da2', borderRadius: 9, height: 18, justifyContent: 'center', minWidth: 18, paddingHorizontal: 4, position: 'absolute', right: -2, top: -4 },
