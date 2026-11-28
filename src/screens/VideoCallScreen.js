@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, BackHandler, Dimensions, Image, Modal, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Animated, BackHandler, Dimensions, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
-import { Ban, Camera, Check, Coins, Crown, Ellipsis, Eye, Gift, Heart, History, Mic, MicOff, Phone, RefreshCw, Share2, UserPlus, Users, Video, Volume2, VolumeX, X } from 'lucide-react-native';
+import { Ban, Camera, Check, Coins, Crown, Ellipsis, Eye, Gift, Heart, History, Mic, MicOff, Phone, RefreshCw, UserPlus, Users, Video, Volume2, VolumeX, X } from 'lucide-react-native';
 import { COLORS, PLATFORM_COMMISSION_PERCENT, THEME, formatViewers } from '../config';
 import { useApp } from '../store';
 import { supabase } from '../supabase/client';
@@ -34,8 +34,10 @@ import {
   buildChannelName,
   declineCall,
   endCallRecord,
+  fetchCallerProfile,
   markCallMissed,
   placeCall,
+  setLiveRoomActive,
   subscribeToCallUpdates,
 } from '../calls/signalling';
 // [F5] Full-screen gift animation for expensive gifts (price >= 1000 coins)
@@ -57,7 +59,8 @@ import LiveVideo, {
   switchAgoraCamera,
 } from '../agora/LiveVideo';
 import { fetchSessionEarnings } from '../supabase/wallet';
-import { blockRoomUser, fetchRoomBlocks, setLiveChatDisabled, unblockRoomUser } from '../supabase/host';
+import { blockRoomUser, fetchRoomBlocks, setHostOfflineByHostId, setLiveChatDisabled, unblockRoomUser } from '../supabase/host';
+import DailyGiftRank from '../components/DailyGiftRank';
 import VoiceCallScreen from './VoiceCallScreen'; // [F2] audio-only variant
 // [F7] Voice changer — Agora voice presets, see src/utils/voiceChanger.js
 import { VOICE_PRESETS, applyVoicePreset, getVoicePresetLabel, resetVoicePreset } from '../utils/voiceChanger';
@@ -310,6 +313,20 @@ export default function VideoCallScreen({ route, navigation }) {
   const [liveStartIso, setLiveStartIso] = useState(null);
   const [sessionEarnings, setSessionEarnings] = useState([]);
   const [roomBlocks, setRoomBlocks] = useState([]);
+  // Host chip self-heal (2026-11-28): the route host object can
+  // carry a stale "Host u-..." name and no 8-digit ID when the
+  // live.js profile lookup missed — the chip reads the host's OWN
+  // profile directly instead (see the own-meta effect below).
+  const [ownName, setOwnName] = useState(null);
+  const [ownUserId, setOwnUserId] = useState(null);
+  const [ownAvatar, setOwnAvatar] = useState(null);
+  // Daily gift rank modal (left-side 🏆 Rank pill).
+  const [rankOpen, setRankOpen] = useState(false);
+  // Incoming 1v1 call while live (2026-11-28): a viewer tapped
+  // Call in the room — { callId, callerId, callerName,
+  // callerPhoto }. Accept flips this same screen into the 1v1
+  // call (same Agora channel, no re-join) and closes the live.
+  const [liveInvite, setLiveInvite] = useState(null);
   // [Vero] Rare Vehicle — Premium members get a vehicle entrance
   // effect when a call starts: a car slides across the screen once.
   const vehicleX = useRef(new Animated.Value(-140)).current;
@@ -331,13 +348,16 @@ export default function VideoCallScreen({ route, navigation }) {
     return () => clearInterval(timerRef.current);
   }, [stage, talkStarted]);
 
-  // [Presence] Join the live-room presence channel when the call
-  // connects, so the host's viewer count is real (see
+  // [Presence] Join the live-room presence channel once the room
+  // is open, so the host's viewer count is real (see
   // src/supabase/presence.js). Leaves on unmount / endCall.
+  // Gated on Start Live (not on the Agora join): presence is
+  // Supabase Realtime, and a slow/stalled Agora join used to
+  // leave the viewer count at null forever (2026-11-28).
   useEffect(() => {
-    // [Pre-live] The host's presence starts only once the channel
-    // actually joined — pre-live / joining is not "live" yet.
-    if (stage !== 'calling' || (asHost && !liveJoined)) return undefined;
+    // [Pre-live] The host's presence starts once Start Live is
+    // tapped — pre-live is not "live" yet.
+    if (stage !== 'calling' || (asHost && preLive)) return undefined;
     let cancelled = false;
     (async () => {
       let viewer = { id: undefined, name: 'Guest' };
@@ -364,12 +384,12 @@ export default function VideoCallScreen({ route, navigation }) {
         roomChannelRef.current = null;
       }
     };
-  }, [stage, host, asHost, liveJoined]);
+  }, [stage, host, asHost, preLive]);
 
   // ── Live room data (host broadcasting only) ────────────────
   // Live chat for this room (room_messages, same as LiveRoomScreen).
   useEffect(() => {
-    if (!asHost || stage !== 'calling' || !host || !liveJoined) return undefined;
+    if (!asHost || stage !== 'calling' || !host || preLive) return undefined;
     let cancelled = false;
     fetchRoomMessages(host.id, 50).then((rows) => {
       if (!cancelled) setRoomMessages(rows);
@@ -384,7 +404,7 @@ export default function VideoCallScreen({ route, navigation }) {
       cancelled = true;
       unsub();
     };
-  }, [asHost, stage, host, liveJoined]);
+  }, [asHost, stage, host, preLive]);
 
   // Keep the host's room chat scrolled to the newest message.
   useEffect(() => {
@@ -394,22 +414,23 @@ export default function VideoCallScreen({ route, navigation }) {
   }, [roomMessages]);
 
   // Viewers: count + list (Realtime presence, same channel the
-  // call already joins above).
+  // call already joins above). Gated on Start Live, not on the
+  // Agora join (see the presence effect above).
   useEffect(() => {
-    if (!asHost || stage !== 'calling' || !host || !liveJoined) return undefined;
+    if (!asHost || stage !== 'calling' || !host || preLive) return undefined;
     const unsubCount = subscribeRoomViewers(host.id, (count) => setViewerCount(count));
     const unsubList = subscribeRoomPresence(host.id, (entries) => setViewerList(entries));
     return () => {
       if (unsubCount) unsubCount();
       if (unsubList) unsubList();
     };
-  }, [asHost, stage, host, liveJoined]);
+  }, [asHost, stage, host, preLive]);
 
   // Multi-guest requests for this room: initial list + Realtime.
   // Upsert on insert/update while pending/approved; drop the row
   // when it is declined or ended (it is no longer actionable).
   useEffect(() => {
-    if (!asHost || stage !== 'calling' || !host || !liveJoined) return undefined;
+    if (!asHost || stage !== 'calling' || !host || preLive) return undefined;
     let cancelled = false;
     fetchGuestRequests(host.id).then((rows) => {
       if (!cancelled) setGuestRequests(rows);
@@ -429,7 +450,7 @@ export default function VideoCallScreen({ route, navigation }) {
       cancelled = true;
       unsub();
     };
-  }, [asHost, stage, host, liveJoined]);
+  }, [asHost, stage, host, preLive]);
 
   // Live start (for session earnings + income): the moment this
   // live actually joined.
@@ -438,7 +459,11 @@ export default function VideoCallScreen({ route, navigation }) {
   }, [asHost, liveJoined, liveStartIso]);
 
   // Own VIP level + verified badge for the host chip (the route
-  // host object may predate the live.js mapping).
+  // host object may predate the live.js mapping). Also the chip's
+  // NAME + 8-digit ID + photo: the route host object can carry a
+  // stale "Host u-..." name and no ID when the live.js profile
+  // lookup missed (2026-11-28) — read the host's OWN profile
+  // directly so the chip always shows the real name and ID.
   useEffect(() => {
     if (!asHost || !myId) return undefined;
     let cancelled = false;
@@ -449,10 +474,13 @@ export default function VideoCallScreen({ route, navigation }) {
           setHostVerified(String(h.data.verification_status || '').toLowerCase() === 'verified');
           setChatDisabled(h.data.live_chat_disabled === true);
         }
-        const p = await supabase.from('profiles').select('vip_level').eq('id', myId).maybeSingle();
+        const p = await supabase.from('profiles').select('username,user_id,avatar_url,vip_level').eq('id', myId).maybeSingle();
         if (!cancelled && p && !p.error && p.data) {
           const m = /^vip(\d+)$/.exec(String(p.data.vip_level || '').toLowerCase());
           setHostVip(m ? Number(m[1]) : null);
+          if (p.data.username) setOwnName(String(p.data.username));
+          if (p.data.user_id) setOwnUserId(String(p.data.user_id));
+          if (p.data.avatar_url) setOwnAvatar({ uri: String(p.data.avatar_url) });
         }
       } catch (e) { /* keep mapped values */ }
     })();
@@ -514,6 +542,12 @@ export default function VideoCallScreen({ route, navigation }) {
   // controls at all (2026-11-28). The LIVE badge + timer below
   // still wait for the real join (liveJoined).
   const showLiveRoomUI = isLiveRoom && stage === 'calling' && !preLive;
+  // Host chip display values: for the host's own room, prefer the
+  // directly-fetched own profile (name + 8-digit ID + photo) —
+  // the route host object can be stale (see the own-meta effect).
+  const chipName = asHost ? ownName || host.name : host.name;
+  const chipUserId = asHost ? ownUserId || host.userId : host.userId;
+  const chipPhoto = asHost ? ownAvatar || host.photo : host.photo;
   // [Pre-live] Overlays (timer, name, controls, room UI) show for
   // callers / callees exactly as before. For the host they appear
   // only once the channel actually joined — pre-live and the
@@ -578,12 +612,6 @@ export default function VideoCallScreen({ route, navigation }) {
     } else {
       showToast(next ? 'Chat disabled for viewers' : 'Chat enabled');
     }
-  };
-
-  const shareRoom = async () => {
-    try {
-      await Share.share({ message: `I'm live on Livo! Watch ${host.name} — ID: ${host.userId || ''}` });
-    } catch (e) { /* dismissed */ }
   };
 
   const loadSessionEarnings = async () => {
@@ -653,6 +681,55 @@ export default function VideoCallScreen({ route, navigation }) {
     return unsub;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isCallee]);
+
+  // Incoming 1v1 call WHILE live (2026-11-28): the host is
+  // broadcasting and a viewer tapped Call in the room. The
+  // app-root listener does NOT navigate for this host (see
+  // setLiveRoomActive) — this screen subscribes to ringing rows
+  // for its own channel instead and shows the incoming overlay
+  // on top of the live room. The flag below tells the root
+  // listener the live room is open for this host.
+  useEffect(() => {
+    if (!asHost || stage !== 'calling' || !host || preLive) return undefined;
+    setLiveRoomActive(host.id);
+    let inviteUnsub = null;
+    let cancelled = false;
+    const channel = supabase
+      .channel(`livo-live-invite-${host.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'calls', filter: `channel=eq.${buildChannelName(host.id)}` },
+        async (payload) => {
+          const call = payload && payload.new;
+          if (cancelled || !call || call.status !== 'ringing') return;
+          if (call.caller_id === myId) return; // my own outgoing call
+          const caller = await fetchCallerProfile(call.caller_id);
+          if (cancelled) return;
+          setLiveInvite({
+            callId: call.id,
+            callerId: call.caller_id,
+            callerName: (caller && caller.name) || 'Livo caller',
+            callerPhoto: (caller && caller.photo) || null,
+          });
+          // Caller backs out before the host answers → dismiss.
+          if (inviteUnsub) inviteUnsub();
+          inviteUnsub = subscribeToCallUpdates(call.id, (updated) => {
+            if (updated.status === 'missed' || updated.status === 'ended' || updated.status === 'declined') {
+              setLiveInvite((prev) => (prev && prev.callId === call.id ? null : prev));
+            }
+          });
+        },
+      )
+      .subscribe();
+    return () => {
+      cancelled = true;
+      setLiveRoomActive(null);
+      if (inviteUnsub) inviteUnsub();
+      try {
+        supabase.removeChannel(channel);
+      } catch (e) { /* already removed */ }
+    };
+  }, [asHost, stage, host, preLive, myId]);
 
   // Hardware back during a video call ends the call through the
   // SAME endCall path (charge + record) instead of popping
@@ -769,6 +846,41 @@ export default function VideoCallScreen({ route, navigation }) {
     navigation.goBack();
   };
 
+  // Accept a viewer call while live: mark the row accepted, take
+  // the live room down (host goes offline — Home stops showing
+  // the live), and flip this same screen into the 1v1 call. The
+  // caller joins the same Agora channel this LiveVideo is already
+  // in, so onRemoteJoin sets the caller and the layout flips on
+  // its own — no leave + re-join, no "already in channel" error.
+  // The row id is kept so finishCall closes it when the call
+  // ends; the caller ending first closes this screen too.
+  const acceptLiveInvite = async () => {
+    if (!liveInvite) return;
+    const invite = liveInvite;
+    setLiveInvite(null);
+    if (invite.callId) {
+      acceptCall(invite.callId).catch(() => {});
+      callIdRef.current = invite.callId;
+      callAcceptedRef.current = true;
+      if (callUnsubRef.current) callUnsubRef.current();
+      callUnsubRef.current = subscribeToCallUpdates(invite.callId, (updated) => {
+        if (updated.status === 'ended') {
+          finishCall();
+          navigation.goBack();
+        }
+      });
+    }
+    setHostOfflineByHostId(host.id);
+    setTalkStarted(true);
+  };
+
+  const declineLiveInvite = () => {
+    if (!liveInvite) return;
+    const invite = liveInvite;
+    setLiveInvite(null);
+    if (invite.callId) declineCall(invite.callId).catch(() => {});
+  };
+
   // Core end-of-call work: stop timers, reset the voice preset,
   // leave Agora + the presence room, and bill / close the
   // signalling row. Idempotent (endedRef) — safe to run from the
@@ -860,7 +972,10 @@ export default function VideoCallScreen({ route, navigation }) {
   };
 
   // Host ending a live (the X in the live room + More → End live).
+  // The X exits the room: take the host offline too, so Home
+  // stops showing a dead live (2026-11-28).
   const endLive = () => {
+    setHostOfflineByHostId(host.id);
     finishCall();
     showToast('Live ended');
     navigation.goBack();
@@ -1074,21 +1189,21 @@ export default function VideoCallScreen({ route, navigation }) {
           <View style={styles.liveTopRow} pointerEvents="box-none">
             <View style={styles.liveHostChip}>
               <View style={styles.liveAvatarWrap}>
-                {host.photo ? (
-                  <Image source={host.photo} style={styles.liveAvatar} resizeMode="cover" />
+                {chipPhoto ? (
+                  <Image source={chipPhoto} style={styles.liveAvatar} resizeMode="cover" />
                 ) : (
                   <View style={[styles.liveAvatar, styles.liveAvatarFallback]}>
-                    <Text style={styles.liveAvatarLetter}>{host.name ? host.name[0].toUpperCase() : '?'}</Text>
+                    <Text style={styles.liveAvatarLetter}>{chipName ? chipName[0].toUpperCase() : '?'}</Text>
                   </View>
                 )}
                 <Text style={styles.liveCrown}>👑</Text>
               </View>
               <View style={styles.liveHostMeta}>
                 <Text style={styles.liveHostName} numberOfLines={1}>
-                  {host.name}
+                  {chipName}
                   {hostVerified ? <Text style={styles.liveVerified}> ✓</Text> : null}
                 </Text>
-                <Text style={styles.liveHostId}>ID: {host.userId || '—'}</Text>
+                <Text style={styles.liveHostId}>ID: {chipUserId || '—'}</Text>
                 {hostVip ? (
                   <View style={styles.liveVipBadge}>
                     <Text style={styles.liveVipTxt}>👑 VIP {hostVip}</Text>
@@ -1097,12 +1212,13 @@ export default function VideoCallScreen({ route, navigation }) {
               </View>
             </View>
             <View style={{ flex: 1 }} />
-            {viewerCount != null ? (
-              <TouchableOpacity style={styles.liveViewerPill} onPress={() => setAudienceOpen(true)} activeOpacity={0.8}>
-                <Eye size={14} color="#fff" strokeWidth={2} />
-                <Text style={styles.liveViewerTxt}>{formatViewers(viewerCount)}</Text>
-              </TouchableOpacity>
-            ) : null}
+            {/* Viewer count box, top right — always visible (0 when
+                nobody is in the room yet), never hidden. Tap opens
+                Audience Management. */}
+            <TouchableOpacity style={styles.liveViewerPill} onPress={() => setAudienceOpen(true)} activeOpacity={0.8}>
+              <Eye size={14} color="#fff" strokeWidth={2} />
+              <Text style={styles.liveViewerTxt}>{formatViewers(viewerCount ?? viewerList.length)}</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.liveCloseBtn} onPress={endLive} activeOpacity={0.8}>
               <X size={20} color="#fff" strokeWidth={2.5} />
             </TouchableOpacity>
@@ -1116,8 +1232,43 @@ export default function VideoCallScreen({ route, navigation }) {
               <Text style={styles.liveTimerTxt}>{liveJoined ? formatLiveDuration(seconds) : 'Connecting…'}</Text>
             </View>
           </View>
+          {/* Daily gift rank (left side): tap → today's top
+              gift senders list. */}
+          <TouchableOpacity style={styles.liveRankPill} onPress={() => setRankOpen(true)} activeOpacity={0.85}>
+            <Text style={styles.liveRankTxt}>🏆 Rank</Text>
+          </TouchableOpacity>
         </>
       ) : null}
+
+      {/* Incoming 1v1 call while live: a viewer tapped Call in
+          the room. Accept closes the live room and flips this
+          screen into the 1v1 call; Decline declines the invite. */}
+      {liveInvite ? (
+        <View style={styles.liveInviteCard} pointerEvents="box-none">
+          <View style={styles.liveInviteInner}>
+            {liveInvite.callerPhoto ? (
+              <Image source={liveInvite.callerPhoto} style={styles.liveInviteAvatar} resizeMode="cover" />
+            ) : (
+              <View style={[styles.liveInviteAvatar, styles.liveInviteAvatarFallback]}>
+                <Text style={styles.liveInviteAvatarTxt}>{liveInvite.callerName ? liveInvite.callerName[0].toUpperCase() : '?'}</Text>
+              </View>
+            )}
+            <Text style={styles.liveInviteName} numberOfLines={1}>{liveInvite.callerName}</Text>
+            <Text style={styles.liveInviteSub}>Incoming video call — accept to take the call (your live room will close)</Text>
+            <View style={styles.liveInviteBtns}>
+              <TouchableOpacity style={[styles.liveInviteBtn, styles.liveInviteDecline]} onPress={declineLiveInvite} activeOpacity={0.85}>
+                <X size={22} color="#fff" strokeWidth={2.5} />
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.liveInviteBtn, styles.liveInviteAccept]} onPress={acceptLiveInvite} activeOpacity={0.85}>
+                <Phone size={22} color="#fff" strokeWidth={2.4} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      ) : null}
+
+      <DailyGiftRank visible={rankOpen} hostProfileId={host.profileId} hostName={chipName} onClose={() => setRankOpen(false)} />
+
       {vipLevel && (
         <Animated.View style={[styles.vehicle, { transform: [{ translateX: vehicleX }] }]}>
           <Text style={styles.vehicleText}>🏎️</Text>
@@ -1126,7 +1277,7 @@ export default function VideoCallScreen({ route, navigation }) {
 
       {/* Live room overlays (host broadcasting, no 1v1 caller):
           tap-the-empty-screen hearts, live chat, and the photo
-          bottom bar (comment box + Gift + Share + More). Hidden
+          bottom bar (comment box + Gift + More). Hidden
           during a 1v1 call. */}
       {showLiveRoomUI ? (
         <>
@@ -1178,7 +1329,8 @@ export default function VideoCallScreen({ route, navigation }) {
             </ScrollView>
           </View>
           {/* Bottom bar (host, photo layout): comment box + Gift
-              (opens Gift History) + Share + More (host controls). */}
+              (opens Gift History) + More (host controls). No
+              Share below (2026-11-28) — viewers call instead. */}
           <View style={styles.liveBottomBar}>
             <View style={styles.liveInputWrap}>
               <TextInput
@@ -1200,12 +1352,6 @@ export default function VideoCallScreen({ route, navigation }) {
                 <Gift size={22} color="#fff" strokeWidth={2.2} />
               </TouchableOpacity>
               <Text style={styles.liveBottomBtnLabel}>Gift</Text>
-            </View>
-            <View style={styles.liveBottomBtnWrap}>
-              <TouchableOpacity style={styles.liveBottomBtn} onPress={shareRoom} activeOpacity={0.85}>
-                <Share2 size={22} color="#fff" strokeWidth={2.2} />
-              </TouchableOpacity>
-              <Text style={styles.liveBottomBtnLabel}>Share</Text>
             </View>
             <View style={styles.liveBottomBtnWrap}>
               <TouchableOpacity style={styles.liveBottomBtn} onPress={() => setMoreOpen(true)} activeOpacity={0.85}>
@@ -1936,6 +2082,20 @@ const styles = StyleSheet.create({
     width: 36,
   },
   liveRow: { alignItems: 'center', flexDirection: 'row', gap: 8, left: 0, paddingHorizontal: 12, position: 'absolute', right: 0, top: 112 },
+  liveRankPill: { alignItems: 'center', backgroundColor: 'rgba(10,0,20,0.52)', borderColor: 'rgba(255,255,255,0.16)', borderRadius: 999, borderWidth: 1, left: 12, paddingHorizontal: 10, paddingVertical: 6, position: 'absolute', top: 148 },
+  liveRankTxt: { color: '#ffe9a8', fontSize: 12, fontWeight: '900' },
+  // Incoming 1v1 call while live: centred card on top of the room.
+  liveInviteCard: { alignItems: 'center', bottom: 0, justifyContent: 'center', left: 0, position: 'absolute', right: 0, top: 0 },
+  liveInviteInner: { alignItems: 'center', backgroundColor: 'rgba(20,4,40,0.92)', borderColor: 'rgba(255,255,255,0.16)', borderRadius: 18, borderWidth: 1, maxWidth: 300, padding: 18, width: '84%' },
+  liveInviteAvatar: { borderRadius: 34, height: 68, width: 68 },
+  liveInviteAvatarFallback: { alignItems: 'center', backgroundColor: THEME.violet, justifyContent: 'center' },
+  liveInviteAvatarTxt: { color: '#fff', fontSize: 26, fontWeight: '900' },
+  liveInviteName: { color: '#fff', fontSize: 16, fontWeight: '900', marginTop: 10 },
+  liveInviteSub: { color: '#d9ccf5', fontSize: 12, lineHeight: 16, marginTop: 4, textAlign: 'center' },
+  liveInviteBtns: { flexDirection: 'row', gap: 24, marginTop: 16 },
+  liveInviteBtn: { alignItems: 'center', borderRadius: 30, height: 60, justifyContent: 'center', width: 60 },
+  liveInviteDecline: { backgroundColor: THEME.red },
+  liveInviteAccept: { backgroundColor: '#22c55e' },
   liveBadge: { alignItems: 'center', backgroundColor: THEME.red, borderRadius: 6, flexDirection: 'row', gap: 4, paddingHorizontal: 7, paddingVertical: 3 },
   liveDot: { backgroundColor: '#fff', borderRadius: 3, height: 6, width: 6 },
   liveText: { color: '#fff', fontSize: 10, fontWeight: '900', letterSpacing: 0.6 },
