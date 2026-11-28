@@ -56,6 +56,7 @@ import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { AGORA_APP_ID, AGORA_APP_ID_IS_PLACEHOLDER, COLORS } from '../config';
 import { requestCallPermissions } from '../permissions';
+import { supabase } from '../supabase/client';
 
 // ── Token ──────────────────────────────────────────────────────
 // Token server base URL (no trailing slash). Empty = not deployed
@@ -70,6 +71,32 @@ export const AGORA_TOKEN_SERVER_URL = (
 // This file NEVER contains a real token value.
 export const AGORA_TOKEN = process.env.EXPO_PUBLIC_AGORA_TOKEN || '';
 export const AGORA_TOKEN_IS_MISSING = !AGORA_TOKEN && !AGORA_TOKEN_SERVER_URL;
+
+// ── Live join diagnostics ──────────────────────────────────────
+// The host's phone writes what the Agora engine actually does
+// into public.live_diagnostics (anon INSERT, fire-and-forget —
+// a failed write must never break the live flow). This is how a
+// silent join stall is diagnosed from the server side: the
+// screenshot only shows a black screen, the table shows the
+// engine's own connection states.
+const LIVE_DIAG_VERSION = '28c';
+let liveDiagDeviceId = null;
+function logLiveDiag(stage, detail) {
+  try {
+    if (!supabase) return;
+    if (!liveDiagDeviceId) {
+      liveDiagDeviceId =
+        'live-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    }
+    supabase
+      .from('live_diagnostics')
+      .insert({ stage, detail: detail || null, device_id: liveDiagDeviceId, app_version: LIVE_DIAG_VERSION })
+      .then(() => {})
+      .catch(() => {});
+  } catch (e) {
+    /* diagnostics must never break live */
+  }
+}
 
 // Fetch a fresh RTC token from the token server for one channel.
 // Throws a plain Error with a readable message on any failure
@@ -204,6 +231,30 @@ function emitTokenEvent(event) {
   });
 }
 
+// ── Engine connection events ───────────────────────────────────
+// onConnectionStateChanged + onError from the engine, forwarded
+// the same way as the token events. The live diagnostics writer
+// in <LiveVideo> subscribes: state 1=Disconnected, 2=Connecting,
+// 3=Connected, 4=Reconnecting, 5=Failed (react-native-agora 4.6.4
+// ConnectionStateType). A join that returns 0 but never reaches
+// Connected is the silent stall — this is what proves it.
+const connectionEventListeners = new Set();
+
+function emitConnectionEvent(event) {
+  connectionEventListeners.forEach((cb) => {
+    try {
+      cb(event);
+    } catch (e) {
+      // A listener must never break the engine handler.
+    }
+  });
+}
+
+export function onAgoraConnectionEvent(cb) {
+  connectionEventListeners.add(cb);
+  return () => connectionEventListeners.delete(cb);
+}
+
 /**
  * Subscribe to token-expiry events. cb receives
  * { type: 'expiring-no-renewal' | 'renewal-failed' }.
@@ -260,6 +311,9 @@ function registerEngineEvents(lib) {
     onLeaveChannel: () => {
       engineChannel = null;
     },
+    onConnectionStateChanged: (_connection, state, reason) => {
+      emitConnectionEvent({ type: 'connection', state, reason });
+    },
     onTokenPrivilegeWillExpire: () => {
       // Token is about to expire: fetch a fresh one from the token
       // server and renew it in place (no re-join). Dev-only env
@@ -286,6 +340,7 @@ function registerEngineEvents(lib) {
     onError: (err, msg) => {
       // eslint-disable-next-line no-console
       console.warn('[Agora] engine error', err, msg);
+      emitConnectionEvent({ type: 'engine-error', err, msg });
     },
   });
 }
@@ -587,6 +642,15 @@ export default function LiveVideo({
   // resets the engine (enableVideo), which detaches the pre-join binding
   // and leaves the view black until it re-binds post-join.
   const [joinConfirmed, setJoinConfirmed] = React.useState(false);
+  // Refs mirror the join state for the watchdog timers (which run
+  // outside render): true only once the REAL onJoinChannelSuccess
+  // arrived, so a stalled join can be told apart from a slow one.
+  const joinConfirmedRef = React.useRef(false);
+  const joinAttemptIdRef = React.useRef(0);
+  // Re-bind counter: bumped by the watchdog when the join stalls
+  // — the self view remounts and setupLocalVideo runs again, so
+  // the camera comes back even when the join never confirms.
+  const [bindAttempt, setBindAttempt] = React.useState(0);
   // Instant live: true once the local camera preview has started
   // (before the token fetch). joinAttempt re-runs the join effect
   // when the host taps "Try again" after a failed join.
@@ -617,6 +681,7 @@ export default function LiveVideo({
     setError('');
     setStatus('joining');
     setJoinConfirmed(false);
+    joinConfirmedRef.current = false;
     setJoinAttempt((n) => n + 1);
   };
 
@@ -646,6 +711,7 @@ export default function LiveVideo({
     // below shows the message — never join without a token.
     setStatus('joining');
     setJoinConfirmed(false);
+    joinConfirmedRef.current = false;
     const unsubscribe = onAgoraRemoteUser((event) => {
       const cb = callbacksRef.current;
       if (event.type === 'joined') {
@@ -659,11 +725,21 @@ export default function LiveVideo({
           cb.onRemoteLeave(event.uid);
         }
       } else if (event.type === 'joined-self') {
+        joinConfirmedRef.current = true;
         setStatus('joined');
         setJoinConfirmed(true);
+        logLiveDiag('join_success', channel);
         if (cb.onJoin) {
           cb.onJoin();
         }
+      }
+    });
+    // Engine connection states + errors → the diagnostics table.
+    const unsubscribeConnection = onAgoraConnectionEvent((event) => {
+      if (event.type === 'connection') {
+        logLiveDiag('connection', `${channel} state=${event.state} reason=${event.reason}`);
+      } else if (event.type === 'engine-error') {
+        logLiveDiag('engine_error', `${channel} err=${event.err} ${event.msg || ''}`);
       }
     });
     // Token-expiry events come from the shared engine handler —
@@ -678,6 +754,7 @@ export default function LiveVideo({
     });
 
     let cancelled = false;
+    const timers = [];
     (async () => {
       try {
         // Permissions (Hapa-style: ask at the moment of use, never
@@ -732,6 +809,7 @@ export default function LiveVideo({
           role: role === 'host' ? 'publisher' : 'subscriber',
         });
         if (cancelled) return;
+        logLiveDiag('join_attempt', `${channel} role=${role} uid=${uid}`);
         // [F2] audioOnly is passed through: voice calls join the same
         // channel with audio only, no video tracks.
         joinAgoraChannel({ token: effectiveToken, channelName: channel, uid, role, audioOnly });
@@ -740,9 +818,31 @@ export default function LiveVideo({
         // If this uid was assigned by Agora (uid 0), the local canvas
         // still uses uid 0, which the SDK treats as "local user".
         setLocalUid(uid);
-        // onJoinChannelSuccess flips the status to 'joined'; if the
-        // callback is delayed, 'joining' still shows the video surface.
-        setStatus('joined');
+        logLiveDiag('join_channel_code', `${channel} code=0`);
+        // NO optimistic setStatus('joined') here: 'joined' is only
+        // true when the REAL onJoinChannelSuccess arrives (the
+        // 'joined-self' handler above). The old optimistic set made
+        // the screen claim "You are live" while the join was still
+        // stalled — the exact black-screen screenshot from 2026-11-28.
+        // Watchdogs (cleared on cleanup): at 8s re-bind the camera
+        // so the preview comes back even if the join stalls; at 20s
+        // admit the stall with a retry instead of waiting forever.
+        const attempt = ++joinAttemptIdRef.current;
+        joinConfirmedRef.current = false;
+        const rebindTimer = setTimeout(() => {
+          if (!cancelled && joinAttemptIdRef.current === attempt && !joinConfirmedRef.current) {
+            logLiveDiag('join_rebind', `${channel} no success in 8s — re-binding camera`);
+            setBindAttempt((n) => n + 1);
+          }
+        }, 8000);
+        const stallTimer = setTimeout(() => {
+          if (!cancelled && joinAttemptIdRef.current === attempt && !joinConfirmedRef.current) {
+            logLiveDiag('join_timeout', `${channel} no onJoinChannelSuccess in 20s`);
+            setError('Live connection is taking too long. Check your connection and tap Try again.');
+            setStatus('error');
+          }
+        }, 20000);
+        timers.push(rebindTimer, stallTimer);
       } catch (e) {
         if (!cancelled) {
           setError(e.message || 'Could not join the live channel.');
@@ -756,7 +856,9 @@ export default function LiveVideo({
 
     return () => {
       cancelled = true;
+      timers.forEach((t) => clearTimeout(t));
       unsubscribe();
+      unsubscribeConnection();
       unsubscribeToken();
       leaveAgoraChannel();
       // The preview was started on mount (instant live) — stop it
@@ -916,13 +1018,13 @@ export default function LiveVideo({
       ) : showSelfFullscreen ? (
         RtcTextureView ? (
           <RtcTextureView
-            key={joinConfirmed ? 'self-joined' : 'self-preview'}
+            key={joinConfirmed ? 'self-joined' : `self-preview-${bindAttempt}`}
             style={styles.remoteVideo}
             canvas={{ uid: localUid, renderMode: RENDER_MODE_HIDDEN }}
           />
         ) : (
           <RtcSurfaceView
-            key={joinConfirmed ? 'self-joined' : 'self-preview'}
+            key={joinConfirmed ? 'self-joined' : `self-preview-${bindAttempt}`}
             style={styles.remoteVideo}
             canvas={{ uid: localUid, renderMode: RENDER_MODE_HIDDEN }}
             zOrderMediaOverlay
