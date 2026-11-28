@@ -45,6 +45,25 @@ import { supabase } from '../supabase/client';
 import { getSessionUser } from '../supabase/auth';
 import { getVoiceCallRate } from '../config';
 
+// ── Live-room-active flag ──────────────────────────────────────
+// The host's live room (VideoCallScreen, asHost) sets this while
+// it is open for a host_id text (u-...); it clears it on unmount.
+// useIncomingCallListener checks it before navigating: when the
+// host is ALREADY live in the room, the invite is NOT pushed as
+// a second VideoCall screen — the live room itself shows the
+// incoming-call overlay and Accept flips it into the 1v1 call
+// (same Agora channel, same engine, no re-join). Without this
+// the host would get both the overlay AND a pushed incoming
+// screen, and the pushed screen's join would fail (the engine
+// is already in the channel).
+let liveRoomHostId = null;
+export function setLiveRoomActive(hostIdText) {
+  liveRoomHostId = hostIdText ? String(hostIdText) : null;
+}
+export function isLiveRoomActive(hostIdText) {
+  return !!liveRoomHostId && !!hostIdText && String(liveRoomHostId) === String(hostIdText);
+}
+
 // ── Channel ──────────────────────────────────────────────────────
 // One Agora channel per host, shared by video and voice calls.
 export function buildChannelName(hostId) {
@@ -406,6 +425,11 @@ export function useIncomingCallListener(navigationRef) {
           // half the host's video tier rate.
           const isVoice =
             Number(call.rate_per_minute) === getVoiceCallRate(rateTier).coinsPerMinute;
+          // Host is already live in the room: do NOT push a second
+          // VideoCall screen — the live room handles this invite
+          // itself (incoming overlay → Accept flips to the 1v1
+          // call). See setLiveRoomActive above.
+          if (host && isLiveRoomActive(host.id)) return;
           const nav = navigationRef && navigationRef.current;
           if (nav && nav.navigate) {
             nav.navigate('VideoCall', {
