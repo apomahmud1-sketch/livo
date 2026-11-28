@@ -238,6 +238,23 @@ export async function setHostOnline(hostRowId, online) {
   }
 }
 
+// Take the host offline by the public host_id text (u-...) — the
+// VideoCallScreen End Live + live-accept paths only know the text
+// id, not the row uuid. Fire-and-forget: ending a live or taking
+// a 1v1 call must close the live room even if this write fails.
+export async function setHostOfflineByHostId(hostId) {
+  if (!supabase || !hostId) return false;
+  try {
+    const { error } = await supabase
+      .from('hosts')
+      .update({ is_online: false, last_seen: new Date().toISOString() })
+      .eq('host_id', String(hostId));
+    return !error;
+  } catch (e) {
+    return false;
+  }
+}
+
 // ── Live room controls (2026-11-28) ────────────────────────────
 // Chat on/off for the host's own live room. The viewers' screens
 // poll the hosts row and disable their input while it is true.
