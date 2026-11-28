@@ -265,7 +265,7 @@ export function setVip({ vipLevel, days, kind = 'vip_purchase', reference }) {
 // the panel instead of vanishing. Never throws and never blocks
 // the caller — if the host cannot be found, the caller's side of
 // the payment has already been recorded by adjustWallet.
-export async function creditHostEarnings(hostId, diamonds, kind = 'call_earnings', reference) {
+export async function creditHostEarnings(hostId, diamonds, kind = 'call_earnings', reference, counterpartyId = null) {
   if (!hostId || !diamonds || diamonds <= 0 || !supabase) {
     return { ok: false, error: 'invalid' };
   }
@@ -316,6 +316,7 @@ export async function creditHostEarnings(hostId, diamonds, kind = 'call_earnings
       amount_coins: 0,
       amount_diamonds: diamonds,
       reference: reference || null,
+      counterparty_id: counterpartyId || null,
     });
     if (txErr) return recordFailure('receipt-failed');
     return { ok: true };
@@ -353,6 +354,54 @@ export async function fetchSessionEarnings(userId, sinceIso) {
       reference: r.reference,
       createdAt: r.created_at,
     }));
+  } catch (e) {
+    return [];
+  }
+}
+
+// ── Daily gift rank (2026-11-28) ───────────────────────────────
+// Today's top gift senders for one host, ranked by diamonds the
+// host received from each sender. Reads the host's gift_received
+// rows since `sinceIso` (Singapore midnight) and groups by
+// counterparty_id (the sender — stored by creditHostEarnings
+// since 28d; older rows have no sender and are skipped, never
+// invented). Returns [{ rank, senderId, name, userId, avatar,
+// diamonds }] — empty array when nobody sent a gift yet today.
+export async function fetchDailyGiftRank(hostProfileId, sinceIso) {
+  if (!hostProfileId || !sinceIso || !supabase) return [];
+  try {
+    const { data, error } = await supabase
+      .from('transactions')
+      .select('counterparty_id,amount_diamonds')
+      .eq('profile_id', hostProfileId)
+      .eq('kind', 'gift_received')
+      .gte('created_at', sinceIso)
+      .not('counterparty_id', 'is', null);
+    if (error || !data || data.length === 0) return [];
+    const totals = new Map();
+    for (const r of data) {
+      const id = String(r.counterparty_id);
+      totals.set(id, (totals.get(id) || 0) + (r.amount_diamonds || 0));
+    }
+    const sorted = [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+    if (sorted.length === 0) return [];
+    const ids = sorted.map(([id]) => id);
+    const { data: profs } = await supabase
+      .from('profiles')
+      .select('id,username,user_id,avatar_url')
+      .in('id', ids);
+    const byId = new Map(((profs || []).filter((p) => p && p.id)).map((p) => [String(p.id), p]));
+    return sorted.map(([id, diamonds], i) => {
+      const p = byId.get(id) || {};
+      return {
+        rank: i + 1,
+        senderId: id,
+        name: p.username || 'Livo user',
+        userId: p.user_id || null,
+        avatar: p.avatar_url || null,
+        diamonds,
+      };
+    });
   } catch (e) {
     return [];
   }
