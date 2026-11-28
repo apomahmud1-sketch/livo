@@ -507,6 +507,13 @@ export default function VideoCallScreen({ route, navigation }) {
   // only while the host is broadcasting with no 1v1 caller — the
   // moment a caller joins, the call layout takes over.
   const isLiveRoom = asHost && !activeCallerUid;
+  // Live room UI (top bar, chat, bottom bar, More) shows once the
+  // host tapped Start Live — it must NOT wait for the Agora join
+  // to confirm: chat, audience and gifts run on Supabase, and a
+  // stalled join used to leave the whole screen black with no
+  // controls at all (2026-11-28). The LIVE badge + timer below
+  // still wait for the real join (liveJoined).
+  const showLiveRoomUI = isLiveRoom && stage === 'calling' && !preLive;
   // [Pre-live] Overlays (timer, name, controls, room UI) show for
   // callers / callees exactly as before. For the host they appear
   // only once the channel actually joined — pre-live and the
@@ -1062,7 +1069,7 @@ export default function VideoCallScreen({ route, navigation }) {
       {/* Live room top bar (host, photo layout): host chip (avatar +
           crown, name + verified check, ID, VIP badge), viewer count
           + X (ends the live). No Follow pill — this is your own room. */}
-      {isLiveRoom && stage === 'calling' && showOverlays ? (
+      {showLiveRoomUI ? (
         <>
           <View style={styles.liveTopRow} pointerEvents="box-none">
             <View style={styles.liveHostChip}>
@@ -1103,10 +1110,10 @@ export default function VideoCallScreen({ route, navigation }) {
           <View style={styles.liveRow} pointerEvents="box-none">
             <View style={styles.liveBadge}>
               <View style={styles.liveDot} />
-              <Text style={styles.liveText}>LIVE</Text>
+              <Text style={styles.liveText}>{liveJoined ? 'LIVE' : 'CONNECTING…'}</Text>
             </View>
             <View style={styles.liveTimerPill}>
-              <Text style={styles.liveTimerTxt}>{formatLiveDuration(seconds)}</Text>
+              <Text style={styles.liveTimerTxt}>{liveJoined ? formatLiveDuration(seconds) : 'Connecting…'}</Text>
             </View>
           </View>
         </>
@@ -1121,7 +1128,7 @@ export default function VideoCallScreen({ route, navigation }) {
           tap-the-empty-screen hearts, live chat, and the photo
           bottom bar (comment box + Gift + Share + More). Hidden
           during a 1v1 call. */}
-      {isLiveRoom && stage === 'calling' && showOverlays ? (
+      {showLiveRoomUI ? (
         <>
           {/* Tap the empty video area → floating hearts (right side). */}
           <Pressable style={styles.liveTapLayer} onPress={spawnHearts} />
